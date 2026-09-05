@@ -1,10 +1,2 @@
-# binaries
+dist/
 compost-linux-amd64
-*.exe
-
-# scratch / notes
-*.desync.db
-recipient-medium.key
-
-# Go
-*.test
