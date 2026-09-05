@@ -12,13 +12,13 @@ import (
 // mockChain is a chain.Chain that stores payloads in memory (no DERO). It
 // proves the whisper core can run against ANY backend implementing the seam.
 type mockChain struct {
-	mu       sync.Mutex
-	next     uint64
-	items    []chain.Incoming
-	addr     string
+	mu    sync.Mutex
+	next  uint64
+	items []chain.Incoming
+	addr  string
 }
 
-func (m *mockChain) Name() string                        { return "mock" }
+func (m *mockChain) Name() string                                { return "mock" }
 func (m *mockChain) Address(ctx context.Context) (string, error) { return m.addr, nil }
 func (m *mockChain) Height(ctx context.Context) (uint64, error)  { return m.next, nil }
 func (m *mockChain) PostPayload(ctx context.Context, to string, p chain.Payload, amt uint64) (chain.PostResult, error) {
