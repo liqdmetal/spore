@@ -34,11 +34,13 @@ import (
 	"github.com/liqdmetal/mycelium/internal/backend"
 	"github.com/liqdmetal/mycelium/internal/chain"
 	"github.com/liqdmetal/mycelium/internal/channel"
+	"github.com/liqdmetal/mycelium/internal/crypto"
 	derodaemon "github.com/liqdmetal/mycelium/internal/daemon"
 	"github.com/liqdmetal/mycelium/internal/dero"
 	"github.com/liqdmetal/mycelium/internal/donate"
 	"github.com/liqdmetal/mycelium/internal/longmsg"
 	"github.com/liqdmetal/mycelium/internal/peer"
+	"github.com/liqdmetal/mycelium/internal/secure"
 	"github.com/liqdmetal/mycelium/internal/session"
 	"github.com/liqdmetal/mycelium/internal/store"
 	"github.com/liqdmetal/mycelium/internal/whisper"
@@ -102,7 +104,10 @@ func usage() {
   mycelium whisper keygen [-key KFILE]
   mycelium donate [chain] | --all                          (per-chain donation rail)
   mycelium msg send -chain dero|evm|xmr -to ADDR -msg TEXT ...   (chain-agnostic send)
-  mycelium msg recv -chain dero|evm|xmr ...                       (chain-agnostic recv)`)
+  mycelium msg recv -chain dero|evm|xmr ...                       (chain-agnostic recv)
+  mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
+  mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
+  mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)`)
 }
 
 func check(err error) {
@@ -797,6 +802,8 @@ func msgcmd(args []string) {
 		msgRecv(args[1:])
 	case "send-long":
 		msgSendLong(args[1:])
+	case "keygen":
+		msgKeygen(args[1:])
 	case "-h", "--help":
 		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long [flags]")
 	default:
@@ -826,13 +833,15 @@ func msgSend(args []string) {
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
+	fs.String("key", "", "our mycelium priv key (64 hex) for E2E encryption")
+	fs.String("peer-pub", "", "recipient mycelium pub key (64 hex) for E2E encryption")
 	_ = fs.Parse(args)
 	if *to == "" || *msg == "" {
 		fmt.Fprintln(os.Stderr, "msg send: -to and -msg required")
 		os.Exit(2)
 	}
 	c := msgBackend(fs)
-	codec := whisper.CanonicalCodec{}
+	codec := secureSendCodec(fs, c.Name())
 	txid, err := whisper.SendChain(context.Background(), c, codec, *to, *msg)
 	if err != nil {
 		log.Fatalf("msg send on %s: %v", c.Name(), err)
@@ -848,9 +857,10 @@ func msgRecv(args []string) {
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
+	fs.String("key", "", "our mycelium priv key (64 hex) to decrypt E2E messages")
 	_ = fs.Parse(args)
 	c := msgBackend(fs)
-	codec := whisper.CanonicalCodec{}
+	codec := secureRecvCodec(fs, c.Name())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	log.Printf("msg recv on %s: listening for mycelium messages", c.Name())
@@ -872,6 +882,74 @@ func msgRecv(args []string) {
 			return
 		}
 	}
+}
+
+// msgKeygen generates a mycelium identity keypair for end-to-end encryption.
+// Give the PUB half to people who send you messages; keep the PRIV to decrypt.
+func msgKeygen(args []string) {
+	fs := flag.NewFlagSet("msg keygen", flag.ExitOnError)
+	outFile := fs.String("out", "", "write priv key to file (0600) instead of stdout")
+	_ = fs.Parse(args)
+	kp, err := crypto.GenerateKey()
+	check(err)
+	defer crypto.Zero(kp.Priv)
+	pubHex := hex.EncodeToString(kp.Pub)
+	privHex := hex.EncodeToString(kp.Priv)
+	if *outFile != "" {
+		if err := os.WriteFile(*outFile, []byte(privHex), 0o600); err != nil {
+			check(err)
+		}
+		fmt.Printf("wrote priv key to %s\n", *outFile)
+	} else {
+		fmt.Printf("pub:  %s\n", pubHex)
+		fmt.Printf("priv: %s\n", privHex)
+	}
+	fmt.Println("give 'pub' to people messaging you; they encrypt to it. Keep 'priv' secret.")
+}
+
+// secureFlags returns the send-side secure codec when -key and -peer-pub are
+// given, else nil (plaintext codec).
+func secureSendCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
+	base := whisper.Codec(whisper.CanonicalCodec{})
+	// DERO already encrypts natively; use the DERO codec there unless the user
+	// explicitly supplies keys for E2E.
+	if chainType == "dero" {
+		base = whisper.DeroCodec{}
+	}
+	keyHex := fs.Lookup("key").Value.String()
+	peerHex := fs.Lookup("peer-pub").Value.String()
+	if keyHex == "" || peerHex == "" {
+		return base
+	}
+	key, err := hex.DecodeString(keyHex)
+	if err != nil || len(key) != 32 {
+		check(fmt.Errorf("msg: -key must be 64 hex chars (32 bytes)"))
+	}
+	peer, err := hex.DecodeString(peerHex)
+	if err != nil || len(peer) != 32 {
+		check(fmt.Errorf("msg: -peer-pub must be 64 hex chars (32 bytes)"))
+	}
+	sc, err := secure.NewSendCodec(base, key, peer)
+	check(err)
+	return sc
+}
+
+func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
+	base := whisper.Codec(whisper.CanonicalCodec{})
+	if chainType == "dero" {
+		base = whisper.DeroCodec{}
+	}
+	keyHex := fs.Lookup("key").Value.String()
+	if keyHex == "" {
+		return base
+	}
+	key, err := hex.DecodeString(keyHex)
+	if err != nil || len(key) != 32 {
+		check(fmt.Errorf("msg: -key must be 64 hex chars (32 bytes)"))
+	}
+	sc, err := secure.NewRecvCodec(base, key)
+	check(err)
+	return sc
 }
 
 func msgSendLong(args []string) {
