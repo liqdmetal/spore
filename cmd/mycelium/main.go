@@ -45,10 +45,17 @@ import (
 //go:embed web/chat.html
 var chatHTML []byte
 
+// version is stamped at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
+	}
+	if os.Args[1] == "-version" || os.Args[1] == "version" {
+		fmt.Printf("mycelium %s\n", version)
+		return
 	}
 	switch os.Args[1] {
 	case "demo":
