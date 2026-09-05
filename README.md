@@ -1,11 +1,23 @@
-# Mycelium
+# Mycelium — m³ · Mycelium Multi-chain Messenger
 
-**A compostable, no-relay messenger on DERO.**
+**The common mycorrhizal network (CMN) for crypto.**
 
-Messages that rot. The body never rides a block in a way that survives key
-rotation; what's permanent on-chain is a hash and dead keys. Private comms
-tacked onto the chain — no box, no shared store, no relay, no exposed IP.
-Each party only ever talks to their own wallet and node.
+In a forest, trees look separate — but underground they are joined by a shared
+mycorrhizal network through which they exchange nutrients and warn each other.
+That is the model here:
+
+- **Trees = the users / endpoints.** Each is an independent wallet + node on
+  its own chain (DERO, Obscura, Monero, EVM…). Separate canopies, self-sovereign.
+- **Mycelium = the substrate running underneath.** The private, no-relay
+  transport that lets any tree signal another — quietly, point-to-point, no
+  relay or box in between.
+- **The common mycorrhizal network (m³)** is what emerges: trees on different
+  chains, all connected through one underground fabric.
+
+**A compostable, no-relay private messenger.** Messages rot. The body never
+rides a block in a way that survives key rotation; what's permanent on-chain is
+a hash and dead keys. Private comms tacked onto the chain — no box, no shared
+store, no relay, no exposed IP. Each tree only ever talks to its own roots.
 
 ## What it does
 
