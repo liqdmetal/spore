@@ -106,9 +106,12 @@ func (e *Endpoint) SendBody(recipientPub, plaintext []byte, ttl time.Duration) (
 }
 
 // ReceiveBody fetches the body the pointer references from the peer (via a
-// rendezvous FetchFunc), verifies its CID, and decrypts it with our long-term
-// key + the sender's ephemeral pub. Returns the plaintext.
+// rendezvous FetchFunc), verifies its CID + not-yet-burned, and decrypts it
+// with our long-term key + the sender's ephemeral pub. Returns the plaintext.
 func (e *Endpoint) ReceiveBody(p *Pointer, fetch func(cid [32]byte) ([]byte, error)) ([]byte, error) {
+	if p.BurnDeadline > 0 && time.Now().Unix() > int64(p.BurnDeadline) {
+		return nil, errors.New("longmsg: message burned (past deadline)")
+	}
 	ct, err := fetch(p.CID)
 	if err != nil {
 		return nil, err

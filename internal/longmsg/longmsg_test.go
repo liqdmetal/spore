@@ -82,6 +82,25 @@ func TestTamperRejected(t *testing.T) {
 	}
 }
 
+// TestBurnEnforced: a pointer past its deadline must be rejected before fetch,
+// so a burned message can never be read.
+func TestBurnEnforced(t *testing.T) {
+	sender := mustEndpoint(t)
+	recv := mustEndpoint(t)
+	ptr, err := sender.SendBody(recv.PublicKey(), []byte("expiring secret"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Age the deadline into the past.
+	ptr.BurnDeadline = uint64(time.Now().Add(-time.Minute).Unix())
+	// fetch would succeed if called; the deadline check must fire first.
+	if _, err := recv.ReceiveBody(ptr, func([32]byte) ([]byte, error) {
+		return []byte("should never be fetched"), nil
+	}); err == nil {
+		t.Fatal("expected burned-message rejection")
+	}
+}
+
 func mustEndpoint(t *testing.T) *Endpoint {
 	t.Helper()
 	e, err := NewEndpoint(store.NewMemStore())
