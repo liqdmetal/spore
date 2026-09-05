@@ -274,6 +274,11 @@ func webchat(args []string) {
 	maxlines := fs.Int("maxlines", 5000, "per-channel ring cap")
 	cert := fs.String("cert", "", "TLS cert file (enables https)")
 	key := fs.String("key", "", "TLS private key file")
+
+	// wallet RPC the browser routes to for whispers (must hold the key).
+	// Registered BEFORE Parse so the flags are known.
+	wrc := fs.String("wallet-rpc", "", "wallet RPC /json_rpc endpoint for whisper send")
+	wlogin := fs.String("wallet-login", "", "wallet RPC basic auth user:pass")
 	_ = fs.Parse(args)
 
 	b := channel.NewBox(channel.BoxConfig{
@@ -281,10 +286,6 @@ func webchat(args []string) {
 		ReapEvery: 30 * time.Second, MaxLines: *maxlines,
 	})
 	api := channel.WithCORS(channel.BoxRoutes(b))
-
-	// wallet RPC the browser routes to for whispers (must hold the key).
-	wrc := fs.String("wallet-rpc", "", "wallet RPC /json_rpc endpoint for whisper send")
-	wlogin := fs.String("wallet-login", "", "wallet RPC basic auth user:pass")
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +355,11 @@ func webWhisperRecv(w http.ResponseWriter, r *http.Request, wrc, wlogin string) 
 	}
 	var out []wm
 	for _, e := range entries {
-		if text, ok := whisper.ParseArgs(e.PayloadRPC); ok {
+		text, ok := whisper.ParseArgs(e.PayloadRPC)
+		if !ok && len(e.Data) > 0 {
+			text, ok = whisper.ParseArgsFromData(e.Data)
+		}
+		if ok {
 			out = append(out, wm{Txid: e.TXID, Sender: e.Sender, Text: text})
 		}
 	}
