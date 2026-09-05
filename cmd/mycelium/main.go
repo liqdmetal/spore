@@ -105,6 +105,7 @@ func usage() {
   mycelium donate [chain] | --all                          (per-chain donation rail)
   mycelium msg send -chain dero|evm|xmr -to ADDR -msg TEXT ...   (chain-agnostic send)
   mycelium msg recv -chain dero|evm|xmr ...                       (chain-agnostic recv)
+  mycelium msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
   mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
   mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
   mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)`)
@@ -958,22 +959,98 @@ func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
 	return sc
 }
 
+// msgSendLong sends a LONG body whose pointer rides the DERO whisper path — the
+// B1 XMR off-chain delivery use case. Monero can't carry message pointers
+// on-chain, so XMR contributes identity only; DERO delivers the pointer; the
+// body itself never rides any block and is fetched peer-to-peer by CID.
+//
+//   - The body is E2E-encrypted (X25519) to the recipient's mycelium pub and held
+//     in the sender's out-dir disk store — nobody but sender and receiver.
+//   - The pointer (sender ephemeral pub + body CID) is posted as a DERO whisper
+//     to the recipient's DERO delivery address (-to): the only live long-body
+//     delivery channel.
+//   - An optional -xmr address tags the message by writing a plaintext header
+//     line ("xmr:<addr>\n") onto the body BEFORE SendBody encrypts it, so the
+//     decrypted body tells the recipient which XMR address/context it belongs
+//     to. This header is metadata only: it changes neither the canonical
+//     pointer format nor the whisper codec.
+//
+// Only the DERO chain is wired for the pointer whisper today; any other -chain
+// is rejected.
 func msgSendLong(args []string) {
 	fs := flag.NewFlagSet("msg send-long", flag.ExitOnError)
-	to := fs.String("to", "", "recipient address on that chain")
-	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
-	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
-	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
-	fs.String("from", "", "our address (evm)")
+	fs.String("chain", "dero", "delivery chain for the pointer whisper (only dero is wired for long bodies)")
+	to := fs.String("to", "", "recipient DERO delivery address (receives the pointer whisper)")
+	recipPubHex := fs.String("recipient-pub", "", "recipient mycelium X25519 pubkey (64 hex) to encrypt the body to")
+	file := fs.String("file", "", "file whose contents to send")
+	msg := fs.String("msg", "", "or literal message text (long)")
+	outDir := fs.String("out-dir", "mycelium-outbox", "dir to hold the outbound body")
+	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
+	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
+	xmrAddr := fs.String("xmr", "", "recipient XMR address to tag the body with (identity metadata; prepended as a header line)")
+	addRPCFlags(fs)
 	_ = fs.Parse(args)
-	if *to == "" {
-		fmt.Fprintln(os.Stderr, "msg send-long: -to required")
+
+	if !strings.EqualFold(fs.Lookup("chain").Value.String(), "dero") {
+		fmt.Fprintf(os.Stderr, "msg send-long: -chain %s unsupported for long bodies — only 'dero' is wired (the DERO pointer whisper is the long-body carrier)\n", fs.Lookup("chain").Value.String())
 		os.Exit(2)
 	}
-	// Long-body transport is chain-agnostic but not yet CLI-wired (needs a
-	// rendezvous/peer carrier + a real ephemeral-keypair + body CID). This is
-	// a declared TODO, not a fake: sending long bodies today uses the DERO
-	// `daemon`/`send` path. Reject rather than emit a hollow pointer.
-	fmt.Fprintln(os.Stderr, "msg send-long: chain-agnostic long-body transport not wired yet — use the DERO daemon/send path today")
-	os.Exit(2)
+	if *to == "" || *recipPubHex == "" || (*file == "" && *msg == "") {
+		fmt.Fprintln(os.Stderr, "msg send-long: -to, -recipient-pub, and -file or -msg required")
+		os.Exit(2)
+	}
+	var plaintext []byte
+	var err error
+	if *file != "" {
+		plaintext, err = os.ReadFile(*file)
+	} else {
+		plaintext = []byte(*msg)
+	}
+	check(err)
+	recipPub, err := hex.DecodeString(*recipPubHex)
+	check(err)
+	if len(recipPub) != 32 {
+		fmt.Fprintln(os.Stderr, "msg send-long: -recipient-pub must be 64 hex chars (32 bytes)")
+		os.Exit(2)
+	}
+	// B1: tag the body with the recipient's XMR identity as a plaintext header
+	// line (metadata). It is encrypted with the rest of the body, so only the
+	// recipient ever sees it, and it needs no change to the pointer/codec.
+	if *xmrAddr != "" {
+		plaintext = xmrTagBody(*xmrAddr, plaintext)
+	}
+
+	// Sender holds its own outbound body in a disk store; the body never rides
+	// a block or a shared/third-party store.
+	st, err := store.NewDiskStore(*outDir)
+	check(err)
+	e, err := longmsg.NewEndpoint(st)
+	check(err)
+	ptr, err := e.SendBody(recipPub, plaintext, *ttl)
+	check(err)
+
+	// Post the pointer as a DERO whisper to the delivery address.
+	client := makeClient(fs)
+	dest, err := resolveDest(context.Background(), *daemonURL, *to)
+	check(err)
+	txid, err := client.PostPayload(context.Background(), dest, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
+	check(err)
+	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
+	if *xmrAddr != "" {
+		fmt.Printf("  tagged for XMR recipient %s\n", *xmrAddr)
+	}
+	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
+	fmt.Println("recipient needs your reachable node + their whisper recv to fetch+decrypt; run:  mycelium msg recv -chain dero")
+}
+
+// xmrTagBody prefixes an "xmr:<address>\n" header line onto a body so the
+// decrypted message tells the recipient which XMR address/context it belongs
+// to (B1 identity). It returns the body unchanged when addr is empty. This is
+// a metadata header only — it rides inside the encrypted body and never changes
+// the canonical pointer format or the whisper codec.
+func xmrTagBody(xmrAddr string, plaintext []byte) []byte {
+	if xmrAddr == "" {
+		return plaintext
+	}
+	return append([]byte("xmr:"+xmrAddr+"\n"), plaintext...)
 }
