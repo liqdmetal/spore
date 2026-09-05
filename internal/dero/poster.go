@@ -149,16 +149,23 @@ func (c *Client) PostAnchor(ctx context.Context, recipientAddr string, a *anchor
 // primitive under PostAnchor and the whisper transport. See PostAnchor for the
 // non-zero-postage rule.
 func (c *Client) PostPayload(ctx context.Context, recipientAddr string, payload anchor.Arguments, ringsize uint64) (string, error) {
-	if ringsize == 0 {
-		ringsize = 2
+	return c.PostPayloadAmount(ctx, recipientAddr, payload, 1)
+}
+
+// PostPayloadAmount is PostPayload with an explicit transfer amount. amount
+// must be >=1 (DERO treats a 0-amount transfer as a ring-member decoy and the
+// recipient never sees it).
+func (c *Client) PostPayloadAmount(ctx context.Context, recipientAddr string, payload anchor.Arguments, amount uint64) (string, error) {
+	if amount == 0 {
+		amount = 1 // DERO treats a 0-amount transfer as a ring-member decoy
 	}
 	params := TransferParams{
 		Transfers: []Transfer{{
 			Destination: recipientAddr,
-			Amount:      1, // minimum postage; must be > 0 or the recipient never sees it
+			Amount:      amount,
 			PayloadRPC:  payload,
 		}},
-		Ringsize: ringsize,
+		Ringsize: 2,
 	}
 	var result TransferResult
 	if err := c.call(ctx, "transfer", params, &result); err != nil {

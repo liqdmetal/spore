@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/mycelium/internal/chain"
 	"github.com/liqdmetal/mycelium/internal/dero"
 )
 
@@ -323,6 +324,128 @@ func Send(ctx context.Context, client *dero.Client, recipientAddr, text string) 
 		return "", err
 	}
 	return client.PostPayload(ctx, recipientAddr, args, 2)
+}
+
+// Codec renders/parses mycelium payloads into a chain.Chain's native form.
+// whisper talks to a chain only through Codec + chain.Chain, so the core has
+// no dependency on any specific chain backend.
+type Codec interface {
+	// EncodeText renders a short-line whisper (kind=text) to a chain.Payload.
+	EncodeText(text string) (chain.Payload, error)
+	// EncodePointer renders a long-body pointer whisper to a chain.Payload.
+	EncodePointer(ephPub, bodyCID [32]byte) (chain.Payload, error)
+	// DecodeText parses a received payload; ok=false if not a text whisper.
+	DecodeText(p chain.Payload) (text string, ok bool)
+	// DecodePointer parses a received payload; ok=false if not a pointer.
+	DecodePointer(p chain.Payload) (ephPub, bodyCID [32]byte, ok bool)
+}
+
+// DeroCodec implements Codec over the dero backend's payload envelope.
+type DeroCodec struct{}
+
+// EncodeText implements Codec.
+func (DeroCodec) EncodeText(text string) (chain.Payload, error) {
+	args, err := BuildArgs(text)
+	if err != nil {
+		return nil, err
+	}
+	return dero.ArgsToPayload(args)
+}
+
+// EncodePointer implements Codec.
+func (DeroCodec) EncodePointer(ephPub, bodyCID [32]byte) (chain.Payload, error) {
+	return dero.ArgsToPayload(BuildPointerArgs(ephPub, bodyCID))
+}
+
+// DecodeText implements Codec.
+func (DeroCodec) DecodeText(p chain.Payload) (string, bool) {
+	args, err := dero.PayloadToArgs(p)
+	if err != nil {
+		return "", false
+	}
+	return ParseArgs(args)
+}
+
+// DecodePointer implements Codec.
+func (DeroCodec) DecodePointer(p chain.Payload) ([32]byte, [32]byte, bool) {
+	args, err := dero.PayloadToArgs(p)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, false
+	}
+	return ParsePointer(args)
+}
+
+// SendChain posts a whisper through any chain.Chain backend.
+func SendChain(ctx context.Context, c chain.Chain, codec Codec, recipientAddr, text string) (string, error) {
+	p, err := codec.EncodeText(text)
+	if err != nil {
+		return "", err
+	}
+	res, err := c.PostPayload(ctx, recipientAddr, p, 1)
+	if err != nil {
+		return "", err
+	}
+	return res.TxID, nil
+}
+
+// SendLongChain posts a long-body pointer whisper through any chain.Chain.
+func SendLongChain(ctx context.Context, c chain.Chain, codec Codec, recipientAddr string, ephPub, bodyCID [32]byte) (string, error) {
+	p, err := codec.EncodePointer(ephPub, bodyCID)
+	if err != nil {
+		return "", err
+	}
+	res, err := c.PostPayload(ctx, recipientAddr, p, 1)
+	if err != nil {
+		return "", err
+	}
+	return res.TxID, nil
+}
+
+// RecvChain polls any chain.Chain for incoming whispers/pointers, decoding with
+// codec, and delivers each exactly once.
+func RecvChain(ctx context.Context, c chain.Chain, codec Codec, opts chain.WatchOpts) (<-chan Msg, <-chan error) {
+	ch := make(chan Msg)
+	errc := make(chan error, 1)
+	go func() {
+		defer close(ch)
+		defer close(errc)
+		in, werr := chain.Watch(ctx, c, opts)
+		for {
+			select {
+			case inc, ok := <-in:
+				if !ok {
+					return
+				}
+				if text, isText := codec.DecodeText(inc.Payload); isText {
+					select {
+					case ch <- Msg{TXID: inc.TxID, TopoHeight: inc.TopoHeight, Sender: inc.Sender, Text: text}:
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+				if eph, cid, isPtr := codec.DecodePointer(inc.Payload); isPtr {
+					select {
+					case ch <- Msg{TXID: inc.TxID, TopoHeight: inc.TopoHeight, Sender: inc.Sender, HasPointer: true, EphPub: eph, BodyCID: cid}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			case err, ok := <-werr:
+				if !ok {
+					return
+				}
+				select {
+				case errc <- err:
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, errc
 }
 
 // Recv polls get_transfers (in:true) for incoming whispers and delivers each as
