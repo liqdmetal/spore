@@ -48,6 +48,26 @@ type Mailbox struct {
 	st  store.Store // durable ciphertext store (HTTP-pushed + local bodies)
 	ep  *longmsg.Endpoint
 	log *MessageLog
+	// noSenderLog, when set, blanks the Sender field before a message is
+	// persisted to the durable plaintext log. A Model-B hosted mailbox operator
+	// (who reads the log) then cannot tell WHO sent each message — only that one
+	// arrived. The recipient on the phone learns the sender from context, not
+	// from the service's on-disk record. Default off (local personal mailboxes
+	// may want to keep the sender).
+	noSenderLog bool
+}
+
+// SetNoSenderLog toggles whether the durable log records the sender. Intended
+// for a hosted/Model-B mailbox where the operator must not learn who messages
+// whom. Safe to call at any time; affects messages persisted after the call.
+func (m *Mailbox) SetNoSenderLog(on bool) { m.noSenderLog = on }
+
+// sanitize blanks metadata the mailbox operator should not retain when
+// noSenderLog is set.
+func (m *Mailbox) sanitize(msg *Message) {
+	if m.noSenderLog {
+		msg.Sender = ""
+	}
 }
 
 // Open opens (creating if needed) a mailbox rooted at dir. When priv is nil it
@@ -191,6 +211,7 @@ func (m *Mailbox) Deliver(ctx context.Context, inc chain.Incoming, codec whisper
 			Size:       len(text),
 			Text:       text,
 		}
+		m.sanitize(&msg)
 		if err := m.log.Add(msg); err != nil {
 			return nil, err
 		}
@@ -239,6 +260,7 @@ func (m *Mailbox) receiveLong(ctx context.Context, inc chain.Incoming, ptr *long
 		Size:         len(plain),
 		Text:         string(plain),
 	}
+	m.sanitize(&msg)
 	if err := m.log.Add(msg); err != nil {
 		return nil, err
 	}

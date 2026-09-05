@@ -102,6 +102,7 @@ func mailboxRun(args []string) {
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	peerAddr := fs.String("peer-addr", "", "reachable sender peer (host:port) to pull bodies not pushed here")
 	peerBin := fs.String("peer-bin", "compost-peer", "path to the compost-peer binary")
+	privacy := fs.Bool("privacy", false, "hosted/privacy mode: don't record the sender in the message log")
 	addChainFlags(fs)
 	_ = fs.Parse(args)
 
@@ -112,6 +113,10 @@ func mailboxRun(args []string) {
 	}
 	m, err := mailbox.Open(*dir, nil)
 	check(err)
+	if *privacy {
+		m.SetNoSenderLog(true)
+		log.Printf("mailbox: privacy mode — sender not recorded in the message log")
+	}
 
 	c := msgBackend(fs) // build the named chain.Chain backend
 	codec := mailboxCodec(fs, m)

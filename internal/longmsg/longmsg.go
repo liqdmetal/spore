@@ -61,6 +61,44 @@ type Pointer struct {
 	BurnDeadline uint64
 }
 
+// BodyPaddingBucket is the fixed size bucket long bodies are padded to before
+// encryption, so all ciphertext bodies are indistinguishable by size (defeats
+// size-based fingerprinting of message length). A body is padded up to the next
+// multiple of this bucket with 0x00 bytes; a length-prefix header lets the
+// receiver strip exactly the padding.
+const BodyPaddingBucket = 1024
+
+// padBody returns plaintext padded to a multiple of BodyPaddingBucket, prefixed
+// with the original length (8 bytes, little-endian) so ReceiveBody can strip it.
+// Format: [orig_len:8][plaintext][0x00 padding].
+func padBody(plaintext []byte) []byte {
+	header := 8
+	total := header + len(plaintext)
+	bucket := BodyPaddingBucket
+	rounded := (total + bucket - 1) / bucket * bucket
+	out := make([]byte, rounded)
+	for i := 0; i < 8; i++ {
+		out[i] = byte(len(plaintext) >> (8 * i))
+	}
+	copy(out[header:], plaintext)
+	return out
+}
+
+// unpadBody reverses padBody, returning just the original plaintext.
+func unpadBody(padded []byte) ([]byte, error) {
+	if len(padded) < 8 {
+		return nil, errors.New("longmsg: body too short to unpad")
+	}
+	n := 0
+	for i := 0; i < 8; i++ {
+		n |= int(padded[i]) << (8 * i)
+	}
+	if n < 0 || 8+n > len(padded) {
+		return nil, errors.New("longmsg: bad padding length")
+	}
+	return padded[8 : 8+n], nil
+}
+
 // SendBody encrypts plaintext to the recipient's long-term pub under a fresh
 // ephemeral key, stores the ciphertext locally (the sender holds its own
 // outbound), and returns the pointer to put in a whisper. The sender erases
@@ -90,7 +128,7 @@ func (e *Endpoint) SendBody(recipientPub, plaintext []byte, ttl time.Duration) (
 	if err != nil {
 		return nil, err
 	}
-	ct, err := crypto.Seal(plaintext, key, nonce)
+	ct, err := crypto.Seal(padBody(plaintext), key, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +171,11 @@ func (e *Endpoint) ReceiveBody(p *Pointer, fetch func(cid [32]byte) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	return crypto.Open(ct, key, nonce)
+	plain, err := crypto.Open(ct, key, nonce)
+	if err != nil {
+		return nil, err
+	}
+	return unpadBody(plain)
 }
 
 // Store exposes the endpoint's durable store (used by a rendezvous server to
