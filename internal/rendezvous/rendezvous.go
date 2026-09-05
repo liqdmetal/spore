@@ -66,7 +66,7 @@ func FetchByCID(ctx context.Context, fetch FetchFunc, cid [32]byte) ([]byte, err
 // MemTransport is an in-memory peer: server holds bodies in a map, client
 // fetches from it. Proves the rendezvous protocol offline.
 type MemTransport struct {
-	mu    sync.RWMutex
+	mu     sync.RWMutex
 	bodies map[[32]byte][]byte
 }
 

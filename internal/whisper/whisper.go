@@ -14,6 +14,7 @@ package whisper
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,6 +40,10 @@ const (
 	// WhisperV1 is a plaintext short line (already private: DERO encrypts the
 	// whole payload to the recipient wallet).
 	WhisperV1 uint64 = 0x571 // "W" version 1
+	// PointerV1 marks a pointer-whisper: the payload carries K (sender
+	// ephemeral pub) + C (body CID) and NO text. The long body is fetched
+	// peer-to-peer (compost-peer) and decrypted with the ephemeral pub.
+	PointerV1 uint64 = 0x5710 // "W" pointer version 1
 )
 
 // MaxTextLen bounds a whisper line so the packed payload stays under DERO's
@@ -58,6 +63,16 @@ func BuildArgs(text string) (anchor.Arguments, error) {
 		{Name: ArgW, DataType: anchor.DataUint64, Value: WhisperV1},
 		{Name: ArgT, DataType: anchor.DataString, Value: text},
 	}, nil
+}
+
+// BuildPointerArgs renders a pointer-whisper: K=ephemeral pub, C=body CID,
+// no text. Used when a long body is held by the sender and fetched by CID.
+func BuildPointerArgs(ephPub, bodyCID [32]byte) anchor.Arguments {
+	return anchor.Arguments{
+		{Name: ArgW, DataType: anchor.DataUint64, Value: PointerV1},
+		{Name: "K", DataType: anchor.DataHash, Value: hex.EncodeToString(ephPub[:])},
+		{Name: "C", DataType: anchor.DataHash, Value: hex.EncodeToString(bodyCID[:])},
+	}
 }
 
 // ParseArgs reads a whisper out of payload_rpc. Returns ok=false if the args
@@ -82,6 +97,54 @@ func ParseArgs(args anchor.Arguments) (text string, ok bool) {
 	}
 	kindV = seenW && v == WhisperV1
 	return t, kindV && seenT
+}
+
+// ParsePointer reads a pointer-whisper (K + C). ok=false if not a pointer form.
+func ParsePointer(args anchor.Arguments) (ephPub, bodyCID [32]byte, ok bool) {
+	var seenW, seenK, seenC bool
+	var v uint64
+	for _, a := range args {
+		switch a.Name + a.DataType {
+		case ArgW + anchor.DataUint64:
+			if x, err := uintVal(a.Value); err == nil {
+				v = x
+				seenW = true
+			}
+		case "K" + anchor.DataHash:
+			if h, err := hashVal(a.Value); err == nil {
+				ephPub = h
+				seenK = true
+			}
+		case "C" + anchor.DataHash:
+			if h, err := hashVal(a.Value); err == nil {
+				bodyCID = h
+				seenC = true
+			}
+		}
+	}
+	return ephPub, bodyCID, seenW && v == PointerV1 && seenK && seenC
+}
+
+func hashVal(v interface{}) ([32]byte, error) {
+	var h [32]byte
+	switch x := v.(type) {
+	case string:
+		b, err := hex.DecodeString(x)
+		if err != nil || len(b) != 32 {
+			return h, fmt.Errorf("bad hash hex")
+		}
+		copy(h[:], b)
+	case []byte:
+		if len(x) != 32 {
+			return h, fmt.Errorf("bad hash bytes")
+		}
+		copy(h[:], x)
+	case [32]byte:
+		return x, nil
+	default:
+		return h, fmt.Errorf("unhandled hash type %T", v)
+	}
+	return h, nil
 }
 
 // Send posts a whisper (a real min-postage transfer whose payload is the line)
@@ -123,14 +186,25 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					cursor = uint64(e.TopoHeight)
 				}
 				text, isWhisper := ParseArgs(e.PayloadRPC)
-				if !isWhisper {
+				if isWhisper {
+					seen[e.TXID] = true
+					select {
+					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
+					case <-ctx.Done():
+						return
+					}
 					continue
 				}
-				seen[e.TXID] = true
-				select {
-				case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
-				case <-ctx.Done():
-					return
+				eph, cid, isPtr := ParsePointer(e.PayloadRPC)
+				if isPtr {
+					seen[e.TXID] = true
+					select {
+					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender,
+						HasPointer: true, EphPub: eph, BodyCID: cid}:
+					case <-ctx.Done():
+						return
+					}
+					continue
 				}
 			}
 			select {
@@ -148,7 +222,10 @@ type Msg struct {
 	TXID       string
 	TopoHeight int64
 	Sender     string
-	Text       string
+	Text       string // short line (WhisperV1); empty for pointer form
+	HasPointer bool
+	EphPub     [32]byte // for pointer form: sender ephemeral pub
+	BodyCID    [32]byte // for pointer form: body to fetch
 }
 
 // --- value coercion helpers ---

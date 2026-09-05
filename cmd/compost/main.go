@@ -26,12 +26,15 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/liqdmetal/compost/internal/anchor"
 	"github.com/liqdmetal/compost/internal/channel"
 	"github.com/liqdmetal/compost/internal/dero"
+	"github.com/liqdmetal/compost/internal/longmsg"
+	"github.com/liqdmetal/compost/internal/peer"
 	"github.com/liqdmetal/compost/internal/session"
 	"github.com/liqdmetal/compost/internal/store"
 	"github.com/liqdmetal/compost/internal/whisper"
@@ -77,8 +80,10 @@ func usage() {
   compost channel -listen :PORT [-linettl 15m] [-presencettl 1m]   (run an IRC box)
   compost chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
-  compost whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay)
-  compost whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]`)
+  compost whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
+  compost whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
+  compost whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
+  compost whisper keygen [-key KFILE]`)
 }
 
 func check(err error) {
@@ -445,12 +450,78 @@ func whispercmd(args []string) {
 	switch args[0] {
 	case "send":
 		whisperSend(args[1:])
+	case "send-long":
+		whisperSendLong(args[1:])
 	case "recv":
 		whisperRecv(args[1:])
+	case "keygen":
+		whisperKeygen(args[1:])
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+// whisper keygen creates a persistent long-term endpoint (pub+priv) for
+// nobody-but-us long bodies. Print pub to give senders; keep priv for recv.
+func whisperKeygen(args []string) {
+	fs := flag.NewFlagSet("whisper keygen", flag.ExitOnError)
+	keyFile := fs.String("key", "", "write persistent privkey (hex) to this file")
+	_ = fs.Parse(args)
+	st := store.NewMemStore()
+	e, err := longmsg.NewEndpoint(st)
+	check(err)
+	if *keyFile != "" {
+		check(os.WriteFile(*keyFile, []byte(hex.EncodeToString(e.PrivKey())), 0o600))
+		fmt.Printf("wrote persistent long-term privkey to %s\n", *keyFile)
+	}
+	fmt.Printf("give senders this compost long-term pubkey:\n%s\n", hex.EncodeToString(e.PublicKey()))
+}
+
+// whisperSendLong encrypts a long body to the recipient's compost pubkey, holds
+// it locally, and posts a pointer-whisper. Body never rides a block. The sender
+// must run `compost-peer serve` so the recipient can fetch the body.
+func whisperSendLong(args []string) {
+	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
+	to := fs.String("to", "", "recipient DERO address")
+	recipPubHex := fs.String("recipient-pub", "", "recipient compost long-term pubkey (hex)")
+	file := fs.String("file", "", "file whose contents to send")
+	msg := fs.String("msg", "", "or literal message text (long)")
+	outDir := fs.String("out-dir", "compost-outbox", "dir to hold the outbound body")
+	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
+	addRPCFlags(fs)
+	_ = fs.Parse(args)
+
+	if *to == "" || *recipPubHex == "" || (*file == "" && *msg == "") {
+		fmt.Fprintln(os.Stderr, "whisper send-long: -to, -recipient-pub, and -file or -msg required")
+		os.Exit(2)
+	}
+	var plaintext []byte
+	var err error
+	if *file != "" {
+		plaintext, err = os.ReadFile(*file)
+	} else {
+		plaintext = []byte(*msg)
+	}
+	check(err)
+	recipPub, err := hex.DecodeString(*recipPubHex)
+	check(err)
+
+	// Sender holds its own outbound body in a disk store.
+	st, err := store.NewDiskStore(*outDir)
+	check(err)
+	e, err := longmsg.NewEndpoint(st)
+	check(err)
+	ptr, err := e.SendBody(recipPub, plaintext, *ttl)
+	check(err)
+
+	// Post a pointer-whisper to the DERO address.
+	client := makeClient(fs)
+	txid, err := client.PostPayload(context.Background(), *to, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
+	check(err)
+	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
+	fmt.Printf("pointer-whisper sent, txid %s\n", txid)
+	fmt.Println("recipient needs your reachable node; run:  compost-peer serve --dir " + *outDir)
 }
 
 func whisperSend(args []string) {
@@ -472,12 +543,38 @@ func whisperSend(args []string) {
 func whisperRecv(args []string) {
 	fs := flag.NewFlagSet("whisper recv", flag.ExitOnError)
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
+	keyFile := fs.String("key", "", "persistent long-term privkey (hex) to decrypt long bodies")
+	inDir := fs.String("in-dir", "compost-inbox", "dir to hold fetched bodies")
+	peerAddr := fs.String("peer-addr", "", "sender's reachable compost-peer serve address host:port (for long bodies)")
+	peerBin := fs.String("peer-bin", "compost-peer", "path to compost-peer binary")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
 
 	client := makeClient(fs)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Build the receiving long-term endpoint (persistent key) so long bodies
+	// can be decrypted.
+	var recvEP *longmsg.Endpoint
+	if *keyFile != "" {
+		st, err := store.NewDiskStore(*inDir)
+		check(err)
+		keyBytes, kerr := os.ReadFile(*keyFile)
+		if kerr == nil {
+			priv, herr := hex.DecodeString(strings.TrimSpace(string(keyBytes)))
+			check(herr)
+			recvEP, err = longmsg.NewEndpointFromPriv(st, priv)
+			check(err)
+		} else {
+			// No key file yet — create one so future long bodies decrypt.
+			recvEP, err = longmsg.NewEndpoint(st)
+			check(err)
+			check(os.WriteFile(*keyFile, []byte(hex.EncodeToString(recvEP.PrivKey())), 0o600))
+			log.Printf("created persistent long-term key at %s; share its pubkey with senders", *keyFile)
+		}
+	}
+
 	log.Printf("whisper recv: listening for no-relay messages (own node only)")
 	ch, errc := whisper.Recv(ctx, client, 0, *interval)
 	for {
@@ -486,7 +583,31 @@ func whisperRecv(args []string) {
 			if !ok {
 				return
 			}
-			fmt.Printf("whisper %s: %s\n", shortTx(m.TXID), m.Text)
+			if !m.HasPointer {
+				fmt.Printf("whisper %s: %s\n", shortTx(m.TXID), m.Text)
+				continue
+			}
+			fmt.Printf("whisper %s: long-message pointer (cid %s)\n", shortTx(m.TXID), hex.EncodeToString(m.BodyCID[:]))
+			if *keyFile == "" {
+				fmt.Println("  (run with -key and -peer-addr to fetch + decrypt this body)")
+				continue
+			}
+			if *peerAddr == "" {
+				fmt.Println("  (no -peer-addr given; sender must run compost-peer serve and share its address)")
+				continue
+			}
+			body, err := peer.Fetch(ctx, *peerBin, *peerAddr, m.BodyCID)
+			if err != nil {
+				fmt.Printf("  fetch failed (is the sender reachable?): %v\n", err)
+				continue
+			}
+			ptr := &longmsg.Pointer{EphemeralPub: m.EphPub, CID: m.BodyCID}
+			pt, err := recvEP.ReceiveBody(ptr, func([32]byte) ([]byte, error) { return body, nil })
+			if err != nil {
+				fmt.Printf("  decrypt failed: %v\n", err)
+				continue
+			}
+			fmt.Printf("  >>> long message (%d bytes): %s\n", len(pt), string(pt))
 		case err := <-errc:
 			log.Printf("recv error: %v", err)
 		case <-ctx.Done():

@@ -33,6 +33,23 @@ func NewEndpoint(st store.Store) (*Endpoint, error) {
 	return &Endpoint{key: k, store: st}, nil
 }
 
+// NewEndpointFromPriv restores an endpoint from a persisted 32-byte long-term
+// scalar (so a receiver can decrypt long bodies across restarts).
+func NewEndpointFromPriv(st store.Store, priv []byte) (*Endpoint, error) {
+	kp, err := crypto.KeyPairFromPriv(priv)
+	if err != nil {
+		return nil, err
+	}
+	return &Endpoint{key: kp, store: st}, nil
+}
+
+// PrivKey returns a copy of the long-term scalar, for persistence.
+func (e *Endpoint) PrivKey() []byte {
+	out := make([]byte, 32)
+	copy(out, e.key.Priv)
+	return out
+}
+
 // PublicKey returns our long-term public key; senders encrypt bodies to it.
 func (e *Endpoint) PublicKey() []byte { return e.key.Pub }
 
