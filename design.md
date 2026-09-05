@@ -63,3 +63,17 @@ Verified live on DERO mainnet (2026-09-05): `compost send`→anchor mined,
 `compost daemon` recv→decrypted exactly once, bodies survive restart (DiskStore).
 Whisper, rendezvous, and longmsg are unit-tested green (incl. wrong-key + tamper
 rejection). Channel box + web chat build. TELA UI shell is the remaining layer.
+
+## Live end-to-end verified (2026-09-05, mainnet)
+
+Full nobody-but-us long-message path proven live on the node:
+1. Alice `whisper keygen` + `whisper send-long` → body encrypted to Bob's key,
+   held on Alice's node (disk 0600), pointer-whisper (C cid + K ephemeral) mined
+   on-chain (height 7,573,951).
+2. Alice runs `compost-peer serve` on her reachable node.
+3. Bob `whisper recv -key bob.key -peer-addr alice:port` → saw the pointer,
+   fetched the body over the peer transport, decrypted with his key → printed
+   the 167-byte message. Nobody but Alice and Bob ever held it.
+
+CLI: `compost whisper {send|send-long|recv|keygen}` + the Rust `compost-peer`
+transport (derohe-rs).
