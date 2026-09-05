@@ -55,6 +55,31 @@ go test ./...
 decrypted exactly once; bodies survive daemon restart (DiskStore). See
 `design.md` Status and `WHISPER.md`.
 
+## Peer setup (message a friend on DERO today)
+
+Mycelium is **no-relay**: you and a friend each run a wallet, no server in
+between. Full walkthrough in [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md). The
+short version:
+
+```
+1. Download the release binary + install dero-wallet-cli
+2. Create + register + fund a DERO wallet (tiny amount)
+3. dero-wallet-cli --rpc-server --rpc-bind 127.0.0.1:10103   (leave open)
+4. Send:   mycelium whisper send  -to <friend-addr> -msg "hi"
+   Receive: mycelium whisper recv  (keep running)
+```
+
+DERO whisper (point-to-point, mainnet-verified) is live. **EVM and Monero
+backends exist but are mock-tested only** — not yet usable for real messaging.
+
+## Multi-chain (in progress)
+
+- `internal/chain` — the seam. `Chain` interface + `Watch` poller.
+- `internal/evm` — EVM-compatible backend (mock-verified). `internal/xmr` —
+  Monero identity+signal backend (mock-verified).
+- `internal/whisper/canonical.go` — chain-agnostic payload codec shared by all
+  chains.
+
 ## Roadmap (see WHISPER.md)
 
 - **L1 mempool catch (~1-2s)**: Rust scanner on derohe-rs (BSD-3, clean-room,
