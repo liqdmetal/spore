@@ -32,6 +32,7 @@ import (
 
 	"github.com/liqdmetal/compost/internal/anchor"
 	"github.com/liqdmetal/compost/internal/channel"
+	derodaemon "github.com/liqdmetal/compost/internal/daemon"
 	"github.com/liqdmetal/compost/internal/dero"
 	"github.com/liqdmetal/compost/internal/longmsg"
 	"github.com/liqdmetal/compost/internal/peer"
@@ -483,11 +484,12 @@ func whisperKeygen(args []string) {
 // must run `compost-peer serve` so the recipient can fetch the body.
 func whisperSendLong(args []string) {
 	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
-	to := fs.String("to", "", "recipient DERO address")
+	to := fs.String("to", "", "recipient DERO address or dero-name")
 	recipPubHex := fs.String("recipient-pub", "", "recipient compost long-term pubkey (hex)")
 	file := fs.String("file", "", "file whose contents to send")
 	msg := fs.String("msg", "", "or literal message text (long)")
 	outDir := fs.String("out-dir", "compost-outbox", "dir to hold the outbound body")
+	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
 	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
@@ -517,17 +519,20 @@ func whisperSendLong(args []string) {
 
 	// Post a pointer-whisper to the DERO address.
 	client := makeClient(fs)
-	txid, err := client.PostPayload(context.Background(), *to, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
+	dest, err := resolveDest(context.Background(), *daemonURL, *to)
+	check(err)
+	txid, err := client.PostPayload(context.Background(), dest, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
 	check(err)
 	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
-	fmt.Printf("pointer-whisper sent, txid %s\n", txid)
+	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
 	fmt.Println("recipient needs your reachable node; run:  compost-peer serve --dir " + *outDir)
 }
 
 func whisperSend(args []string) {
 	fs := flag.NewFlagSet("whisper send", flag.ExitOnError)
-	to := fs.String("to", "", "recipient DERO address")
+	to := fs.String("to", "", "recipient DERO address or dero-name")
 	msg := fs.String("msg", "", "message text (<=80 bytes)")
+	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
 	if *to == "" || *msg == "" {
@@ -535,9 +540,25 @@ func whisperSend(args []string) {
 		os.Exit(2)
 	}
 	client := makeClient(fs)
-	txid, err := whisper.Send(context.Background(), client, *to, *msg)
+	dest, err := resolveDest(context.Background(), *daemonURL, *to)
 	check(err)
-	fmt.Printf("whisper sent, txid %s (confirms in ~1 block; recipient's own node delivers it)\n", txid)
+	txid, err := whisper.Send(context.Background(), client, dest, *msg)
+	check(err)
+	fmt.Printf("whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
+}
+
+// resolveDest turns a user-supplied destination (a dero-name or a bech32
+// address) into an address. Addresses pass through; names resolve via the
+// daemon's NameToAddress.
+func resolveDest(ctx context.Context, daemonURL, dest string) (string, error) {
+	if strings.HasPrefix(dest, "dero1") {
+		return dest, nil // already an address
+	}
+	if daemonURL == "" {
+		return "", fmt.Errorf("cannot resolve name %q: no -daemon given", dest)
+	}
+	dc := derodaemon.NewClient(daemonURL)
+	return dc.ResolveName(ctx, dest)
 }
 
 func whisperRecv(args []string) {

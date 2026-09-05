@@ -166,3 +166,27 @@ func (c *Client) PoolWatcher(ctx context.Context, interval time.Duration) (<-cha
 
 // ErrEmpty is a sentinel for a nil result.
 var ErrEmpty = errors.New("daemon: empty result")
+
+// NameToAddressResult is the DERO.NameToAddress response.
+type NameToAddressResult struct {
+	Address string `json:"address"`
+	Status  string `json:"status"`
+}
+
+// ResolveName resolves a DERO name-service name (e.g. "alice" or "alice.dero")
+// to a bech32 address via the daemon. If name is already a valid-looking bech32
+// address it is returned unchanged (so callers can pass either form). Returns
+// an error if the name is unregistered or the RPC fails.
+func (c *Client) ResolveName(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", errors.New("daemon: empty name")
+	}
+	var out NameToAddressResult
+	if err := c.call(ctx, "DERO.NameToAddress", map[string]interface{}{"name": name, "topoheight": -1}, &out); err != nil {
+		return "", err
+	}
+	if out.Address == "" {
+		return "", fmt.Errorf("daemon: name %q not registered", name)
+	}
+	return out.Address, nil
+}
