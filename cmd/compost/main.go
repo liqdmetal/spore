@@ -78,9 +78,10 @@ func usage() {
   compost keygen
   compost daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
   compost send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
-  compost channel -listen :PORT [-linettl 15m] [-presencettl 1m]   (run an IRC box)
+  compost channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
   compost chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
+  compost web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
   compost whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
   compost whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
   compost whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
@@ -249,7 +250,7 @@ func send(args []string) {
 func channelserve(args []string) {
 	fs := flag.NewFlagSet("channel", flag.ExitOnError)
 	listen := fs.String("listen", ":19192", "listen address")
-	linettl := fs.Duration("linettl", 15*time.Minute, "line retention")
+	linettl := fs.Duration("linettl", 7*24*time.Hour, "line retention (rooms compost after this)")
 	presencettl := fs.Duration("presencettl", time.Minute, "presence window")
 	maxlines := fs.Int("maxlines", 2000, "per-channel ring cap")
 	dir := fs.String("dir", "", "persist rooms to this dir (survives restart); empty = in-memory")
@@ -282,7 +283,7 @@ func channelserve(args []string) {
 func webchat(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	listen := fs.String("listen", ":19192", "listen address")
-	linettl := fs.Duration("linettl", 2*time.Hour, "line retention")
+	linettl := fs.Duration("linettl", 7*24*time.Hour, "line retention (rooms compost after this)")
 	presencettl := fs.Duration("presencettl", 2*time.Minute, "presence window")
 	maxlines := fs.Int("maxlines", 5000, "per-channel ring cap")
 	cert := fs.String("cert", "", "TLS cert file (enables https)")

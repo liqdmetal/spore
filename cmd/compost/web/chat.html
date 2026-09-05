@@ -280,6 +280,7 @@ async function join(name,{keyhex=null,switchv=false}={}){
   sysText(`joined ${name} as ${state.nick} (${r.keyhex?"private":"public"})`);
   if(r.keyhex)sysText("room is encrypted — messages here are readable only by key holders");
   localStorage.setItem("compost.nick",state.nick);
+  saveRooms(); // remember this room so it reappears on next load
   // Load full history from 0 on entry so returning to a room re-shows earlier
   // messages. pollHistory advances the cursor to the newest, so the periodic
   // poll() then only pulls genuinely new lines.
