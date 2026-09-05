@@ -27,9 +27,14 @@ ciphertext).
 - Source + unit tests (`tests/mailbox_test.rs`): **cargo test green** — PDA
   determinism, borsh inbox round-trip, empty-inbox parse.
 - BPF artifact `mycelium_mailbox.so` (88 KB): **built with cargo-build-sbf
-  v4.3.0** on the Hetzner node. Ready to deploy.
-- **NOT yet deployed** to a Solana cluster (needs the Solana CLI + a cluster /
-  funded deployer key).
+  v4.3.0** on the Hetzner node.
+- **DEPLOYED to Solana mainnet** (2026-09-05):
+  - Program ID: `28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL`
+  - Authority (upgrade key): deployer `FigdcZH8Kf9HP9a1vDGUNU32HrxjFSArRxemyXJ5X3Wf`
+  - ProgramData: `6YPTRHbkXnAVJU37gHDzbK9wdJ7kvdchZT7VYiUAtb8v`
+  - Data length 88,288 bytes. Deployed slot 444,481,895.
+- The client Go `internal/solana` backend (in the main mycelium repo) is the
+  next step to actually send/read messages through the live program.
 
 ## Build
 ```bash
