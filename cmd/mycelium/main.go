@@ -82,6 +82,8 @@ func main() {
 		donatecmd(os.Args[2:])
 	case "msg":
 		msgcmd(os.Args[2:])
+	case "mailbox":
+		mailboxcmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -108,7 +110,10 @@ func usage() {
   mycelium msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
   mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
   mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
-  mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)`)
+  mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)
+  mycelium mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR] [-peer-addr H:P] [-rpc URL] [-from ADDR] [-keyfile SOL] [-program PID]   (always-on long-body serve+scan+decrypt)
+  mycelium mailbox list -dir DIR                   (show decrypted messages)
+  mycelium mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)`)
 }
 
 func check(err error) {
@@ -823,6 +828,9 @@ func msgBackend(fs *flag.FlagSet) chain.Chain {
 		KeyFile:   fs.Lookup("keyfile").Value.String(),
 		ProgramID: fs.Lookup("program").Value.String(),
 	}
+	if f := fs.Lookup("mailbox"); f != nil {
+		cfg.Mailbox = f.Value.String()
+	}
 	c, err := backend.Build(context.Background(), cfg)
 	check(err)
 	return c
@@ -840,6 +848,7 @@ func msgSend(args []string) {
 	fs.String("peer-pub", "", "recipient mycelium pub key (64 hex) for E2E encryption")
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
+	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
 	_ = fs.Parse(args)
 	if *to == "" || *msg == "" {
 		fmt.Fprintln(os.Stderr, "msg send: -to and -msg required")
@@ -865,6 +874,7 @@ func msgRecv(args []string) {
 	fs.String("key", "", "our mycelium priv key (64 hex) to decrypt E2E messages")
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
+	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
 	_ = fs.Parse(args)
 	c := msgBackend(fs)
 	codec := secureRecvCodec(fs, c.Name())

@@ -40,6 +40,10 @@ type Backend struct {
 	// In practice this is a funded account unlocked on the node, or a
 	// signing proxy. from is our address.
 	from string
+	// mailbox is the optional MyceliumMailbox contract address. When set,
+	// delivery goes through the contract (deliver/read + Inbox logs) instead
+	// of raw calldata txs. Empty = backward-compatible raw calldata path.
+	mailbox string
 }
 
 // NewBackend builds an EVM backend. rpcURL is the JSON-RPC endpoint
@@ -48,6 +52,11 @@ type Backend struct {
 func NewBackend(rpcURL, chainName, fromAddr string) *Backend {
 	return &Backend{rpc: rpcURL, chain: chainName, from: fromAddr, http: &http.Client{}}
 }
+
+// SetMailbox points the backend at a deployed MyceliumMailbox contract address
+// (0x-prefixed 40-hex). After this, PostPayload calls deliver() and
+// ListIncoming reads Inbox logs. Empty clears it back to raw calldata.
+func (b *Backend) SetMailbox(addr string) { b.mailbox = addr }
 
 // Name implements chain.Chain.
 func (b *Backend) Name() string { return b.chain }
@@ -111,16 +120,30 @@ func (b *Backend) Height(ctx context.Context) (uint64, error) {
 }
 
 // PostPayload implements chain.Chain. amountHint is wei; for a pure message
-// post it should be 0 (the tx fee is the cost). Payload rides as calldata.
+// post it should be 0 (the tx fee is the cost). With a mailbox contract set,
+// the payload is ABI-encoded into a deliver(recipient, data) call to the
+// contract; otherwise it rides as raw calldata to the recipient.
 func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain.Payload, amountHint uint64) (chain.PostResult, error) {
-	data := "0x" + hex.EncodeToString(p)
 	params := map[string]interface{}{
 		"from": b.from,
-		"to":   recipientAddr,
-		"data": data,
 	}
-	if amountHint > 0 {
-		params["value"] = "0x" + strconv.FormatUint(amountHint, 16)
+	if b.mailbox != "" {
+		// Robust path: call deliver(recipient, payload) on the mailbox contract.
+		// deliver() is not payable, so never attach a value here (unlike the
+		// raw-calldata path, which can carry amountHint to an EOA).
+		calldata, err := encodeDeliver(recipientAddr, []byte(p))
+		if err != nil {
+			return chain.PostResult{}, err
+		}
+		params["to"] = b.mailbox
+		params["data"] = calldata
+	} else {
+		// Backward-compatible path: raw calldata to the recipient.
+		params["to"] = recipientAddr
+		params["data"] = "0x" + hex.EncodeToString(p)
+		if amountHint > 0 {
+			params["value"] = "0x" + strconv.FormatUint(amountHint, 16)
+		}
 	}
 	var txhash string
 	if err := b.call(ctx, "eth_sendTransaction", []interface{}{params}, &txhash); err != nil {
@@ -140,11 +163,11 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 // node can serve (eth_getBlockByNumber per block). To keep this lean we cap the
 // lookback.
 func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
-	// Placeholder that returns nothing unless a scanner is wired. Real impl:
-	// iterate blocks from minHeight..Height via eth_getBlockByNumber, collect
-	// txs where tx.to == b.from, return their input calldata as payloads.
-	// EVM nodes differ; the mailbox-contract log approach (ROADMAP step 2b)
-	// is the robust scanner. This stub keeps the seam compiling so the core is
-	// testable; see evm_scanner.go for the block-scan impl.
+	// Robust path: when a mailbox contract is configured, recover payloads from
+	// Inbox(to=us) logs via eth_getLogs + read(), instead of block scanning.
+	if b.mailbox != "" {
+		return mailboxListIncoming(ctx, b, minHeight)
+	}
+	// Backward-compatible path: block-scan for raw calldata txs to us.
 	return evmScanIncoming(ctx, b, minHeight)
 }

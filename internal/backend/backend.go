@@ -30,6 +30,10 @@ type ChainConfig struct {
 	KeyFile string
 	// ProgramID overrides the Solana mailbox program (defaults to mainnet).
 	ProgramID string
+	// Mailbox is the MyceliumMailbox contract address (EVM only). When set,
+	// the EVM backend delivers via the contract's Inbox logs instead of raw
+	// calldata txs.
+	Mailbox string
 	// Name overrides the chain identifier (defaults to Type).
 	Name string
 }
@@ -55,7 +59,11 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 		if name == "" {
 			name = "evm"
 		}
-		return evm.NewBackend(cfg.RPC, name, cfg.From), nil
+		b := evm.NewBackend(cfg.RPC, name, cfg.From)
+		if cfg.Mailbox != "" {
+			b.SetMailbox(cfg.Mailbox)
+		}
+		return b, nil
 	case "xmr":
 		if cfg.RPC == "" {
 			return nil, fmt.Errorf("xmr backend needs -rpc (monero wallet RPC)")

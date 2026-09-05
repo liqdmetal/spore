@@ -1,7 +1,7 @@
 // Package solana implements the chain.Chain backend for the Solana network.
 //
 // It talks to the deployed mycelium mailbox program (program ID
-// GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs on mainnet) which stores
+// 4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa on mainnet, v3) which stores
 // per-recipient inboxes in program-derived accounts:
 //
 //	pda = find_program_address([b"mycelium", recipient_pubkey], program_id)
@@ -32,8 +32,8 @@ import (
 // is supplied.
 const DefaultRPCURL = "https://api.mainnet-beta.solana.com"
 
-// DefaultProgramID is the deployed mycelium mailbox program on mainnet.
-var DefaultProgramID = solana.MustPublicKeyFromBase58("GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs")
+// DefaultProgramID is the deployed mycelium mailbox program on mainnet (v3).
+var DefaultProgramID = solana.MustPublicKeyFromBase58("4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa")
 
 // Backend adapts a Solana RPC client + signer to chain.Chain.
 type Backend struct {
