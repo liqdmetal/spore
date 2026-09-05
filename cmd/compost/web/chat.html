@@ -80,10 +80,21 @@
     padding:6px 8px;border-radius:6px;font:inherit;margin-bottom:5px;font-size:12px}
   #wSend{width:100%;background:var(--accent2);color:#04121a;border:none;border-radius:6px;padding:7px;
     font:600 13px inherit;cursor:pointer;margin-bottom:4px}
-  .inbox{max-height:200px;overflow-y:auto;font-size:11px;color:var(--muted)}
-  .inbox .wline{border-bottom:1px solid var(--line);padding:4px 2px}
-  .inbox .wsender{color:var(--accent2)}
-  .inbox .wtext{color:var(--fg);word-break:break-word}
+  .inbox{max-height:220px;overflow-y:auto;font-size:11px;color:var(--muted)}
+  .inbox .wline{border-bottom:1px solid var(--line);padding:5px 4px;cursor:pointer;border-radius:6px}
+  .inbox .wline:hover{background:var(--panel2)}
+  .inbox .wsender{color:var(--accent2);display:block;font-weight:600;cursor:pointer}
+  .inbox .wsender:hover{text-decoration:underline}
+  .inbox .wtext{color:var(--fg);word-break:break-word;display:block;margin-top:1px}
+  .inbox .wrep{font-size:9px;color:var(--muted);opacity:.8}
+  .inbox .wline.replying{border-left:2px solid var(--accent2);background:var(--panel2)}
+  .repInfo{font-size:10px;color:var(--accent2);padding:2px 4px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .contact{display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:12px;border-left:2px solid transparent}
+  .contact:hover{background:var(--panel2)}
+  .contact .addr{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .contact .last{color:var(--accent2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px;opacity:.8}
+  .contacts{max-height:160px;overflow-y:auto;border-bottom:1px solid var(--line);padding:2px 0}
+  .contacts:empty{display:none}
   ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 </style>
 </head>
@@ -94,8 +105,10 @@
   <div id="rooms"></div>
   <button id="newroom">+ new room</button>
   <div class="rail-section">Whisper (1:1, no relay)</div>
+  <div id="contacts" class="contacts"></div>
   <div id="whisperPane">
-    <input id="wTo" placeholder="recipient dero addr">
+    <input id="wTo" placeholder="recipient addr / name">
+    <div class="repInfo" id="repInfo">replying to …</div>
     <input id="wMsg" placeholder="short msg (~90 chars)" maxlength="90">
     <button id="wSend">whisper →</button>
     <div class="rail-section">Inbox</div>
@@ -292,24 +305,54 @@ $("rail").querySelector(".rail-brand").onclick=()=>{const n=prompt("nickname:",s
 
 // ---- whisper lane (1:1 no-relay, proxied through wallet) ----
 const wseen = new Set();
+const contacts = new Map(); // addr -> {last, ts}
+function shortAddr(a){return a&&a.length>18?a.slice(0,10)+"…"+a.slice(-4):a;}
+function pickRecipient(addr){
+  $("wTo").value=addr||"";
+  $("repInfo").style.display=addr?"block":"none";
+  if(addr)$("repInfo").textContent="↩ replying to "+shortAddr(addr);
+  $("wMsg").focus();
+}
+function renderContacts(){
+  const c=$("contacts"); c.innerHTML="";
+  for(const [addr,info] of contacts){
+    const d=document.createElement("div");d.className="contact";
+    d.innerHTML=`<span style="flex:0 0 auto">💬</span><div style="flex:1;min-width:0"><div style="color:var(--fg);font-weight:600">${esc(info.name||shortAddr(addr))}</div><div class="last">${esc((info.last||"").slice(0,40))}</div></div>`;
+    d.title="click to reply to "+addr;
+    d.onclick=()=>pickRecipient(addr);
+    c.appendChild(d);
+  }
+}
+function addToContacts(addr,text){
+  if(!addr)return;
+  contacts.set(addr,{last:text,ts:Date.now()});
+  renderContacts();
+}
 async function whisperSend(){
   const to=$("wTo").value.trim(), msg=$("wMsg").value.trim();
   if(!to||!msg){alert("recipient + message");return;}
   $("wMsg").value="";
   try{
     await j("POST","/whisper/send",{to,msg});
-    sysText(`whisper sent to ${to.slice(0,12)}…`);
+    sysText(`whisper sent to ${shortAddr(to)}`);
   }catch(e){alert("whisper send failed: "+e.message);}
 }
 async function whisperRecv(){
   try{
     const msgs=await j("GET","/whisper/recv");
     for(const m of msgs){
+      addToContacts(m.sender,m.text);
       if(wseen.has(m.txid))continue;
       wseen.add(m.txid);
       const d=document.createElement("div");d.className="wline";
-      d.innerHTML=`<span class="wsender">${esc((m.sender||"?").slice(0,12))}…</span> <span class="wtext">${esc(m.text)}</span>`;
+      const sender=(m.sender||"").slice(0,10)+"…";
+      d.innerHTML=`<span class="wsender" data-addr="${esc(m.sender||"")}">${esc(shortAddr(m.sender||"?"))}</span><span class="wtext">${esc(m.text)}</span><span class="wrep">click to reply</span>`;
+      // whole line OR sender -> set recipient
+      const setReply=()=>pickRecipient(m.sender||"");
+      d.onclick=setReply;
       $("wInbox").prepend(d);
+      // clear the 'click to reply' hint after mouse leaves
+      d.querySelector(".wrep").style.display="none";
     }
   }catch(e){}
 }
