@@ -72,7 +72,7 @@ pub fn process_instruction(
 
 fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let it = &mut accounts.iter();
-    let recipient = next_account_info(it)?; // the 'to' (may or may not sign)
+    let recipient = next_account_info(it)?; // the 'to' (must sign to claim inbox)
     let inbox = next_account_info(it)?; // PDA inbox, must be writable
     let payer = next_account_info(it)?; // pays rent, signs
     let system_program = next_account_info(it)?;
@@ -88,28 +88,7 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
         return Err(ProgramError::InvalidAccountData);
     }
 
-    // Create the inbox account if it doesn't exist yet (zero lamports => needs init).
-    if inbox.lamports() == 0 {
-        let rent = Rent::get()?;
-        let space = Inbox::default()
-            .try_to_vec()
-            .map_err(|_| ProgramError::InvalidAccountData)?
-            .len();
-        let min_bal = rent.minimum_balance(space.max(1));
-        invoke_signed(
-            &system_instruction::create_account(
-                payer.key,
-                inbox.key,
-                min_bal,
-                space.max(1) as u64,
-                program_id,
-            ),
-            &[payer.clone(), inbox.clone(), system_program.clone()],
-            &[&[b"mycelium", recipient.key.as_ref(), &[bump]]],
-        )?;
-    }
-
-    // Append the message to the inbox.
+    // Load existing inbox (or start empty).
     let mut loaded = if inbox.lamports() > 0 && !inbox.data_is_empty() {
         match Inbox::try_from_slice(&inbox.data.borrow()) {
             Ok(v) => v,
@@ -131,8 +110,35 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
         .map_err(|_| ProgramError::InvalidAccountData)?;
     let space_needed = serialized.len();
 
-    // Realloc the account if needed to fit the new message.
-    if inbox.data_len() < space_needed {
+    // If the account doesn't exist yet, create it sized + rent-funded for this
+    // message in one shot (realloc cannot add rent, so init at full size).
+    if inbox.lamports() == 0 {
+        let rent = Rent::get()?;
+        let min_bal = rent.minimum_balance(space_needed);
+        invoke_signed(
+            &system_instruction::create_account(
+                payer.key,
+                inbox.key,
+                min_bal,
+                space_needed as u64,
+                program_id,
+            ),
+            &[payer.clone(), inbox.clone(), system_program.clone()],
+            &[&[b"mycelium", recipient.key.as_ref(), &[bump]]],
+        )?;
+    } else if inbox.data_len() < space_needed {
+        // Existing account too small (only grows across messages). Realloc with
+        // rent top-up from the payer.
+        let rent = Rent::get()?;
+        let new_rent = rent.minimum_balance(space_needed);
+        let lamports_diff = new_rent.saturating_sub(inbox.lamports());
+        if lamports_diff > 0 {
+            invoke_signed(
+                &system_instruction::transfer(payer.key, inbox.key, lamports_diff),
+                &[payer.clone(), inbox.clone(), system_program.clone()],
+                &[],
+            )?;
+        }
         inbox.realloc(space_needed, false)?;
     }
     inbox.try_borrow_mut_data()?.copy_from_slice(&serialized);

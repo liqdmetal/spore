@@ -28,11 +28,14 @@ ciphertext).
   determinism, borsh inbox round-trip, empty-inbox parse.
 - BPF artifact `mycelium_mailbox.so` (88 KB): **built with cargo-build-sbf
   v4.3.0** on the Hetzner node.
-- **DEPLOYED to Solana mainnet** (2026-09-05):
-  - Program ID: `28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL`
+- **DEPLOYED to Solana mainnet** (2026-09-05). v2 (fixed rent handling):
+  - Program ID: `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`
   - Authority (upgrade key): deployer `FigdcZH8Kf9HP9a1vDGUNU32HrxjFSArRxemyXJ5X3Wf`
-  - ProgramData: `6YPTRHbkXnAVJU37gHDzbK9wdJ7kvdchZT7VYiUAtb8v`
-  - Data length 88,288 bytes. Deployed slot 444,481,895.
+  - Data length 89,096 bytes.
+  - Note: v1 (`28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL`) was deployed first
+    but its inbox account was created under-sized (rent bug); v2 fixes inbox
+    rent and is deployed to a FRESH program id (the BPF loader can't grow an
+    existing ProgramData account on upgrade, so a new id was required).
 - The client Go `internal/solana` backend (in the main mycelium repo) is the
   next step to actually send/read messages through the live program.
 

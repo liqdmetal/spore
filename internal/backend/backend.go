@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gagliardetto/solana-go"
+
 	"github.com/liqdmetal/mycelium/internal/chain"
 	"github.com/liqdmetal/mycelium/internal/dero"
 	"github.com/liqdmetal/mycelium/internal/evm"
+	solanaBackend "github.com/liqdmetal/mycelium/internal/solana"
 	"github.com/liqdmetal/mycelium/internal/xmr"
 )
 
 // ChainConfig describes how to build one chain backend.
 type ChainConfig struct {
-	// Type is one of "dero", "evm", "xmr".
+	// Type is one of "dero", "evm", "xmr", "solana".
 	Type string
 	// RPC is the wallet/daemon JSON-RPC endpoint.
 	RPC string
@@ -23,6 +26,10 @@ type ChainConfig struct {
 	Login string
 	// From is our address (EVM needs it; DERO/XMR query the wallet).
 	From string
+	// KeyFile is the path to a Solana signer keypair JSON (for solana).
+	KeyFile string
+	// ProgramID overrides the Solana mailbox program (defaults to mainnet).
+	ProgramID string
 	// Name overrides the chain identifier (defaults to Type).
 	Name string
 }
@@ -54,10 +61,27 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 			return nil, fmt.Errorf("xmr backend needs -rpc (monero wallet RPC)")
 		}
 		return xmr.NewBackend(cfg.RPC), nil
+	case "solana":
+		if cfg.KeyFile == "" {
+			return nil, fmt.Errorf("solana backend needs -keyfile (solana signer keypair JSON)")
+		}
+		signer, err := solana.PrivateKeyFromSolanaKeygenFile(cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("solana: parse keypair: %w", err)
+		}
+		prog := solanaBackend.DefaultProgramID
+		if cfg.ProgramID != "" {
+			pk, perr := solana.PublicKeyFromBase58(cfg.ProgramID)
+			if perr != nil {
+				return nil, fmt.Errorf("solana: bad program id: %w", perr)
+			}
+			prog = pk
+		}
+		return solanaBackend.NewBackend(cfg.RPC, prog, signer), nil
 	default:
-		return nil, fmt.Errorf("unknown chain type %q (want dero|evm|xmr)", cfg.Type)
+		return nil, fmt.Errorf("unknown chain type %q (want dero|evm|xmr|solana)", cfg.Type)
 	}
 }
 
 // Supported lists the backend type names.
-func Supported() []string { return []string{"dero", "evm", "xmr"} }
+func Supported() []string { return []string{"dero", "evm", "xmr", "solana"} }

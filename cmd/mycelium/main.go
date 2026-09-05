@@ -815,10 +815,12 @@ func msgcmd(args []string) {
 func msgBackend(fs *flag.FlagSet) chain.Chain {
 	chainType := fs.Lookup("chain").Value.String()
 	cfg := backend.ChainConfig{
-		Type:  chainType,
-		RPC:   fs.Lookup("rpc").Value.String(),
-		Login: fs.Lookup("rpc-login").Value.String(),
-		From:  fs.Lookup("from").Value.String(),
+		Type:      chainType,
+		RPC:       fs.Lookup("rpc").Value.String(),
+		Login:     fs.Lookup("rpc-login").Value.String(),
+		From:      fs.Lookup("from").Value.String(),
+		KeyFile:   fs.Lookup("keyfile").Value.String(),
+		ProgramID: fs.Lookup("program").Value.String(),
 	}
 	c, err := backend.Build(context.Background(), cfg)
 	check(err)
@@ -835,6 +837,8 @@ func msgSend(args []string) {
 	fs.String("from", "", "our address (evm)")
 	fs.String("key", "", "our mycelium priv key (64 hex) for E2E encryption")
 	fs.String("peer-pub", "", "recipient mycelium pub key (64 hex) for E2E encryption")
+	fs.String("keyfile", "", "solana signer keypair JSON path")
+	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	_ = fs.Parse(args)
 	if *to == "" || *msg == "" {
 		fmt.Fprintln(os.Stderr, "msg send: -to and -msg required")
@@ -858,6 +862,8 @@ func msgRecv(args []string) {
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
 	fs.String("key", "", "our mycelium priv key (64 hex) to decrypt E2E messages")
+	fs.String("keyfile", "", "solana signer keypair JSON path")
+	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	_ = fs.Parse(args)
 	c := msgBackend(fs)
 	codec := secureRecvCodec(fs, c.Name())
