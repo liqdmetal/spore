@@ -6,7 +6,7 @@ RPC server, and the `mycelium` binary. Everything else is a command.
 ## 1. Get the binaries
 
 **mycelium** (download, no Go needed):
-- Linux/macOS/Windows binaries: https://github.com/liqdmetal/mycelium/releases/tag/v0.1.0
+- Linux/macOS/Windows binaries: https://github.com/liqdmetal/mycelium/releases/latest
 - pick your OS, download `mycelium-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
 
 **mycelium-peer** (only needed for LONG messages, not short whispers):

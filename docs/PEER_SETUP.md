@@ -1,4 +1,4 @@
-# Mycelium — peer setup for friends (v0.1.0)
+# Mycelium — peer setup for friends
 
 Mycelium m³ is a **no-relay private messenger**. Two people talk **point to
 point**: a whisper rides a real DERO transaction, encrypted end-to-end by
