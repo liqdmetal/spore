@@ -38,27 +38,26 @@ balance lasts a long time.
 ## Step 2 — run the wallet RPC server (keep this window open)
 
 ```bash
-dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:10103
+dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
 ```
 
 Leave it running. Mycelium whispers send and receive **through this wallet** —
-you do not run a node.
+you do not run a node. `20209` is the port mycelium's `whisper` commands expect
+by default.
 
 ## Step 3 — message!
 
 In a second terminal:
 
 ```bash
-# your wallet RPC is on 10103. Public daemon resolves dero-names.
+# your wallet RPC is on 20209 (mycelium's default, so -rpc is optional).
 # SEND a whisper (<=80 chars)
 mycelium-windows-amd64.exe whisper send \
-  -wallet-rpc http://127.0.0.1:10103/json_rpc \
   -to dero1q...friend-address... \
   -msg "hey from mycelium"
 
 # RECEIVE (keep running to watch for messages)
-mycelium-windows-amd64.exe whisper recv \
-  -wallet-rpc http://127.0.0.1:10103/json_rpc
+mycelium-windows-amd64.exe whisper recv
 ```
 
 When a message arrives you'll see:

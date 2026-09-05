@@ -1,5 +1,17 @@
 # Mycelium — m³ · Mycelium Multi-chain Messenger
 
+**In one line:** an E2E-encrypted, **no-relay** private messenger — you talk
+wallet-to-wallet over DERO, EVM, Solana, or Monero; no server, relay, or box
+sits in the middle, and messages rot by design.
+
+**Honest chain status (one line):** DERO and Solana are **live on mainnet**;
+EVM is verified on a local node (dev); XMR backend is built but **not yet live**.
+
+**Want to send your first message? → [`docs/ONBOARDING.md`](docs/ONBOARDING.md)**
+(run `mycelium demo` first — it works with no chain, no wallet).
+
+---
+
 **The common mycorrhizal network (CMN) for crypto.**
 
 In a forest, trees look separate — but underground they are joined by a shared
@@ -52,10 +64,10 @@ Precisely:
   inbox on busy chains (not yet deployed).
 - **Solana** — the Go backend + a Rust BPF mailbox program (per-recipient PDA
   inbox). **Deployed and live-verified on Solana mainnet**: program ID
-  `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` (v2; v1 had a rent bug), RPC
+  `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa` (v3, the CLI default), RPC
   default `https://api.mainnet-beta.solana.com`. The client currently does
-  **self-messaging** (the program requires the recipient to sign) — cross-wallet
-  delivery needs both parties running the backend.
+  **self-messaging** (deliver into your own inbox PDA) — cross-wallet delivery
+  needs both parties running the backend.
 - **Monero** — built and mock-verified only. XMR has no per-recipient encrypted
   payload; a tx is a **knock** (short signal ≤8 bytes rides the payment id),
   content goes off-chain rendezvous. Not yet live — a pruned `monerod` is
@@ -104,16 +116,22 @@ go test ./...
 ## Peer setup (message a friend)
 
 Mycelium is **no-relay**: you and a friend each run a wallet, no server in
-between. Full walkthrough in [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md). The
-short version:
+between. **Start with [`docs/ONBOARDING.md`](docs/ONBOARDING.md)** — it's the
+status-first, copy-paste "first message" guide (`mycelium demo` works with no
+chain). The DERO friend path in one breath:
 
+```bash
+# each of you: install dero-wallet-cli, create + register + fund a wallet
+# terminal 1 (each) — your endpoint, leave open (default RPC port 20209):
+dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
+
+# terminal 2 — SEND to your friend's dero1… address:
+mycelium whisper send -to <friend-dero1-addr> -msg "hi"
+#   RECEIVE (keep running):
+mycelium whisper recv
 ```
-1. Download the release binary + install dero-wallet-cli
-2. Create + register + fund a DERO wallet (tiny amount)
-3. dero-wallet-cli --rpc-server --rpc-bind 127.0.0.1:10103   (leave open)
-4. Send:   mycelium whisper send  -to <friend-addr> -msg "hi"
-   Receive: mycelium whisper recv  (keep running)
-```
+
+Full walkthrough: [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md).
 
 ## Roadmap (see ROADMAP.md)
 

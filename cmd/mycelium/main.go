@@ -105,8 +105,8 @@ func usage() {
   mycelium whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
   mycelium whisper keygen [-key KFILE]
   mycelium donate [chain] | --all                          (per-chain donation rail)
-  mycelium msg send -chain dero|evm|xmr -to ADDR -msg TEXT ...   (chain-agnostic send)
-  mycelium msg recv -chain dero|evm|xmr ...                       (chain-agnostic recv)
+  mycelium msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
+  mycelium msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
   mycelium msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
   mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
   mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
@@ -797,7 +797,7 @@ func donatecmd(args []string) {
 // wire semantics hold across DERO, EVM, and XMR.
 func msgcmd(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long [flags]")
+		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long|keygen [flags]")
 		fmt.Fprintln(os.Stderr, "       (chain-agnostic; see -chain)")
 		os.Exit(2)
 	}
@@ -811,9 +811,9 @@ func msgcmd(args []string) {
 	case "keygen":
 		msgKeygen(args[1:])
 	case "-h", "--help":
-		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long [flags]")
+		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long|keygen [flags]")
 	default:
-		fmt.Fprintf(os.Stderr, "msg: unknown subcommand %q (want send|recv|send-long)\n", args[0])
+		fmt.Fprintf(os.Stderr, "msg: unknown subcommand %q (want send|recv|send-long|keygen)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -840,7 +840,7 @@ func msgSend(args []string) {
 	fs := flag.NewFlagSet("msg send", flag.ExitOnError)
 	to := fs.String("to", "", "recipient address on that chain")
 	msg := fs.String("msg", "", "message text")
-	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
+	fs.String("chain", "dero", "chain backend: dero|evm|xmr|solana")
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
@@ -867,7 +867,7 @@ func msgRecv(args []string) {
 	fs := flag.NewFlagSet("msg recv", flag.ExitOnError)
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	minHeight := fs.Uint64("min-height", 0, "scan from height")
-	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
+	fs.String("chain", "dero", "chain backend: dero|evm|xmr|solana")
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
