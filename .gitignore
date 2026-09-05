@@ -1,2 +1,3 @@
 dist/
 compost-linux-amd64
+solana-program/*-keypair.json

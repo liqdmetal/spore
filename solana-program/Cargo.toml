@@ -1,0 +1,21 @@
+[package]
+name = "mycelium-mailbox"
+version = "0.1.0"
+edition = "2021"
+description = "Mycelium Solana program: per-recipient PDA inbox for E2E-encrypted messages"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "1.18"
+borsh = "0.10"
+
+[dev-dependencies]
+solana-program-test = "1.18"
+solana-sdk = "1.18"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
