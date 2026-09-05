@@ -67,6 +67,7 @@ type Box struct {
 	cfg      BoxConfig
 	channels map[string]*room
 	done     chan struct{}
+	dir      string // optional persistence dir; empty = in-memory only
 }
 
 type room struct {
@@ -94,6 +95,22 @@ func NewBox(cfg BoxConfig) *Box {
 	go b.reaperLoop()
 	return b
 }
+
+// NewPersistentBox builds a channel box that persists rooms to dir, so lines
+// survive process restarts (still honoring LineTTL for rot). Loads existing
+// state on startup. Presence is never persisted (it is live-only).
+func NewPersistentBox(cfg BoxConfig, dir string) (*Box, error) {
+	b := NewBox(cfg)
+	b.dir = dir
+	if err := b.load(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (b *Box) savePath() string  { return b.dir + "/channels.json" }
+func (b *Box) saveLocked() error { return saveBox(b) }
+func (b *Box) load() error       { return loadBox(b) }
 
 func (b *Box) reaperLoop() {
 	t := time.NewTicker(b.cfg.ReapEvery)
@@ -135,6 +152,7 @@ func (b *Box) Post(ch string, sender string, private bool, data []byte) Line {
 		drop := len(r.lines) - b.cfg.MaxLines
 		r.lines = append([]Line(nil), r.lines[drop:]...)
 	}
+	b.saveLocked() // persist on every post (best-effort)
 	return ln
 }
 
@@ -189,6 +207,9 @@ func (b *Box) Reap(now time.Time) int {
 				delete(r.presence, addr)
 			}
 		}
+	}
+	if n > 0 {
+		b.saveLocked()
 	}
 	return n
 }

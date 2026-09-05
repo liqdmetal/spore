@@ -252,12 +252,25 @@ func channelserve(args []string) {
 	linettl := fs.Duration("linettl", 15*time.Minute, "line retention")
 	presencettl := fs.Duration("presencettl", time.Minute, "presence window")
 	maxlines := fs.Int("maxlines", 2000, "per-channel ring cap")
+	dir := fs.String("dir", "", "persist rooms to this dir (survives restart); empty = in-memory")
 	_ = fs.Parse(args)
 
-	b := channel.NewBox(channel.BoxConfig{
-		LineTTL: *linettl, PresenceTTL: *presencettl,
-		ReapEvery: 30 * time.Second, MaxLines: *maxlines,
-	})
+	var b *channel.Box
+	if *dir != "" {
+		pb, err := channel.NewPersistentBox(channel.BoxConfig{
+			LineTTL: *linettl, PresenceTTL: *presencettl,
+			ReapEvery: 30 * time.Second, MaxLines: *maxlines,
+		}, *dir)
+		if err != nil {
+			log.Fatalf("channel: cannot open box dir: %v", err)
+		}
+		b = pb
+	} else {
+		b = channel.NewBox(channel.BoxConfig{
+			LineTTL: *linettl, PresenceTTL: *presencettl,
+			ReapEvery: 30 * time.Second, MaxLines: *maxlines,
+		})
+	}
 	log.Printf("channel box on %s (lines rot after %s; presence %s)", *listen, *linettl, *presencettl)
 	log.Fatal(http.ListenAndServe(*listen, channel.NewServer(b)))
 }
@@ -279,12 +292,25 @@ func webchat(args []string) {
 	// Registered BEFORE Parse so the flags are known.
 	wrc := fs.String("wallet-rpc", "", "wallet RPC /json_rpc endpoint for whisper send")
 	wlogin := fs.String("wallet-login", "", "wallet RPC basic auth user:pass")
+	dir := fs.String("dir", "", "persist rooms to this dir (survives restart); empty = in-memory")
 	_ = fs.Parse(args)
 
-	b := channel.NewBox(channel.BoxConfig{
-		LineTTL: *linettl, PresenceTTL: *presencettl,
-		ReapEvery: 30 * time.Second, MaxLines: *maxlines,
-	})
+	var b *channel.Box
+	if *dir != "" {
+		pb, err := channel.NewPersistentBox(channel.BoxConfig{
+			LineTTL: *linettl, PresenceTTL: *presencettl,
+			ReapEvery: 30 * time.Second, MaxLines: *maxlines,
+		}, *dir)
+		if err != nil {
+			log.Fatalf("web: cannot open box dir: %v", err)
+		}
+		b = pb
+	} else {
+		b = channel.NewBox(channel.BoxConfig{
+			LineTTL: *linettl, PresenceTTL: *presencettl,
+			ReapEvery: 30 * time.Second, MaxLines: *maxlines,
+		})
+	}
 	api := channel.WithCORS(channel.BoxRoutes(b))
 
 	mux := http.NewServeMux()
