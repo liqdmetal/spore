@@ -93,27 +93,29 @@ func (b *Backend) signerFn() func(solana.PublicKey) *solana.PrivateKey {
 // PostPayload implements chain.Chain.
 //
 // It builds and submits a `deliver` instruction to the mycelium mailbox
-// program. The program appends an envelope (opaque payload bytes) to the
-// recipient's inbox PDA. For the self-messaging demo the signer is both payer
-// and recipient, so the payload lands in our own inbox.
+// program, posting the opaque payload (E2E envelope) to the RECIPIENT's inbox
+// PDA. The signer is the sender/payer and does NOT need to be the recipient —
+// anyone may deliver to an address (email semantics, matching the v3 program).
 //
 // Instruction data: tag(0x00) followed by the opaque payload bytes.
-// Accounts: [recipient(signer), inbox(PDA, writable), payer(signer),
-// system_program].
+// Accounts: [sender(signer), recipient, inbox(PDA of recipient, writable),
+// payer(signer), system_program].
 func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain.Payload, amountHint uint64) (chain.PostResult, error) {
-	// The mailbox program requires the recipient ("to") to sign. In the
-	// self-messaging demo we deliver into OUR own inbox, so the recipient is
-	// the signer's pubkey regardless of recipientAddr.
-	recipient := b.signer.PublicKey()
+	sender := b.signer.PublicKey()
+	recipient, err := solana.PublicKeyFromBase58(recipientAddr)
+	if err != nil {
+		return chain.PostResult{}, fmt.Errorf("solana: bad recipient address: %w", err)
+	}
 	inbox, err := b.inboxPDA(recipient)
 	if err != nil {
 		return chain.PostResult{}, fmt.Errorf("solana: derive inbox PDA: %w", err)
 	}
 
 	accounts := solana.AccountMetaSlice{
-		solana.Meta(recipient).SIGNER().WRITE(),
-		solana.Meta(inbox).WRITE(),
-		solana.Meta(recipient).SIGNER(), // payer (also the signer here)
+		solana.Meta(sender).SIGNER(),   // sender authorizes delivery
+		solana.Meta(recipient).WRITE(), // recipient (its inbox gets the msg)
+		solana.Meta(inbox).WRITE(),     // inbox PDA, writable
+		solana.Meta(sender).SIGNER(),   // payer (sender pays)
 		solana.Meta(solana.SystemProgramID),
 	}
 
@@ -129,7 +131,7 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	tx, err := solana.NewTransaction(
 		[]solana.Instruction{instruction},
 		blockhash.Value.Blockhash,
-		solana.TransactionPayer(recipient),
+		solana.TransactionPayer(sender),
 	)
 	if err != nil {
 		return chain.PostResult{}, fmt.Errorf("solana: build transaction: %w", err)

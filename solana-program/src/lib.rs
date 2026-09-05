@@ -7,12 +7,12 @@
 //! internal/secure layer (eph_pub || nonce || ciphertext).
 //!
 //! Instructions:
-//!   - deliver(to, data): append `data` to `to`'s inbox PDA. Payer = sender.
+//!   - deliver(to, data): append `data` to `to`'s inbox PDA. Anyone may deliver
+//!     (sender signs; recipient does not — email semantics). Payer = sender.
 //!   - burn(to, index): empty one message (compost semantics).
 //!
-//! Only the recipient may read/burn their own inbox; the program enforces that
-//! the `to` signer matches the PDA owner. Anyone may deliver (like sending an
-//! email to an address).
+//! Only the recipient may read/burn their own inbox (the `to` signer must match
+//! the PDA owner). Delivery is open to anyone, like sending email to an address.
 #![deny(missing_docs)]
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -72,13 +72,21 @@ pub fn process_instruction(
 
 fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let it = &mut accounts.iter();
-    let recipient = next_account_info(it)?; // the 'to' (must sign to claim inbox)
+    // Sender: signs (pays + authorizes the delivery), like the "from" of an email.
+    let sender = next_account_info(it)?;
+    // Recipient: the pubkey whose inbox receives the message. Does NOT need to
+    // sign — anyone may deliver to an address (email semantics).
+    let recipient = next_account_info(it)?;
     let inbox = next_account_info(it)?; // PDA inbox, must be writable
-    let payer = next_account_info(it)?; // pays rent, signs
+    let payer = next_account_info(it)?; // pays rent, signs (sender or a sponsor)
     let system_program = next_account_info(it)?;
 
-    if !recipient.is_signer {
-        msg!("recipient (to) must sign to open/claim the inbox for delivery keying");
+    if !sender.is_signer {
+        msg!("sender must sign to deliver");
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    if !payer.is_signer {
+        msg!("payer must sign to pay for rent");
         return Err(ProgramError::MissingRequiredSignature);
     }
 
@@ -100,7 +108,7 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
 
     let seq = loaded.messages.len() as u64;
     loaded.messages.push(StoredMessage {
-        from: recipient.key.to_bytes(),
+        from: sender.key.to_bytes(),
         data: data.to_vec(),
         seq,
     });
@@ -143,7 +151,7 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
     }
     inbox.try_borrow_mut_data()?.copy_from_slice(&serialized);
 
-    msg!("delivered msg {} to {}", seq, recipient.key);
+    msg!("delivered msg {} to {} from {}", seq, recipient.key, sender.key);
     Ok(())
 }
 
