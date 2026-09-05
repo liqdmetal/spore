@@ -37,15 +37,15 @@ contract blob). The chain is identity + a carrier; m³ is the secrecy.
    recipient + emit `Inbox(to, from, cid)` event) + Go `internal/evm` backend +
    codec. Covers generic EVM *and* is the Obscura path. **Testable against any
    EVM RPC** — this is the concrete next build.
-3. **RelayOS interconnection** — mycelium relay over a RelayOS node: forward
-   encrypted pointer/body across the substrate mesh (Waku/Iroh/libp2p). RelayOS
-   nodes become the underground trunk between chains.
+3. **Relay fabric interconnection** — mycelium relay node: forward encrypted
+   pointer/body across the substrate mesh (Waku/Iroh/libp2p). Relay nodes become
+   the underground trunk between chains.
 4. **Monero** — identity + rendezvous delivery (no reliance on native payload
    encryption).
 5. **Donation addresses** — `mycelium donate`, config `{chain: addr}`, one
    address per supported tree.
 6. **Cross-chain identity proof** (DERO↔EVM/Obscura) — prove one key controls an
-   address on both chains. Research-grade; the hard RelayOS piece. Gates true
+   address on both chains. Research-grade; the hard piece. Gates true
    interchain messaging (pointer from DERO tree read by EVM tree).
 7. Zcash / ARRR / Decred / Verge — each a `chain.Chain` backend after 2+3 land
    (reuse the mailbox/relay pattern).

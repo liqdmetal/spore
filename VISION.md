@@ -2,8 +2,8 @@
 
 *Vision / architecture note. Mycelium was built and verified live on DERO
 (short no-relay whisper, long nobody-but-us bodies, rooms that rot). This doc
-sketches the expansion: the same core running on every private chain, and
-RelayOS nodes as the interconnection fabric.*
+sketches the expansion: the same core running on every private chain, joined by
+a shared off-chain relay fabric.*
 
 ---
 
@@ -46,42 +46,40 @@ way it does on DERO. Options, honest:
   (which is chain-agnostic anyway). The whisper/pointer can ride a Monero
   transaction's `tx_extra` as opaque bytes; privacy of the *content* then comes
   from mycelium's own ECDH, not Monero's tx model.
-- **RelayOS substrate** (Waku/Iroh/libp2p) as the actual carrier, with Monero
+- **Off-chain substrate** (Waku/Iroh/libp2p) as the actual carrier, with Monero
   as identity/settlement.
 
 Real talk: Monero gives mycelium an identity + a payment rail but NOT a free
 encrypted-message channel. The rendezvous layer does the private delivery.
 
-## 4. The interconnection model — mycelium + RelayOS nodes
+## 4. The interconnection model — the mycelium relay fabric
 
-RelayOS's stack already treats **substrate as replaceable delivery, not
-authority** (ADR-0004). Mycelium slots in exactly there:
+The stack treats **substrate as replaceable delivery, not authority**. The
+transport seam can be any p2p/gossip substrate (Waku/Iroh/libp2p, or the
+node's own P2P). Mycelium slots in at the transport seam:
 
 ```
 mycelium app (whisper / rooms / long-body)
    -> mycelium core (ECDH crypto, rendezvous, compost, UI)   [chain-agnostic]
       -> signer seam:  DERO | Obscura | Monero | EVM        [per-chain]
-      -> transport seam: node P2P | RelayOS (Waku/Iroh/libp2p)
-           -> RelayOS nodes = the shared "mycelium relay" fabric
+      -> transport seam: node P2P | substrate mesh (Waku/Iroh/libp2p)
+           -> mycelium relay nodes = the shared "mycelium relay" fabric
 ```
 
-**RelayOS nodes as the mycelium relay fabric:** a RelayOS node can be the
-always-on rendezvous that connects mycelium instances across chains — a DERO
-user and an Obscura user both reach their local RelayOS node, which forwards the
-encrypted pointer/body across the substrate mesh. The node relays ciphertext it
-cannot read (same "box holds no keys" property as mycelium rooms).
+**Mycelium relay nodes as the fabric:** an always-on relay node connects
+mycelium instances across chains — a DERO user and an Obscura user both reach
+their local relay node, which forwards the encrypted pointer/body across the
+substrate mesh. The node relays ciphertext it cannot read (same "box holds no
+keys" property as mycelium rooms).
 
 **Interchain mycelium (DERO wallet ↔ Obscura wallet) — the honest model:**
 direct point-to-point encryption across chains is impossible (different key
 crypto). What IS possible is the **cross-chain rendezvous / relay**:
 1. Sender encrypts the body to a key the recipient can derive by proving control
-   of both wallets (a cross-chain identity proof — RelayOS's cross-chain
-   settlement problem, NOT a mycelium messenger problem).
-2. The pointer/notification crosses chains via the RelayOS relay mesh.
+   of both wallets (a cross-chain identity proof — a cross-chain settlement
+   problem, NOT a mycelium messenger problem).
+2. The pointer/notification crosses chains via the mycelium relay mesh.
 3. Delivery is single-chain; cross-chain is signaling + handoff.
-
-This is exactly the layer RelayOS already exists to solve (cross-chain
-settlement, atomic swaps, identity across chains). Mycelium rides it.
 
 ## 5. Donation addresses on every chain
 
@@ -99,12 +97,12 @@ addresses" — the same cross-chain-proof problem as §4.
    chain backend is a clean swap. (Refactor, no behavior change; test stays
    green.)
 2. **Second chain: Obscura** — EVM-compatible, lowest effort. Proves the seam.
-3. **RelayOS interconnection** — mycelium relay over a RelayOS node (encrypted
-   pointer forwarding across the mesh).
+3. **Relay fabric interconnection** — mycelium relay node (encrypted pointer
+   forwarding across the substrate mesh).
 4. **Monero backend** — identity + rendezvous delivery, no reliance on native
    payload encryption.
 5. **Donation scheme** — per-chain address config + `mycelium donate`.
-6. Cross-chain identity proof (DERO↔Obscura) — the hard RelayOS piece, gated on
+6. Cross-chain identity proof (DERO↔Obscura) — the hard piece, gated on
    that work.
 
 ## 7. Guardrails (from how it was built)
