@@ -5,8 +5,9 @@ point**: a whisper rides a real DERO transaction, encrypted end-to-end by
 DERO. There is no server, no box, no operator in the middle — but that means
 **each person runs their own endpoint**. This guide is the 5-minute friend path.
 
-> Honest scope of v0.1.0: **DERO is live and mainnet-verified.** EVM and Monero
-> backends exist but are mock-tested only — not yet usable for real messaging.
+> Honest scope: **DERO is live and mainnet-verified.** EVM and Solana are
+> live-verified (see `README.md` chain-status table); **Monero is mock-verified
+> only** — not yet usable for real messaging (node still syncing).
 
 ---
 
@@ -83,12 +84,13 @@ but the two of you.
 
 ## What's NOT live yet (honest)
 
-- **EVM and Monero** backends are mock-tested only. Don't point real money or
-  rely on them for messaging yet — they need live-node verification (a future
-  release).
+- **Monero** is mock-verified only. Don't point real money or rely on it for
+  messaging yet — it needs live-node verification (a `monero-wallet-rpc`) once
+  the syncing node catches up. EVM and Solana backends are live-verified; see
+  `README.md` for their precise status.
 - A friend must run their **own** wallet + `whisper recv`. This is the privacy
   model: no shared box to subpoena, no operator. The cost is that "just chat in
-  a browser with no setup" isn't the v0.1.0 experience — use `mycelium web`
+  a browser with no setup" isn't the experience — use `mycelium web`
   (shared-key rooms) for that instead.
 
 ## Dev / power-user

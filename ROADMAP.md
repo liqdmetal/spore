@@ -3,58 +3,53 @@
 *Trees are the endpoints — each a wallet+node on its own chain. Mycelium is the
 underground no-relay substrate. m³ is the common mycorrhizal network they form.
 Adding a tree means one `chain.Chain` backend + one payload codec. The seam
-(internal/chain) makes each new chain bounded.*
+(`internal/chain`) makes each new chain bounded.*
 
-## Done (all mainnet/live)
-- **DERO** — tree #1. Whisper (no-relay), long nobody-but-us bodies, rooms,
-  browser UI. Live, mainnet-verified, in `liqdmetal/mycelium`.
-- **m³ seam** — `internal/chain` (Chain + Watch) + whisper `Codec`/`SendChain`/
-  `RecvChain`. Core has zero chain-specific dependency (proven by a mock chain).
+> **Authoritative chain status lives in [`README.md`](README.md#chain-status).**
+> This roadmap tracks what's done vs. what's left; it does not re-state per-tree
+> live status.
 
-## Chain map — how each tree joins the CMN
+## Done
+- **DERO** — tree #1. Whisper (no-relay unicast), long nobody-but-us bodies,
+  rooms, browser UI. Live, mainnet-verified.
+- **m³ seam** — `internal/chain` (Chain + Watch) + `internal/whisper` canonical
+  codec (kind 0x01 text / 0x02 pointer). Core has zero chain-specific dependency
+  (proven by a mock chain, then on 3 real backends).
+- **EVM** — Go `internal/evm` backend **live-verified** on a local anvil node
+  (same JSON-RPC path a real chain uses). `contracts/MyceliumMailbox.sol`
+  written for scalable inbox-on-busy-chains (deploy pending).
+- **Solana** — Go `internal/solana` backend + Rust BPF mailbox program
+  (per-recipient PDA inbox) **deployed and live-verified on Solana mainnet**
+  (program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`, v2). Client currently
+  self-messaging.
+- **E2E secure layer** — `internal/secure` X25519 ECDH + HKDF-SHA256 +
+  XChaCha20-Poly1305 envelope (`kind 0xE0`) that keeps EVM/Solana/XMR content
+  private on public chains. `internal/crypto` holds the primitives + key-zeroing.
+- **Donate rail** — `mycelium donate [chain] | --all`, per-chain address registry.
+- **Multi-chain CLI** — `mycelium msg send|recv|send-long|keygen -chain
+  dero|evm|xmr|solana` dispatch via `internal/backend`.
 
-| Chain | Native encrypted-payload rail? | Backend approach | Effort |
-|---|---|---|---|
-| **DERO** | ✅ point-to-point payload | done | — |
-| **EVM-compatible** | ⚠️ calldata/events public (no native per-rcpt msg) | m³ ECDH + `MyceliumMailbox` contract; privacy from m³ crypto (Go `internal/evm` backend built) | M |
-| **Zcash** | ⚠️ shielded payments, no free msg field | identity via shielded addr; delivery via rendezvous/relay | M–H |
-| **ARRR (Pirate)** | ⚠️ Komodo/Zcash fork | same as Zcash path | M–H |
-| **Decred** | ⚠️ tx but no per-rcpt msg | m³ ECDH over a message tx / contract | M |
-| **Verge** | ⚠️ | m³ ECDH over tx payload | M |
-| **Monero** | ⚠️ no per-rcpt msg; only 8-byte payment id | identity + signal rail; content off-chain rendezvous (Go `internal/xmr` backend built, mock-verified; needs live wallet-rpc to confirm) | M–H |
-| **Zama (FHE)** | ⚠️ NOT a message chain | FHE = compute-on-encrypted, different layer — likely out of transport scope | design |
+## Remaining (honest, in rough priority order)
 
-**Rule:** where the chain has no native per-recipient encrypted message field,
-privacy comes from **m³'s own ECDH** (the crypto that already powers DERO
-whispers) layered on whatever the chain can carry (calldata, tx_extra, a
-contract blob). The chain is identity + a carrier; m³ is the secrecy.
-
-## Build order (honest)
-
-1. ✅ **m³ seam** (chain.Chain + Codec) — done.
-2. **EVM mailbox** — `MyceliumMailbox.sol` (store m³-encrypted blob per
-   recipient + emit `Inbox(to, from, cid)` event) + Go `internal/evm` backend +
-   codec. Covers any EVM-compatible chain. **Testable against any
-   EVM RPC** — this is the concrete next build.
-3. **Relay fabric interconnection** — mycelium relay node: forward encrypted
-   pointer/body across the substrate mesh (Waku/Iroh/libp2p). Relay nodes become
-   the underground trunk between chains.
-4. **Monero** — identity + signal rail; 8-byte payment-id knock, content off-chain
-   rendezvous (no reliance on native payload encryption). Go `internal/xmr`
-   backend built + mock-verified; confirm against a live `monero-wallet-rpc`.
-5. **Donation addresses** — `mycelium donate`, config `{chain: addr}`, one
-   address per supported tree.
-6. **Cross-chain identity proof** (DERO↔EVM) — prove one key controls an
-   address on both chains. Research-grade; the hard piece. Gates true
-   interchain messaging (pointer from DERO tree read by EVM tree).
-7. Zcash / ARRR / Decred / Verge — each a `chain.Chain` backend after 2+3 land
-   (reuse the mailbox/relay pattern).
+| # | Item | Why it's gated |
+|---|---|---|
+| 1 | **XMR live-verify** | pruned `monerod` syncing on Hetzner node (~60%); needs a real `monero-wallet-rpc`. Scope = short ≤8-byte signals (knock) + off-chain rendezvous; no native payload encryption. |
+| 2 | **Deploy `MyceliumMailbox.sol`** | written + backend proven; needs a funded EVM account on a real chain. |
+| 3 | **Solana cross-wallet delivery** | program requires recipient to sign; today client self-messages. Both parties must run the backend to deliver cross-wallet. |
+| 4 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs (BSD-3, clean-room, mainnet-proven) watches the node txpool and decrypts before mining. |
+| 5 | **Relay fabric interconnection** | mycelium relay node forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p) — the underground trunk between chains. |
+| 6 | **Zcash / ARRR / Decred / Verge** | each a `chain.Chain` backend reusing the envelope/relay pattern. |
+| 7 | **Cross-chain identity proof** (DERO↔EVM) | research crypto — the hard piece. Gates true interchain messaging (a pointer from a DERO tree read by an EVM tree). |
+| 8 | **Zama / FHE** | compute-on-encrypted, a different primitive — parked. |
 
 ## Honest notes
-- "Finish to 6 tonight" isn't real: step 6 is research crypto; 2–4 are
-  multi-hour integrations. This doc is the map, not a promise of tonight.
-- Where a chain has no native encrypted rail, m³ supplies secrecy — the
-  tradeoff is metadata (a tx/event exists) still visible at that layer, same as
-  DERO whisper's honest limit.
-- Zama/FHE is computation-on-encrypted-data, a different primitive; parked until
-  the transport trees are in.
+- "Finish to 7 tonight" isn't real: #7 is research crypto; #1–3 are
+  integrations with real-node dependencies. This doc is the map, not a promise
+  of tonight.
+- Where a chain has no native encrypted rail, m³ supplies secrecy — the tradeoff
+  is metadata (a tx/event/inbox record exists) still visible at that layer, same
+  as DERO whisper's honest limit.
+- **Cross-chain direct messaging is impossible** (different key crypto).
+  Cross-chain = rendezvous/relay + identity proof (#7), signaling + handoff.
+- Group *broadcast* still needs a relay or an SC — no-relay is unicast by
+  construction.

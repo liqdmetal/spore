@@ -1,9 +1,9 @@
 # Mycelium — M³: Mycelium Multi-chain Messenger
 
-*Vision / architecture note. Mycelium was built and verified live on DERO
-(short no-relay whisper, long nobody-but-us bodies, rooms that rot). This doc
-sketches the expansion: the same core running on every private chain, joined by
-a shared off-chain relay fabric.*
+*Vision / architecture note. Mycelium was built and verified live on DERO, then
+proven portable across the chain seam — the same core now runs on DERO, EVM and
+Solana (live-verified), with Monero pending. This doc sketches where the
+expansion goes and what "private" means per chain.*
 
 ---
 
@@ -16,21 +16,32 @@ a chain. It depends on only two things any chain provides:
    short whisper, or the *pointer* to a long body.
 2. **A wallet/signer** holding keys, exposed over RPC.
 
-Everything else in mycelium — the ephemeral-ECDH crypto, the rendezvous
-peer-fetch, the compostable rooms, the nobody-but-us body store, the UI — sits
-**above** the chain and never touches consensus. That is what makes it portable.
+Everything else in mycelium — the ephemeral-ECDH crypto, the secure E2E
+envelope, the rendezvous peer-fetch, the compostable rooms, the nobody-but-us
+body store, the UI — sits **above** the chain and never touches consensus. That
+is what makes it portable.
 
-The only chain-specific piece today is `internal/dero` (the DERO wallet-RPC
-seam). To add a chain you replace that seam. Nothing above it changes.
+The seam is `internal/chain` (`Chain` + `Watch`), the codec is
+`internal/whisper`, and `internal/backend` dispatches `-chain` to the right
+backend. The seam is **proven on three chains** (DERO, EVM, Solana). Adding a
+chain means one backend behind that interface — nothing above it changes.
 
 ## 2. The chain map — what "private" really means per chain
 
-| Chain | Encrypted payload | Wallet RPC | Mycelium fit |
+| Chain | Encrypted payload | Wallet/signer | Mycelium fit |
 |---|---|---|---|
-| **DERO** | ✅ native (point-to-point, ring sig) | ✅ `--rpc-server` | **done, mainnet-verified** |
-| **EVM-compatible** | ⚠️ calldata/events public; m³ ECDH supplies secrecy | wallet/signer | Go `internal/evm` backend built |
-| **Monero** | ⚠️ different model | wallet RPC | real work — see §3 |
+| **DERO** | ✅ native (point-to-point, ring sig) | ✅ `--rpc-server` | **live, mainnet-verified** |
+| **EVM-compatible** | ⚠️ calldata/events public → m³ secure envelope | wallet/signer | **live-verified** (local anvil); `MyceliumMailbox.sol` for busy chains |
+| **Solana** | ⚠️ inbox PDA public → m³ secure envelope | signer keypair | **live on mainnet** (BPF program `GbNWrv…BraAs`) |
+| **Monero** | ⚠️ different model (see §3) | wallet RPC | built, **mock-verified** — pending node sync |
 | **other privacy chains** | varies | varies | same rule: needs the 2 primitives |
+
+**The rule that makes it multi-chain:** where a chain has no native per-recipient
+encrypted message field (EVM, Solana, XMR), privacy comes from **m³'s own
+secure envelope** — X25519 ECDH + HKDF-SHA256 + XChaCha20-Poly1305
+(`internal/secure`, `kind 0xE0`) layered on whatever the chain carries. The
+chain is identity + a carrier; m³ is the secrecy. On-chain records (calldata,
+inbox PDAs) carry ciphertext only; the recipient's private key is the only key.
 
 ## 3. The Monero wrinkle (be honest)
 
@@ -54,28 +65,29 @@ way it does on DERO. The honest model (matching `internal/xmr`, built):
 `internal/xmr` implements `chain.Chain` over the Monero wallet RPC
 (`transfer` with payment id, `get_transfers`, `get_address`, `get_height`) and
 is **mock-verified** (seam + payment-id→signal flow tested with a fake wallet
-RPC). It needs **live verification against a real `monero-wallet-rpc`** — e.g.
-the Hetzner node running an XMR node — before it's trusted the way DERO is.
+RPC). It needs **live verification against a real `monero-wallet-rpc`** — a
+pruned `monerod` is syncing (~60%) on the Hetzner node to enable that — before
+it's trusted the way DERO/EVM/Solana are.
 
 ## 4. The interconnection model — the mycelium relay fabric
 
 The stack treats **substrate as replaceable delivery, not authority**. The
-transport seam can be any p2p/gossip substrate (Waku/Iroh/libp2p, or the
-node's own P2P). Mycelium slots in at the transport seam:
+transport seam can be any p2p/gossip substrate (Waku/Iroh/libp2p, or the node's
+own P2P). Mycelium slots in at the transport seam:
 
 ```
 mycelium app (whisper / rooms / long-body)
-   -> mycelium core (ECDH crypto, rendezvous, compost, UI)   [chain-agnostic]
-      -> signer seam:  DERO | Monero | EVM                  [per-chain]
+   -> mycelium core (ECDH crypto, secure envelope, rendezvous, compost, UI)  [chain-agnostic]
+      -> signer seam:  DERO | EVM | Solana | Monero                  [per-chain]
       -> transport seam: node P2P | substrate mesh (Waku/Iroh/libp2p)
            -> mycelium relay nodes = the shared "mycelium relay" fabric
 ```
 
 **Mycelium relay nodes as the fabric:** an always-on relay node connects
-mycelium instances across chains — a DERO user and an EVM user both reach
-their local relay node, which forwards the encrypted pointer/body across the
-substrate mesh. The node relays ciphertext it cannot read (same "box holds no
-keys" property as mycelium rooms).
+mycelium instances across chains — a DERO user and an EVM user both reach their
+local relay node, which forwards the encrypted pointer/body across the substrate
+mesh. The node relays ciphertext it cannot read (same "box holds no keys"
+property as mycelium rooms).
 
 **Interchain mycelium (DERO wallet ↔ EVM wallet) — the honest model:**
 direct point-to-point encryption across chains is impossible (different key
@@ -86,30 +98,31 @@ crypto). What IS possible is the **cross-chain rendezvous / relay**:
 2. The pointer/notification crosses chains via the mycelium relay mesh.
 3. Delivery is single-chain; cross-chain is signaling + handoff.
 
+This is a hard, gated future item — not built.
+
 ## 5. Donation addresses on every chain
 
 Because mycelium is identity = your wallet address on whatever chain you're on,
 a "mycelium node/relay" operator can advertise **one address per supported
-chain** (DERO / XMR / EVM) as the donation rail. This is trivial to
-add once the signer seam is per-chain — a config file listing
-`{chain: address}` and a `mycelium donate` command that prints the right one.
-The relay operator's cross-chain identity is just "the entity controlling these
+chain** (DERO / EVM / Solana / XMR) as the donation rail. `mycelium donate`
+already prints the right one from a `{chain: address}` registry. The relay
+operator's cross-chain identity is just "the entity controlling these
 addresses" — the same cross-chain-proof problem as §4.
 
-## 6. Build order (suggested)
+## 6. Build order (what's done, what's left)
 
-1. **Lock the signer seam** — abstract `internal/dero` behind an interface so a
-   chain backend is a clean swap. (Refactor, no behavior change; test stays
-   green.)
-2. **Second chain: EVM-compatible** — the Go `internal/evm` backend (built)
-   rides any EVM RPC. Proves the seam on a second chain.
-3. **Relay fabric interconnection** — mycelium relay node (encrypted pointer
+1. ✅ **The chain seam** — `internal/chain` (Chain + Watch) + `internal/whisper`
+   codec. Core has zero chain-specific dependency.
+2. ✅ **Second + third chain** — Go `internal/evm` (live-verified on anvil) and
+   Go `internal/solana` (live on mainnet). Proves the seam is real.
+3. ✅ **E2E secure envelope** — `internal/secure` seals EVM/Solana/XMR content
+   against public chains.
+4. ✅ **Donation rail** — per-chain address registry + `mycelium donate`.
+5. ⏳ **Monero live-verify** — mock-verified backend; needs the syncing node +
+   a real `monero-wallet-rpc`.
+6. ⏳ **Relay fabric interconnection** — mycelium relay node (encrypted pointer
    forwarding across the substrate mesh).
-4. **Monero backend** — identity + rendezvous delivery, no reliance on native
-   payload encryption.
-5. **Donation scheme** — per-chain address config + `mycelium donate`.
-6. Cross-chain identity proof (DERO↔EVM) — the hard piece, gated on
-   that work.
+7. ⏳ Cross-chain identity proof (DERO↔EVM) — the hard piece, gated on that work.
 
 ## 7. Guardrails (from how it was built)
 

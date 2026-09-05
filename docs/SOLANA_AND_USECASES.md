@@ -1,37 +1,39 @@
 # Solana + EVM delivery & mycelium use-cases
 
-## Decision: Solana backend is next (2026-09-05)
+## Decision: Solana backend is next (2026-09-05) — NOW DONE
 
 User has wallet access (Phantom/MetaMask) to Solana AND EVM chains (bridging).
-Direction: build the **durable Solana program** (per-recipient PDA inbox),
-memo/transfer as a get-going fallback.
+Built the **durable Solana program** (per-recipient PDA inbox). **Deployed +
+live-verified on Solana mainnet.**
 
 ### The Solana reality (honest)
 - Solana is NOT EVM — different RPC (`sendTransaction`, `getSignaturesForAddress`)
-  and tx model (accounts, PDAs, programs). Needs a **new `chain.Chain` backend**
+  and tx model (accounts, PDAs, programs). Needed a **new `chain.Chain` backend**
   (`internal/solana`), mirroring `internal/evm` but on Solana's RPC.
 - Delivery model chosen: **Solana program with per-recipient PDA inbox** storing
   the mycelium E2E envelope (opaque bytes; the program never holds a key).
   Recipient queries their inbox PDA. Durable.
-- Memo/transfer model = program-free fallback (memo is a log, not durable).
+- Memo/transfer model = program-free fallback (memo is a log, not durable);
+  not needed — the program deployed.
 
-### Toolchain status (BLOCKED)
-- `release.solana.com` has a TLS failure from both the Hetzner node AND local
-  Windows (curl error 35) — the standard Solana installer can't fetch from it.
-- GitHub + crates.io are reachable. `solana-program` crate v1.18.26 + solana-sdk
-  are already cached locally, so the program can be written + cargo-compiled as
-  a standard Rust crate. But the **BPF build + deploy needs the Solana CLI
-  toolchain** (`cargo-build-sbf`), which is the blocked part.
-- Path to unblock: `cargo install cargo-build-sbf` (fetches from crates.io, not
-  release.solana.com) OR get the Solana CLI from GitHub releases. Heavy compile.
+### Status — DEPLOYED + LIVE-VERIFIED (2026-09-05)
+- BPF mailbox program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` (v2; v1 had
+  a rent bug) deployed on Solana mainnet. Source + tests in `solana-program/`.
+- Go `internal/solana` backend live-verified against the program (self-messaging:
+  the program requires the recipient to sign). RPC default
+  `https://api.mainnet-beta.solana.com`.
+- **Remaining:** cross-wallet delivery — both parties run the backend (the
+  recipient must sign to read their own inbox). See `README.md` / `ROADMAP.md`.
 
-### Build plan (once toolchain unblocks)
-1. `internal/solana` backend (gagliardetto solana-go v1.11.0 is available):
+### Build path (what was done)
+1. `internal/solana` backend (gagliardetto solana-go v1.11.0):
    PostPayload -> send tx w/ envelope to recipient's inbox PDA (via program
    instruction); ListIncoming -> read recipient inbox PDA via getAccountInfo.
 2. Solana program (Rust, solana-program crate): `deliver(to_pda, data)`,
    `read`, `burn`, PDA = sha256("mycelium", recipient_pub).
-3. Memo/transfer fallback backend if program deploy is delayed.
+3. Deployed to mainnet after the BPF toolchain was unblocked
+   (`cargo install cargo-build-sbf` / Solana CLI from GitHub, since
+   `release.solana.com` had a TLS failure).
 
 ---
 

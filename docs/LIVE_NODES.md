@@ -1,15 +1,14 @@
-# Live-node spec — verify EVM + XMR for real
+# Live-node spec — verify EVM + Solana + XMR for real
 
-m³ EVM and XMR backends are code-complete and mock-verified. To make them
-**live-usable** (the way DERO is), each needs a real node to point at. This
-spec covers both, on the Hetzner box (65.108.140.19) where the DERO node
-already lives.
+m³ EVM and Solana backends are **live-verified**; XMR is still mock-verified.
+This spec tracks the live nodes that prove each for real, on the Hetzner box
+(65.108.140.19) where the DERO node already lives.
 
-## Goals
-1. **XMR (Monero)** — a live `monero-wallet-rpc` + daemon on Hetzner, so
-   `mycelium msg send/recv -chain xmr` verifies end-to-end like DERO did.
-2. **EVM** — a live EVM JSON-RPC endpoint (any EVM-compatible chain) so the
-   `internal/evm` backend + `msg -chain evm` verifies for real.
+## Goals / status at a glance
+1. **EVM** — ✅ **live-verified** on a local anvil node (below).
+2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
+3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
+   `mycelium msg send/recv -chain xmr` can verify end-to-end like DERO did.
 
 ---
 
@@ -20,8 +19,8 @@ already lives.
   (verified sha256 `22a7dda7...` matches getmonero.org signed list).
 - `monerod` runs as user `monero`, pruned, data `/var/lib/monero`, daemon RPC
   `127.0.0.1:18081`, p2p `0.0.0.0:18080`, managed by `monerod.service`
-  (systemd, auto-restart + boot). Syncing (was 179K/3.75M = 4% shortly after
-  start; multi-hour to tip ~3.75M).
+  (systemd, auto-restart + boot). **Syncing (~60% as of 2026-09-05)**; multi-hour
+  to tip ~3.75M.
 - **Remaining on XMR path** (after sync reaches tip):
   1. Create + fund a test wallet (`monero-wallet-cli`), note the seed.
   2. Run `monero-wallet-rpc` on `127.0.0.1:18082` (behind auth / SSH tunnel).
@@ -124,16 +123,29 @@ The backend logic is identical; only the RPC endpoint + funded key change.
 
 ---
 
+## Solana — LIVE on mainnet (2026-09-05)
+
+- **BPF mailbox program deployed + live-verified on Solana mainnet** (v2):
+  program ID `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` (v1 `28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL` had a rent bug; v2 fixes inbox rent on a fresh id). Source + tests in `solana-program/`.
+- Go `internal/solana` backend verified against the live program (self-messaging:
+  the program requires the recipient to sign). RPC default
+  `https://api.mainnet-beta.solana.com`. Signer key = deployer.
+- **Remaining on Solana path:** cross-wallet delivery (both parties run the
+  backend; the recipient must sign to read their own inbox).
+
+---
+
 ## Decisions needed (user)
 1. **XMR install path**: prebuilt monero tarball (fast, recommended) vs full
-   source build on the box? And confirm disk headroom first.
+   source build on the box? And confirm disk headroom first. (monerod is
+   syncing — the daemon side is up.)
 2. **XMR verification scope**: OK that live XMR proves *short signals* only
    (long text needs the rendezvous work)? Or do you want the rendezvous
    integration speced first?
-3. **EVM target chain**: which chain to verify on (recommend a testnet like
-   Sepolia), and do you have a funded EVM address to sign with?
 
 ## Not live-verified: what that means
-Until these nodes run, `internal/evm` + `internal/xmr` remain **mock-verified**:
-correct against the seam and the RPC shape, but not confirmed against a real
-chain. This spec is the path to close that, exactly like the DERO node did.
+EVM and Solana are live-verified (anvil / mainnet above). **`internal/xmr`
+remains mock-verified**: correct against the seam and the RPC shape, but not
+confirmed against a real chain. A pruned `monerod` is syncing (~60%) on the box;
+the remaining path is a `monero-wallet-rpc` round-trip, exactly like the DERO
+node did.

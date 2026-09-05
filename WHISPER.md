@@ -1,4 +1,11 @@
-# Mycelium whisper — no-relay messenger on DERO
+# Mycelium whisper — no-relay messenger
+
+*Whisper is now the chain-agnostic payload codec (`internal/whisper`: kind byte
+0x01 text / 0x02 pointer, length-prefixed) shared by every backend. On DERO —
+the tree this was proven on first — it is the native no-relay unicast described
+below. The same codec rides EVM/Solana/XMR via `mycelium msg ... -chain`,
+sealed by the m³ secure envelope on chains without native encryption. See
+`README.md` (chain-status table) and `design.md` (the secure layer).*
 
 Goal (user, verbatim): "novel private comms tacked onto the chain, sc or no sc";
 "compostable message/signal through the mempool"; friends self-host, no one

@@ -1,5 +1,10 @@
 # Mycelium — user guide
 
+> **This guide is the DERO path.** Mycelium is multi-chain — the same core runs
+> on EVM, Solana and (pending live-verify) Monero via `mycelium msg ... -chain
+> dero|evm|xmr|solana`. See `README.md` for the chain-status table and
+> `docs/LIVE_NODES.md` for what's verified.
+
 Mycelium is a **no-relay private messenger on the DERO blockchain**. You write to
 a person's DERO address; the message reaches them without ever passing through
 a server you don't control. Messages are designed to *rot*: what lingers

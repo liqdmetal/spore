@@ -36,8 +36,8 @@ ciphertext).
     but its inbox account was created under-sized (rent bug); v2 fixes inbox
     rent and is deployed to a FRESH program id (the BPF loader can't grow an
     existing ProgramData account on upgrade, so a new id was required).
-- The client Go `internal/solana` backend (in the main mycelium repo) is the
-  next step to actually send/read messages through the live program.
+- The client Go `internal/solana` backend (in the main mycelium repo) is
+  **live-verified against this program** on mainnet.
 
 ## Build
 ```bash
@@ -50,7 +50,9 @@ cargo-build-sbf
 ```
 
 ## Integration (client side)
-The Go `internal/solana` backend (in the main mycelium repo) is the next step:
+The Go `internal/solana` backend (in the main mycelium repo) is **live-verified**:
 `PostPayload` sends a tx calling `deliver` to the recipient's inbox PDA;
 `ListIncoming` reads the recipient's inbox PDA via `getAccountInfo` and returns
-stored envelopes. See the main repo ROADMAP.
+stored envelopes. The client currently self-messages (the program requires the
+recipient to sign); cross-wallet delivery needs both parties running the
+backend. See the main repo `README.md` (chain-status) and `ROADMAP.md`.
