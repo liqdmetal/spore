@@ -54,6 +54,173 @@ const MaxTextLen = 80
 // TextTooLong reports the max whisper length.
 var ErrTooLong = errors.New("whisper: line too long")
 
+// ParseArgsFromData parses a whisper out of the RAW payload bytes (the `data`
+// field) returned by a wallet that could not decode payload_rpc (Engram chokes
+// on DERO's trailing random pad via a stricter CBOR version). The payload is:
+//
+//	[0]      sender position byte (ignored)
+//	[1..]    CBOR map { "WU": uint, "TS": text, ... } then random pad
+//
+// A tolerant, minimal CBOR map walker reads the two fields we care about and
+// ignores everything after (the pad). Returns ok=false if it can't find a
+// whisper marker.
+func ParseArgsFromData(data []byte) (text string, ok bool) {
+	if len(data) < 2 {
+		return "", false
+	}
+	i := 1 // skip sender-position byte
+	// expect map head: a0..bf (map, n<=31) or 0xb8/0xb9 etc for larger
+	if len(data) <= i || data[i]&0xe0 != 0xa0 {
+		return "", false
+	}
+	i++
+	// we don't strictly need the map count; walk key->value pairs tolerantly
+	var kindV, seenW, seenT bool
+	var v uint64
+	var t string
+	for i+1 < len(data) {
+		// read a key (text string head)
+		ki := i
+		keyBytes, ni, okk := cborText(data, ki)
+		if !okk {
+			break
+		}
+		key := string(keyBytes)
+		i = ni
+		if i >= len(data) {
+			break
+		}
+		switch key {
+		case "WU": // uint
+			val, ni2, okv := cborUint(data, i)
+			if !okv {
+				return "", false
+			}
+			v = val
+			i = ni2
+			seenW = true
+			if seenW && seenT {
+				kindV = v == WhisperV1
+				return t, kindV
+			}
+		case "TS": // text string
+			val, ni2, okv := cborText(data, i)
+			if !okv {
+				return "", false
+			}
+			t = string(val)
+			i = ni2
+			seenT = true
+			if seenW && seenT {
+				kindV = v == WhisperV1
+				return t, kindV
+			}
+		default:
+			// unknown field; skip its value (uint or text)
+			if data[i]&0xe0 == 0x60 { // text
+				_, ni2, _ := cborText(data, i)
+				i = ni2
+			} else if data[i]&0xe0 == 0x00 { // uint
+				_, ni2, _ := cborUint(data, i)
+				i = ni2
+			} else {
+				break
+			}
+		}
+	}
+	return t, kindV && seenW && seenT
+}
+
+// cborText reads a CBOR text string (major type 3) starting at data[i].
+func cborText(data []byte, i int) ([]byte, int, bool) {
+	if i >= len(data) || data[i]&0xe0 != 0x60 {
+		return nil, i, false
+	}
+	ai := data[i] & 0x1f
+	i++
+	var n int
+	switch {
+	case ai < 24:
+		n = int(ai)
+	case ai == 24:
+		if i >= len(data) {
+			return nil, i, false
+		}
+		n = int(data[i])
+		i++
+	case ai == 25:
+		if i+2 > len(data) {
+			return nil, i, false
+		}
+		n = int(data[i])<<8 | int(data[i+1])
+		i += 2
+	case ai == 26:
+		if i+4 > len(data) {
+			return nil, i, false
+		}
+		n = int(data[i])<<24 | int(data[i+1])<<16 | int(data[i+2])<<8 | int(data[i+3])
+		i += 4
+	default:
+		return nil, i, false
+	}
+	if i+n > len(data) {
+		return nil, i, false
+	}
+	return data[i : i+n], i + n, true
+}
+
+// cborUint reads a CBOR unsigned integer (major type 0).
+func cborUint(data []byte, i int) (uint64, int, bool) {
+	if i >= len(data) || data[i]&0xe0 != 0x00 {
+		return 0, i, false
+	}
+	ai := data[i] & 0x1f
+	i++
+	var v uint64
+	switch {
+	case ai < 24:
+		v = uint64(ai)
+	case ai == 24:
+		if i >= len(data) {
+			return 0, i, false
+		}
+		v = uint64(data[i])
+		i++
+	case ai == 25:
+		if i+2 > len(data) {
+			return 0, i, false
+		}
+		v = uint64(data[i])<<8 | uint64(data[i+1])
+		i += 2
+	case ai == 26:
+		if i+4 > len(data) {
+			return 0, i, false
+		}
+		v = uint64(data[i])<<24 | uint64(data[i+1])<<16 | uint64(data[i+2])<<8 | uint64(data[i+3])
+		i += 4
+	case ai == 27:
+		if i+8 > len(data) {
+			return 0, i, false
+		}
+		for b := 0; b < 8; b++ {
+			v = v<<8 | uint64(data[i+b])
+		}
+		i += 8
+	default:
+		return 0, i, false
+	}
+	return v, i, true
+}
+
+// ParsePointerFromData attempts pointer decode from raw bytes. Pointer
+// whispers carry K/C as CBOR byte-strings (major type 2); decoding them from
+// the raw padded payload is a rarer path — return not-ok so callers fall back
+// to the payload_rpc parse. (Text whispers are the common Engram case and are
+// handled by ParseArgsFromData.)
+func ParsePointerFromData(data []byte) ([32]byte, [32]byte, bool) {
+	return [32]byte{}, [32]byte{}, false
+}
+
 // BuildArgs renders a whisper into the payload Arguments for a transfer.
 func BuildArgs(text string) (anchor.Arguments, error) {
 	if len(text) > MaxTextLen {
@@ -186,6 +353,11 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					cursor = uint64(e.TopoHeight)
 				}
 				text, isWhisper := ParseArgs(e.PayloadRPC)
+				if !isWhisper && len(e.Data) > 0 {
+					// Some wallets (Engram) fail to decode payload_rpc from the
+					// padded CBOR but still return the raw `data` bytes.
+					text, isWhisper = ParseArgsFromData(e.Data)
+				}
 				if isWhisper {
 					seen[e.TXID] = true
 					select {
@@ -196,6 +368,9 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					continue
 				}
 				eph, cid, isPtr := ParsePointer(e.PayloadRPC)
+				if !isPtr && len(e.Data) > 0 {
+					eph, cid, isPtr = ParsePointerFromData(e.Data)
+				}
 				if isPtr {
 					seen[e.TXID] = true
 					select {

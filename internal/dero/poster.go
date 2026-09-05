@@ -183,6 +183,11 @@ type Entry struct {
 	TXID       string           `json:"txid"`
 	Sender     string           `json:"sender"`
 	PayloadRPC anchor.Arguments `json:"payload_rpc"`
+	// Data is the raw payload bytes as base64 (wallets like Engram that fail
+	// the CBOR parse of padded payloads still return this).
+	Data []byte `json:"data"`
+	// PayloadError is set when the wallet could not decode payload_rpc.
+	PayloadError string `json:"payloaderror"`
 }
 
 // GetTransfersResult mirrors {entries}.
