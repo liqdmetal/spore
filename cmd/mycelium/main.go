@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/mycelium/internal/backend"
+	"github.com/liqdmetal/mycelium/internal/chain"
 	"github.com/liqdmetal/mycelium/internal/channel"
 	derodaemon "github.com/liqdmetal/mycelium/internal/daemon"
 	"github.com/liqdmetal/mycelium/internal/dero"
@@ -76,6 +78,8 @@ func main() {
 		whispercmd(os.Args[2:])
 	case "donate":
 		donatecmd(os.Args[2:])
+	case "msg":
+		msgcmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -96,7 +100,9 @@ func usage() {
   mycelium whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
   mycelium whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
   mycelium whisper keygen [-key KFILE]
-  mycelium donate [chain] | --all                          (per-chain donation rail)`)
+  mycelium donate [chain] | --all                          (per-chain donation rail)
+  mycelium msg send -chain dero|evm|xmr -to ADDR -msg TEXT ...   (chain-agnostic send)
+  mycelium msg recv -chain dero|evm|xmr ...                       (chain-agnostic recv)`)
 }
 
 func check(err error) {
@@ -773,4 +779,117 @@ func donatecmd(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println(e.Address)
+}
+
+// msg sends/receives a mycelium message on ANY registered chain backend,
+// dispatching on -chain. Uses the chain-agnostic canonical codec so the same
+// wire semantics hold across DERO, EVM, and XMR.
+func msgcmd(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long [flags]")
+		fmt.Fprintln(os.Stderr, "       (chain-agnostic; see -chain)")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "send":
+		msgSend(args[1:])
+	case "recv":
+		msgRecv(args[1:])
+	case "send-long":
+		msgSendLong(args[1:])
+	case "-h", "--help":
+		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long [flags]")
+	default:
+		fmt.Fprintf(os.Stderr, "msg: unknown subcommand %q (want send|recv|send-long)\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func msgBackend(fs *flag.FlagSet) chain.Chain {
+	chainType := fs.Lookup("chain").Value.String()
+	cfg := backend.ChainConfig{
+		Type:  chainType,
+		RPC:   fs.Lookup("rpc").Value.String(),
+		Login: fs.Lookup("rpc-login").Value.String(),
+		From:  fs.Lookup("from").Value.String(),
+	}
+	c, err := backend.Build(context.Background(), cfg)
+	check(err)
+	return c
+}
+
+func msgSend(args []string) {
+	fs := flag.NewFlagSet("msg send", flag.ExitOnError)
+	to := fs.String("to", "", "recipient address on that chain")
+	msg := fs.String("msg", "", "message text")
+	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
+	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
+	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
+	fs.String("from", "", "our address (evm)")
+	_ = fs.Parse(args)
+	if *to == "" || *msg == "" {
+		fmt.Fprintln(os.Stderr, "msg send: -to and -msg required")
+		os.Exit(2)
+	}
+	c := msgBackend(fs)
+	codec := whisper.CanonicalCodec{}
+	txid, err := whisper.SendChain(context.Background(), c, codec, *to, *msg)
+	if err != nil {
+		log.Fatalf("msg send on %s: %v", c.Name(), err)
+	}
+	fmt.Printf("sent on %s to %s, txid %s\n", c.Name(), *to, txid)
+}
+
+func msgRecv(args []string) {
+	fs := flag.NewFlagSet("msg recv", flag.ExitOnError)
+	interval := fs.Duration("interval", 3*time.Second, "poll interval")
+	minHeight := fs.Uint64("min-height", 0, "scan from height")
+	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
+	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
+	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
+	fs.String("from", "", "our address (evm)")
+	_ = fs.Parse(args)
+	c := msgBackend(fs)
+	codec := whisper.CanonicalCodec{}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	log.Printf("msg recv on %s: listening for mycelium messages", c.Name())
+	ch, errc := whisper.RecvChain(ctx, c, codec, chain.WatchOpts{MinHeight: *minHeight, Interval: *interval})
+	for {
+		select {
+		case m, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !m.HasPointer {
+				fmt.Printf("msg %s: %s\n", shortTx(m.TXID), m.Text)
+			} else {
+				fmt.Printf("msg %s: long-pointer (cid %x)\n", shortTx(m.TXID), m.BodyCID)
+			}
+		case err := <-errc:
+			log.Printf("recv error: %v", err)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func msgSendLong(args []string) {
+	fs := flag.NewFlagSet("msg send-long", flag.ExitOnError)
+	to := fs.String("to", "", "recipient address on that chain")
+	fs.String("chain", "dero", "chain backend: dero|evm|xmr")
+	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
+	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
+	fs.String("from", "", "our address (evm)")
+	_ = fs.Parse(args)
+	if *to == "" {
+		fmt.Fprintln(os.Stderr, "msg send-long: -to required")
+		os.Exit(2)
+	}
+	// Long-body transport is chain-agnostic but not yet CLI-wired (needs a
+	// rendezvous/peer carrier + a real ephemeral-keypair + body CID). This is
+	// a declared TODO, not a fake: sending long bodies today uses the DERO
+	// `daemon`/`send` path. Reject rather than emit a hollow pointer.
+	fmt.Fprintln(os.Stderr, "msg send-long: chain-agnostic long-body transport not wired yet — use the DERO daemon/send path today")
+	os.Exit(2)
 }
