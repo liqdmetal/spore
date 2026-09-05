@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>compost · messenger</title>
+<title>mycelium · messenger</title>
 <style>
   :root{
     --bg:#0b0e13; --panel:#131823; --panel2:#1a2230; --line:#263142;
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="rail">
-  <div class="brand">⟁ compost</div>
+  <div class="brand">⟁ mycelium</div>
   <div class="sec">Direct · whisper</div>
   <div class="item active" id="defaultDM"><span class="dot" style="background:var(--accent2)"></span><span>whisper (1:1 no-relay)</span></div>
   <div class="sec">Long · nobody-but-us</div>
@@ -63,7 +63,7 @@
     <span class="pill pub" id="chPill">no-relay · encrypted to recipient wallet</span>
   </div>
   <div class="msgs" id="msgs">
-    <div class="sys">compost messenger — whisper lane</div>
+    <div class="sys">mycelium messenger — whisper lane</div>
     <div class="sys" id="setupHint">Set your wallet RPC + whoami, then whisper.</div>
   </div>
   <div class="compose">
@@ -75,14 +75,14 @@
 </div>
 
 <div class="modal" id="cfgModal"><div class="box">
-  <h3 style="margin:0 0 8px;font-size:15px">compost messenger setup</h3>
+  <h3 style="margin:0 0 8px;font-size:15px">mycelium messenger setup</h3>
   <label>wallet RPC (/json_rpc) — your dero-wallet-cli --rpc-server</label>
   <input id="cfgRpc" placeholder="http://127.0.0.1:20209/json_rpc">
   <label>rpc-login (user:pass, optional)</label><input id="cfgLogin" placeholder="(leave blank)">
   <label>daemon RPC (for name resolution)</label><input id="cfgDaemon" placeholder="http://127.0.0.1:10102/json_rpc">
   <label>your DERO address (dero1…)</label><input id="cfgWho" placeholder="dero1qyy…">
   <label>long-message key file / peer addr (optional, for long bodies)</label>
-  <input id="cfgKey" placeholder="path to your compost key"><input id="cfgPeer" placeholder="sender host:port">
+  <input id="cfgKey" placeholder="path to your mycelium key"><input id="cfgPeer" placeholder="sender host:port">
   <div class="row"><button class="b ghost" onclick="closeCfg()">cancel</button><button class="b primary" onclick="saveCfg()">save & connect</button></div>
 </div></div>
 
@@ -101,12 +101,12 @@ function saveCfg(){
   S.rpc=$("cfgRpc").value.trim(); S.login=$("cfgLogin").value.trim();
   S.daemon=$("cfgDaemon").value.trim(); S.who=$("cfgWho").value.trim();
   S.key=$("cfgKey").value.trim(); S.peer=$("cfgPeer").value.trim();
-  localStorage.setItem("compost.cfg",JSON.stringify(S));
+  localStorage.setItem("mycelium.cfg",JSON.stringify(S));
   $("cfgModal").style.display="none"; boot();
 }
 function closeCfg(){ $("cfgModal").style.display="none"; }
 function loadCfg(){
-  try{Object.assign(S,JSON.parse(localStorage.getItem("compost.cfg")||"{}"));}catch(e){}
+  try{Object.assign(S,JSON.parse(localStorage.getItem("mycelium.cfg")||"{}"));}catch(e){}
   $("cfgRpc").value=S.rpc; $("cfgLogin").value=S.login; $("cfgDaemon").value=S.daemon;
   $("cfgWho").value=S.who; $("cfgKey").value=S.key; $("cfgPeer").value=S.peer;
 }
@@ -114,7 +114,7 @@ function setStatus(t,err){const el=$("status");el.textContent=t;el.className="st
 
 // ---- wallet RPC (proxy to your wallet's /json_rpc — TELA runs locally so it
 // calls your own node; CORS must allow it. If your wallet binds 127.0.0.1,
-// run this doc from a page served on the same origin or via the compost web
+// run this doc from a page served on the same origin or via the mycelium web
 // proxy which adds the whisper endpoints.) ----
 async function rpc(method,params){
   const res=await fetch(S.rpc,{method:"POST",headers:{"Content-Type":"application/json",...(S.login?{Authorization:"Basic "+btoa(S.login)}:{})},
@@ -163,9 +163,9 @@ async function pollInbox(){
       if(W&&W.value===0x571&&T){addMsg(short(e.sender||"?"),T.value);}
       else if(W&&W.value===0x5710&&by("C")){
         const cid=by("C").value;
-        addMsg(short(e.sender||"?"),"🔒 long message (cid "+cid.slice(0,12)+"…) — fetch via compost-peer with your key");
+        addMsg(short(e.sender||"?"),"🔒 long message (cid "+cid.slice(0,12)+"…) — fetch via mycelium-peer with your key");
         // Auto-fetch if key+peer configured (shell out not possible in-browser
-        // here; the compost CLI `whisper recv` does the fetch+decrypt).
+        // here; the mycelium CLI `whisper recv` does the fetch+decrypt).
       }
     }
   }catch(e){ if(!/no such/.test(e.message)) setStatus("inbox: "+e.message,true); }
@@ -190,7 +190,7 @@ function newLong(){
 }
 async function sendLong(){
   const to=$("to").value.trim(), body=$("msg").value.trim();
-  if(!to||!body){addMsg("compost","long message needs -recipient-pub + -peer-addr set in config; body sent via `compost whisper send-long` on the CLI","nobody-but-us path");return;}
+  if(!to||!body){addMsg("mycelium","long message needs -recipient-pub + -peer-addr set in config; body sent via `mycelium whisper send-long` on the CLI","nobody-but-us path");return;}
   addMsg("you","(long body) "+body.slice(0,80)+"…","sent via send-long · body held sender-side · fetch p2p then rot");
 }
 function boot(){

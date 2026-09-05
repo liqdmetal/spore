@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/anchor"
-	"github.com/liqdmetal/compost/internal/dero"
+	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/mycelium/internal/dero"
 )
 
 // Payload markers. A whisper is carried as typed Arguments in the tx payload.

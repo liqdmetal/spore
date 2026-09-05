@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/crypto"
-	"github.com/liqdmetal/compost/internal/store"
+	"github.com/liqdmetal/mycelium/internal/crypto"
+	"github.com/liqdmetal/mycelium/internal/store"
 )
 
 // TestFetchRoundTrip: sender encrypts+stores a body, it's available on the

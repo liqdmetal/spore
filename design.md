@@ -1,4 +1,4 @@
-# Compost — a compostable messenger on DERO
+# Mycelium — a compostable messenger on DERO
 
 Messages that rot. The body never enters a block; the key never survives the
 exchange. What stays on-chain is a hash and dead public keys — permanently
@@ -43,7 +43,7 @@ gone after TTL. Separate lane from the hard-privacy paths. (See design of
   XChaCha20-Poly1305 (24B random nonce, never reused per message).
 - Body CID = sha256(ciphertext): retrieval key + on-chain commitment + tamper
   check (a fetched body whose sha256 ≠ CID is rejected before decrypt).
-- Key rotation + erasure = the "compost": after fetch / on rotation, old bodies
+- Key rotation + erasure = the "mycelium": after fetch / on rotation, old bodies
   are unrecoverable even by participants.
 
 ## Honest residual limits
@@ -59,8 +59,8 @@ gone after TTL. Separate lane from the hard-privacy paths. (See design of
 
 ## Status
 
-Verified live on DERO mainnet (2026-09-05): `compost send`→anchor mined,
-`compost daemon` recv→decrypted exactly once, bodies survive restart (DiskStore).
+Verified live on DERO mainnet (2026-09-05): `mycelium send`→anchor mined,
+`mycelium daemon` recv→decrypted exactly once, bodies survive restart (DiskStore).
 Whisper, rendezvous, and longmsg are unit-tested green (incl. wrong-key + tamper
 rejection). Channel box + web chat build. TELA UI shell is the remaining layer.
 
@@ -70,10 +70,10 @@ Full nobody-but-us long-message path proven live on the node:
 1. Alice `whisper keygen` + `whisper send-long` → body encrypted to Bob's key,
    held on Alice's node (disk 0600), pointer-whisper (C cid + K ephemeral) mined
    on-chain (height 7,573,951).
-2. Alice runs `compost-peer serve` on her reachable node.
+2. Alice runs `mycelium-peer serve` on her reachable node.
 3. Bob `whisper recv -key bob.key -peer-addr alice:port` → saw the pointer,
    fetched the body over the peer transport, decrypted with his key → printed
    the 167-byte message. Nobody but Alice and Bob ever held it.
 
-CLI: `compost whisper {send|send-long|recv|keygen}` + the Rust `compost-peer`
+CLI: `mycelium whisper {send|send-long|recv|keygen}` + the Rust `mycelium-peer`
 transport (derohe-rs).

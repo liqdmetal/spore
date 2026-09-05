@@ -1,4 +1,4 @@
-module github.com/liqdmetal/compost
+module github.com/liqdmetal/mycelium
 
 go 1.23
 

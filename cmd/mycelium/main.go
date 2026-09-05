@@ -30,15 +30,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/anchor"
-	"github.com/liqdmetal/compost/internal/channel"
-	derodaemon "github.com/liqdmetal/compost/internal/daemon"
-	"github.com/liqdmetal/compost/internal/dero"
-	"github.com/liqdmetal/compost/internal/longmsg"
-	"github.com/liqdmetal/compost/internal/peer"
-	"github.com/liqdmetal/compost/internal/session"
-	"github.com/liqdmetal/compost/internal/store"
-	"github.com/liqdmetal/compost/internal/whisper"
+	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/mycelium/internal/channel"
+	derodaemon "github.com/liqdmetal/mycelium/internal/daemon"
+	"github.com/liqdmetal/mycelium/internal/dero"
+	"github.com/liqdmetal/mycelium/internal/longmsg"
+	"github.com/liqdmetal/mycelium/internal/peer"
+	"github.com/liqdmetal/mycelium/internal/session"
+	"github.com/liqdmetal/mycelium/internal/store"
+	"github.com/liqdmetal/mycelium/internal/whisper"
 )
 
 //go:embed web/chat.html

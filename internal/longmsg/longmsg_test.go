@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/rendezvous"
-	"github.com/liqdmetal/compost/internal/store"
+	"github.com/liqdmetal/mycelium/internal/rendezvous"
+	"github.com/liqdmetal/mycelium/internal/store"
 )
 
 // TestNobodyButUsRoundTrip: Alice holds the body on her own store; Bob fetches

@@ -32,7 +32,7 @@ import (
 
 	"golang.org/x/crypto/hkdf"
 
-	"github.com/liqdmetal/compost/internal/crypto"
+	"github.com/liqdmetal/mycelium/internal/crypto"
 )
 
 // Line is one message as stored/relayed by the box.

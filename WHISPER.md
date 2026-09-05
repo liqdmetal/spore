@@ -1,4 +1,4 @@
-# Compost whisper — no-relay messenger on DERO
+# Mycelium whisper — no-relay messenger on DERO
 
 Goal (user, verbatim): "novel private comms tacked onto the chain, sc or no sc";
 "compostable message/signal through the mempool"; friends self-host, no one
@@ -29,7 +29,7 @@ difference is WHERE the receiver looks:
 
 | | Where receiver sees it | Latency | Status |
 |---|---|---|---|
-| **L3 — mined anchor** | wallet `get_transfers` in:true (proven path) | ~1 block (~18s) | **BUILT** — `compost whisper send/recv`, unit-tested green |
+| **L3 — mined anchor** | wallet `get_transfers` in:true (proven path) | ~1 block (~18s) | **BUILT** — `mycelium whisper send/recv`, unit-tested green |
 | **L1 — mempool catch** | own node daemon `gettxpool` → `gettransactions` | ~1-2s | **Scaffolded** — `internal/daemon` pool watcher green; needs payload decrypt |
 
 ### L1 pool catch — why it needs Rust (and why that's cheap)
@@ -48,8 +48,8 @@ the `decode_as_json` fetch seam the Rust tool or a Go bridge can reuse.
 ## CLI (built, green)
 
 ```
-compost whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   # no-relay
-compost whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]       # mined catch
+mycelium whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   # no-relay
+mycelium whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]       # mined catch
 ```
 
 ## Remaining (not built)

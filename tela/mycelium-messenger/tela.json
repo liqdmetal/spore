@@ -1,5 +1,5 @@
 {
-  "name": "compost-messenger",
+  "name": "mycelium-messenger",
   "version": "0.1.0",
   "entry": "index.html",
   "engine": "tela",
@@ -7,7 +7,7 @@
   "deps": {
     "wallet_rpc": "http://127.0.0.1:20209/json_rpc",
     "daemon_rpc": "http://127.0.0.1:10102/json_rpc",
-    "peer_bin": "compost-peer",
+    "peer_bin": "mycelium-peer",
     "peer_host": ""
   }
 }

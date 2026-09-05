@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/crypto"
-	"github.com/liqdmetal/compost/internal/store"
+	"github.com/liqdmetal/mycelium/internal/crypto"
+	"github.com/liqdmetal/mycelium/internal/store"
 )
 
 // Server is the sender side: holds bodies and serves fetch requests over a

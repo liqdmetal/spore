@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/liqdmetal/compost/internal/anchor"
+	"github.com/liqdmetal/mycelium/internal/anchor"
 )
 
 // Client is a wallet-RPC client.
