@@ -215,6 +215,22 @@ async function renderOnline(){
 }
 
 // ---- messaging ----
+async function renderLine(ln){
+  const el=document.createElement("div");
+  const ts=new Date(ln.ts).toLocaleTimeString();
+  el.className="msg"+(ln.private?" priv":"");
+  const room=state.rooms.get(state.active);
+  if(!ln.private){
+    el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> <span class="t">${ts}</span></div><div class="body">${esc(utf8dec(b64dec(ln.data)))}</div>`;
+  }else{
+    if(activeKey&&room&&room.keyhex){try{
+      const pt=await openAes(activeKey,ln.data);
+      el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> 🔒 <span class="t">${ts}</span></div><div class="body">${esc(pt)}</div>`;
+    }catch(e){el.innerHTML=`<div class="body unreadable">🔒 unreadable line</div>`;}}
+    else el.innerHTML=`<div class="head"><span class="t">${ts}</span></div><div class="body unreadable">🔒 private — need room key</div>`;
+  }
+  addMsg(el);
+}
 async function poll(){
   if(!state.active)return;
   const room=state.rooms.get(state.active);
@@ -223,19 +239,7 @@ async function poll(){
   catch(e){return;}
   for(const ln of lines){
     room.cursor=Math.max(room.cursor,ln.seq);
-    const el=document.createElement("div");
-    const ts=new Date(ln.ts).toLocaleTimeString();
-    el.className="msg"+(ln.private?" priv":"");
-    if(!ln.private){
-      el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> <span class="t">${ts}</span></div><div class="body">${esc(utf8dec(b64dec(ln.data)))}</div>`;
-    }else{
-      if(activeKey&&room.keyhex){try{
-        const pt=await openAes(activeKey,ln.data);
-        el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> 🔒 <span class="t">${ts}</span></div><div class="body">${esc(pt)}</div>`;
-      }catch(e){el.innerHTML=`<div class="body unreadable">🔒 unreadable line</div>`;}}
-      else el.innerHTML=`<div class="head"><span class="t">${ts}</span></div><div class="body unreadable">🔒 private — need room key</div>`;
-    }
-    addMsg(el);
+    await renderLine(ln);
   }
   // cap DOM
   const m=$("messages");while(m.children.length>MAXBACK)m.removeChild(m.firstChild);
@@ -276,7 +280,24 @@ async function join(name,{keyhex=null,switchv=false}={}){
   sysText(`joined ${name} as ${state.nick} (${r.keyhex?"private":"public"})`);
   if(r.keyhex)sysText("room is encrypted — messages here are readable only by key holders");
   localStorage.setItem("compost.nick",state.nick);
-  await poll();renderOnline();
+  // Load full history from 0 on entry so returning to a room re-shows earlier
+  // messages. pollHistory advances the cursor to the newest, so the periodic
+  // poll() then only pulls genuinely new lines.
+  r.cursor=0;
+  await pollHistory();
+  renderOnline();
+}
+// pollHistory fetches and renders lines from the room cursor up to the newest,
+// advancing cursor as it goes. Used to backfill a room on join.
+async function pollHistory(){
+  const room=state.rooms.get(state.active); if(!room)return;
+  let lines;
+  try{lines=await j("GET",`/lines?channel=${encodeURIComponent(state.active)}&after=${room.cursor}`);}catch(e){return;}
+  for(const ln of lines){
+    room.cursor=Math.max(room.cursor,ln.seq);
+    renderLine(ln);
+  }
+  const m=$("messages");while(m.children.length>MAXBACK)m.removeChild(m.firstChild);
 }
 // restore persisted rooms on load
 const saved=JSON.parse(localStorage.getItem("compost.rooms")||"{}");
