@@ -35,11 +35,11 @@ import (
 
 const (
 	mailboxPubHex = "d13c72f0f27103042e646552a9728315c240aa7f8fcde74b8611e2a52f828066" // mailbox long-term X25519 pub (encrypt body + pointer to)
-	mailboxHTTP   = "http://127.0.0.1:19292"                                             // mailbox body server
+	mailboxHTTP   = "http://127.0.0.1:19292"                                           // mailbox body server
 	rpcURL        = "http://127.0.0.1:8545"
-	senderAddr    = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"                          // anvil account 0 (unlocked, signs)
-	recipientAddr = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"                          // anvil account 1 == mailbox -from (deliver target)
-	mailboxCtr    = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"                          // MyceliumMailbox contract
+	senderAddr    = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266" // anvil account 0 (unlocked, signs)
+	recipientAddr = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" // anvil account 1 == mailbox -from (deliver target)
+	mailboxCtr    = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512" // MyceliumMailbox contract
 	ttl           = 24 * time.Hour
 )
 
