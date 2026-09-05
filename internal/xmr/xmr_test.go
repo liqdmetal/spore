@@ -67,7 +67,7 @@ func mockWalletRPC(t *testing.T, address string) *httptest.Server {
 func TestXMRNameAddressHeight(t *testing.T) {
 	srv := mockWalletRPC(t, "43TestXMRAddress")
 	defer srv.Close()
-	b := NewBackend(srv.URL)
+	b := NewBackend(srv.URL, "")
 	if b.Name() != "xmr" {
 		t.Fatalf("name=%s", b.Name())
 	}
@@ -84,7 +84,7 @@ func TestXMRNameAddressHeight(t *testing.T) {
 func TestXMRPostPayloadSmallFits(t *testing.T) {
 	srv := mockWalletRPC(t, "43TestXMRAddress")
 	defer srv.Close()
-	b := NewBackend(srv.URL)
+	b := NewBackend(srv.URL, "")
 	// A short signal (≤8 bytes) must post fine.
 	payload := chain.Payload{0x01, 0x00, 0x03, 'h', 'i', 'i'} // 6 bytes
 	res, err := b.PostPayload(context.Background(), "44Recipient", payload, 1)
@@ -99,7 +99,7 @@ func TestXMRPostPayloadSmallFits(t *testing.T) {
 func TestXMRPostPayloadTooBig(t *testing.T) {
 	srv := mockWalletRPC(t, "43TestXMRAddress")
 	defer srv.Close()
-	b := NewBackend(srv.URL)
+	b := NewBackend(srv.URL, "")
 	// A real whisper (~83 bytes) does NOT fit 8-byte payment id.
 	big := make([]byte, 9)
 	_, err := b.PostPayload(context.Background(), "44Recipient", big, 1)
@@ -114,7 +114,7 @@ func TestXMRPostPayloadTooBig(t *testing.T) {
 func TestXMRListIncoming(t *testing.T) {
 	srv := mockWalletRPC(t, "43TestXMRAddress")
 	defer srv.Close()
-	b := NewBackend(srv.URL)
+	b := NewBackend(srv.URL, "")
 	// Seed one inbound with a canonical signal payment id (kind 0x01 text).
 	// Simulate by posting a small payload first.
 	_, err := b.PostPayload(context.Background(), "43TestXMRAddress", chain.Payload{0x01, 0x00, 0x03, 'h', 'i'}, 1)

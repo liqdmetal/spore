@@ -83,7 +83,7 @@ func TestXMRShortSignalFullLoop(t *testing.T) {
 	defer srv.Close()
 
 	// Sender uses a different wallet address but posts to addr.
-	sender := NewBackend(srv.URL)
+	sender := NewBackend(srv.URL, "")
 	codec := whisper.CanonicalCodec{}
 	// A short signal that fits: canonical encoding of "hi" = 5 bytes.
 	if _, err := whisper.SendChain(context.Background(), sender, codec, addr, "hi"); err != nil {
@@ -91,7 +91,7 @@ func TestXMRShortSignalFullLoop(t *testing.T) {
 	}
 
 	// Receiver (our wallet, addr) polls and must see it decrypted as text.
-	recv := NewBackend(srv.URL)
+	recv := NewBackend(srv.URL, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	ch, _ := whisper.RecvChain(ctx, recv, codec, chain.WatchOpts{MinHeight: 0, Interval: 20 * time.Millisecond})
@@ -108,7 +108,7 @@ func TestXMRShortSignalFullLoop(t *testing.T) {
 func TestXMRLongTextRejected(t *testing.T) {
 	srv := mockWalletRPC(t, "43Receiver")
 	defer srv.Close()
-	b := NewBackend(srv.URL)
+	b := NewBackend(srv.URL, "")
 	codec := whisper.CanonicalCodec{}
 	longText := "this is a real message that is much longer than eight bytes"
 	_, err := whisper.SendChain(context.Background(), b, codec, "43Receiver", longText)

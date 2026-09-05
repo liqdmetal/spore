@@ -34,6 +34,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/icholy/digest"
+
 	"github.com/liqdmetal/mycelium/internal/chain"
 )
 
@@ -53,9 +55,14 @@ type Backend struct {
 }
 
 // NewBackend builds an XMR backend. rpcURL is the wallet RPC endpoint
-// (http://127.0.0.1:18082/json_rpc).
-func NewBackend(rpcURL string) *Backend {
-	return &Backend{rpc: rpcURL, http: &http.Client{}}
+// (http://127.0.0.1:18082/json_rpc). login is optional "user:pass" for Digest
+// auth (leave empty if the wallet RPC runs with no --rpc-login).
+func NewBackend(rpcURL, login string) *Backend {
+	rt := http.DefaultTransport
+	if u, p, ok := strings.Cut(login, ":"); ok {
+		rt = &digest.Transport{Username: u, Password: p}
+	}
+	return &Backend{rpc: rpcURL, http: &http.Client{Transport: rt}}
 }
 
 // Name implements chain.Chain.

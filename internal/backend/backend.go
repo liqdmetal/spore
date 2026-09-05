@@ -60,7 +60,7 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 		if cfg.RPC == "" {
 			return nil, fmt.Errorf("xmr backend needs -rpc (monero wallet RPC)")
 		}
-		return xmr.NewBackend(cfg.RPC), nil
+		return xmr.NewBackend(cfg.RPC, cfg.Login), nil
 	case "solana":
 		if cfg.KeyFile == "" {
 			return nil, fmt.Errorf("solana backend needs -keyfile (solana signer keypair JSON)")

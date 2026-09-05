@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/gagliardetto/solana-go v1.11.0
+	github.com/icholy/digest v1.2.0
 	golang.org/x/crypto v0.26.0
 )
 
