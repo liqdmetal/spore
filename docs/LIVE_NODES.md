@@ -15,6 +15,18 @@ already lives.
 
 ## 1. Monero node on Hetzner
 
+### STATUS: monerod RUNNING (pruned, systemd-managed) — 2026-09-05
+- Installed official Monero **v0.18.5.1** linux-x64 binaries to `/opt/monero`
+  (verified sha256 `22a7dda7...` matches getmonero.org signed list).
+- `monerod` runs as user `monero`, pruned, data `/var/lib/monero`, daemon RPC
+  `127.0.0.1:18081`, p2p `0.0.0.0:18080`, managed by `monerod.service`
+  (systemd, auto-restart + boot). Syncing (was 179K/3.75M = 4% shortly after
+  start; multi-hour to tip ~3.75M).
+- **Remaining on XMR path** (after sync reaches tip):
+  1. Create + fund a test wallet (`monero-wallet-cli`), note the seed.
+  2. Run `monero-wallet-rpc` on `127.0.0.1:18082` (behind auth / SSH tunnel).
+  3. `mycelium msg send/recv -chain xmr` live round-trip.
+
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet
 RPC** (`transfer`, `get_transfers`, `get_height`, `get_address`), which needs a
@@ -69,38 +81,36 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
 
 ## 2. EVM node / RPC target
 
-### Why a node is needed
-`internal/evm` talks JSON-RPC to any EVM-compatible chain. No chain is wired
-yet, and Obscura was scrubbed (not production-ready). Options for a real EVM
-target:
+### Reality check (why a public testnet alone isn't enough)
+`internal/evm` signs via `eth_sendTransaction` with `from` = our address.
+Public Sepolia RPCs (e.g. a hosted endpoint) are **read-only** — they can't
+sign a tx for you. Live EVM verification needs the **private key** to sign
+locally. Options:
 
-| Option | Pros | Cons | Effort |
-|---|---|---|---|
-| **Public EVM RPC** (e.g. a testnet — Sepolia/Holesky) | free, instant, faucet | backend posts 0-value txs as calldata; needs a funded account on that RPC's signer | low |
-| **Local dev node** (geth/anvil on Hetzner) | full control, no external dependency | must run + fund an account; private | med |
-| **EVM chain with a funded wallet RPC** | real usage | depends on which chain the user runs | varies |
+| Option | Signing | Effort |
+|---|---|---|
+| **Local anvil/geth dev node** on the box | anvil auto-funds + unlocks accounts | low, self-contained |
+| **Local geth with our funded key** on Sepolia | geth unlocks a key we import | med (needs a funded key + faucet) |
+| **EVM wallet-RPC the CLI reaches** | wallet holds key | depends on user's wallet |
 
-### Recommended: a public testnet via an account the user controls
-The `internal/evm` backend signs via `eth_sendTransaction` with `from` = our
-address on that chain. So live verification needs:
-1. An **EVM wallet** (MetaMask-style) with an address on the chosen chain.
-2. **A JSON-RPC endpoint** for that chain (public or local) the wallet can
-   submit to.
-3. A tiny native-token balance for gas.
+### Recommended: anvil (foundry) dev node on Hetzner
+`anvil` is a 10-second local EVM node that pre-funds test accounts and accepts
+`eth_sendTransaction` for them — no faucet, no real chain, but it exercises the
+EXACT same JSON-RPC path the backend uses. This verifies the `internal/evm`
+backend + seam for real (round-trip send/recv) without needing Sepolia funds.
 
-### Steps
+Then, to prove it against a **real** EVM chain, swap in a funded account later.
+The backend logic is identical; only the RPC endpoint + funded key change.
+
+### Steps (anvil path)
 ```
-1. Pick a chain: Sepolia (public testnet, faucet) is the simplest live target.
-2. Wallet: user provides an EVM address + a way to sign/send on it
-   (local geth account, or a wallet-RPC the CLI can reach).
-3. RPC endpoint: public https endpoint for Sepolia, or run anvil/geth locally.
-4. mycelium msg send -chain evm -rpc <endpoint> -from <0x...> \
-        -to <friend-0x...> -msg "hi"
-   mycelium msg recv -chain evm -rpc <endpoint> -from <0x...>
+1. Install foundry (anvil) on the box:  curl -L https://foundry.paradigm.xyz | bash
+2. anvil --port 8545 &   (pre-funded accounts on 127.0.0.1:8545)
+3. mycelium msg send -chain evm -rpc http://127.0.0.1:8545 \
+        -from 0x<anvil-account-0> -to 0x<account-1> -msg "hi"
+   mycelium msg recv -chain evm -rpc http://127.0.0.1:8545 -from 0x<account-0>
+4. Round-trip a message between two anvil accounts.
 ```
-The `evm` backend scans recent blocks for txs addressed `to == from`, so recv
-works on the same RPC. Verify a message round-trips between two real EVM
-addresses.
 
 ---
 
