@@ -1,5 +1,5 @@
 // Package evm implements the chain.Chain backend for any EVM-compatible chain
-// (generic EVM, Obscura, etc). It uses plain JSON-RPC (no go-ethereum import)
+// (generic EVM and EVM forks). It uses plain JSON-RPC (no go-ethereum import)
 // so the backend is light and portable.
 //
 // Design: EVM has no native per-recipient encrypted message field. m³ supplies
@@ -43,7 +43,7 @@ type Backend struct {
 }
 
 // NewBackend builds an EVM backend. rpcURL is the JSON-RPC endpoint
-// (http://host:8545 or Obscura's). chainName is "evm" / "obscura" / etc.
+// (http://host:8545). chainName is "evm" or the EVM fork's identifier.
 // fromAddr is our address (the wallet/node signs sends).
 func NewBackend(rpcURL, chainName, fromAddr string) *Backend {
 	return &Backend{rpc: rpcURL, chain: chainName, from: fromAddr, http: &http.Client{}}

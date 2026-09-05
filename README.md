@@ -7,7 +7,7 @@ mycorrhizal network through which they exchange nutrients and warn each other.
 That is the model here:
 
 - **Trees = the users / endpoints.** Each is an independent wallet + node on
-  its own chain (DERO, Obscura, Monero, EVM…). Separate canopies, self-sovereign.
+  its own chain (DERO, Monero, EVM…). Separate canopies, self-sovereign.
 - **Mycelium = the substrate running underneath.** The private, no-relay
   transport that lets any tree signal another — quietly, point-to-point, no
   relay or box in between.

@@ -1,7 +1,7 @@
 // Package dero implements the chain.Chain backend for the DERO network.
 // It wraps the low-level wallet-RPC client and maps DERO's typed CBOR
 // rpc.Arguments payload onto the chain-agnostic chain.Payload. This is the
-// seam a future Obscura/Monero/EVM backend will mirror.
+// seam a future EVM/Monero backend will mirror.
 package dero
 
 import (

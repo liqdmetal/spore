@@ -1,7 +1,7 @@
 // Package chain is the abstraction that makes mycelium multi-chain: the core
 // (whisper, rendezvous, rooms) depends only on this interface, never on a
-// specific chain's wallet-RPC. A chain backend (DERO today; Obscura, Monero,
-// EVM next) implements it.
+// specific chain's wallet-RPC. A chain backend (DERO today; EVM, Monero next)
+// implements it.
 //
 // Mycelium rides any chain that provides two primitives:
 //  1. a way to post an encrypted payload (the whisper/pointer) to a recipient,
@@ -51,7 +51,7 @@ type Incoming struct {
 
 // Chain is the per-chain backend seam.
 type Chain interface {
-	// Name returns the chain identifier ("dero", "obscura", ...).
+	// Name returns the chain identifier ("dero", "evm", ...).
 	Name() string
 	// Address returns our own address on this chain.
 	Address(ctx context.Context) (string, error)

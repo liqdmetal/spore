@@ -16,8 +16,7 @@ Adding a tree means one `chain.Chain` backend + one payload codec. The seam
 | Chain | Native encrypted-payload rail? | Backend approach | Effort |
 |---|---|---|---|
 | **DERO** | ✅ point-to-point payload | done | — |
-| **Obscura** | ✅ EVM + native encrypted calldata/events | EVM mailbox contract (works any EVM) OR Obscura-native | M |
-| **EVM (generic)** | ⚠️ calldata/events public | m³ ECDH + `MyceliumMailbox` contract; privacy from m³ crypto | M |
+| **EVM-compatible** | ⚠️ calldata/events public (no native per-rcpt msg) | m³ ECDH + `MyceliumMailbox` contract; privacy from m³ crypto (Go `internal/evm` backend built) | M |
 | **Zcash** | ⚠️ shielded payments, no free msg field | identity via shielded addr; delivery via rendezvous/relay | M–H |
 | **ARRR (Pirate)** | ⚠️ Komodo/Zcash fork | same as Zcash path | M–H |
 | **Decred** | ⚠️ tx but no per-rcpt msg | m³ ECDH over a message tx / contract | M |
@@ -35,7 +34,7 @@ contract blob). The chain is identity + a carrier; m³ is the secrecy.
 1. ✅ **m³ seam** (chain.Chain + Codec) — done.
 2. **EVM mailbox** — `MyceliumMailbox.sol` (store m³-encrypted blob per
    recipient + emit `Inbox(to, from, cid)` event) + Go `internal/evm` backend +
-   codec. Covers generic EVM *and* is the Obscura path. **Testable against any
+   codec. Covers any EVM-compatible chain. **Testable against any
    EVM RPC** — this is the concrete next build.
 3. **Relay fabric interconnection** — mycelium relay node: forward encrypted
    pointer/body across the substrate mesh (Waku/Iroh/libp2p). Relay nodes become
@@ -44,7 +43,7 @@ contract blob). The chain is identity + a carrier; m³ is the secrecy.
    encryption).
 5. **Donation addresses** — `mycelium donate`, config `{chain: addr}`, one
    address per supported tree.
-6. **Cross-chain identity proof** (DERO↔EVM/Obscura) — prove one key controls an
+6. **Cross-chain identity proof** (DERO↔EVM) — prove one key controls an
    address on both chains. Research-grade; the hard piece. Gates true
    interchain messaging (pointer from DERO tree read by EVM tree).
 7. Zcash / ARRR / Decred / Verge — each a `chain.Chain` backend after 2+3 land

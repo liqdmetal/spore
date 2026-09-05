@@ -58,7 +58,7 @@ func hexNumber(n uint64) string {
 func TestEVMHeight(t *testing.T) {
 	srv := mockNode(t)
 	defer srv.Close()
-	b := NewBackend(srv.URL, "obscura", "0xbbbb")
+	b := NewBackend(srv.URL, "evm-fork", "0xbbbb")
 	h, err := b.Height(context.Background())
 	if err != nil || h != 50 {
 		t.Fatalf("height=%d err=%v", h, err)
@@ -68,7 +68,7 @@ func TestEVMHeight(t *testing.T) {
 func TestEVMPostPayload(t *testing.T) {
 	srv := mockNode(t)
 	defer srv.Close()
-	b := NewBackend(srv.URL, "obscura", "0xbbbb")
+	b := NewBackend(srv.URL, "evm-fork", "0xbbbb")
 	payload := chain.Payload("hello evm")
 	res, err := b.PostPayload(context.Background(), "0xcccc", payload, 0)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestEVMPostPayload(t *testing.T) {
 func TestEVMListIncoming(t *testing.T) {
 	srv := mockNode(t)
 	defer srv.Close()
-	b := NewBackend(srv.URL, "obscura", "0xbbbb") // our address 0xbbbb
+	b := NewBackend(srv.URL, "evm-fork", "0xbbbb") // our address 0xbbbb
 	inc, err := b.ListIncoming(context.Background(), 40)
 	if err != nil {
 		t.Fatal(err)

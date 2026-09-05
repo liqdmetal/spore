@@ -28,9 +28,9 @@ seam). To add a chain you replace that seam. Nothing above it changes.
 | Chain | Encrypted payload | Wallet RPC | Mycelium fit |
 |---|---|---|---|
 | **DERO** | ✅ native (point-to-point, ring sig) | ✅ `--rpc-server` | **done, mainnet-verified** |
-| **Obscura** | ✅ (EVM-compatible; has txs + signing) | wallet/signer | easy port (swap signer seam) |
+| **EVM-compatible** | ⚠️ calldata/events public; m³ ECDH supplies secrecy | wallet/signer | Go `internal/evm` backend built |
 | **Monero** | ⚠️ different model | wallet RPC | real work — see §3 |
-| **XMR forks / other privacy chains** | varies | varies | same rule: needs the 2 primitives |
+| **other privacy chains** | varies | varies | same rule: needs the 2 primitives |
 
 ## 3. The Monero wrinkle (be honest)
 
@@ -61,18 +61,18 @@ node's own P2P). Mycelium slots in at the transport seam:
 ```
 mycelium app (whisper / rooms / long-body)
    -> mycelium core (ECDH crypto, rendezvous, compost, UI)   [chain-agnostic]
-      -> signer seam:  DERO | Obscura | Monero | EVM        [per-chain]
+      -> signer seam:  DERO | Monero | EVM                  [per-chain]
       -> transport seam: node P2P | substrate mesh (Waku/Iroh/libp2p)
            -> mycelium relay nodes = the shared "mycelium relay" fabric
 ```
 
 **Mycelium relay nodes as the fabric:** an always-on relay node connects
-mycelium instances across chains — a DERO user and an Obscura user both reach
+mycelium instances across chains — a DERO user and an EVM user both reach
 their local relay node, which forwards the encrypted pointer/body across the
 substrate mesh. The node relays ciphertext it cannot read (same "box holds no
 keys" property as mycelium rooms).
 
-**Interchain mycelium (DERO wallet ↔ Obscura wallet) — the honest model:**
+**Interchain mycelium (DERO wallet ↔ EVM wallet) — the honest model:**
 direct point-to-point encryption across chains is impossible (different key
 crypto). What IS possible is the **cross-chain rendezvous / relay**:
 1. Sender encrypts the body to a key the recipient can derive by proving control
@@ -85,7 +85,7 @@ crypto). What IS possible is the **cross-chain rendezvous / relay**:
 
 Because mycelium is identity = your wallet address on whatever chain you're on,
 a "mycelium node/relay" operator can advertise **one address per supported
-chain** (DERO / XMR / EVM / Obscura) as the donation rail. This is trivial to
+chain** (DERO / XMR / EVM) as the donation rail. This is trivial to
 add once the signer seam is per-chain — a config file listing
 `{chain: address}` and a `mycelium donate` command that prints the right one.
 The relay operator's cross-chain identity is just "the entity controlling these
@@ -96,13 +96,14 @@ addresses" — the same cross-chain-proof problem as §4.
 1. **Lock the signer seam** — abstract `internal/dero` behind an interface so a
    chain backend is a clean swap. (Refactor, no behavior change; test stays
    green.)
-2. **Second chain: Obscura** — EVM-compatible, lowest effort. Proves the seam.
+2. **Second chain: EVM-compatible** — the Go `internal/evm` backend (built)
+   rides any EVM RPC. Proves the seam on a second chain.
 3. **Relay fabric interconnection** — mycelium relay node (encrypted pointer
    forwarding across the substrate mesh).
 4. **Monero backend** — identity + rendezvous delivery, no reliance on native
    payload encryption.
 5. **Donation scheme** — per-chain address config + `mycelium donate`.
-6. Cross-chain identity proof (DERO↔Obscura) — the hard piece, gated on
+6. Cross-chain identity proof (DERO↔EVM) — the hard piece, gated on
    that work.
 
 ## 7. Guardrails (from how it was built)

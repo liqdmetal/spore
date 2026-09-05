@@ -116,19 +116,19 @@ func TestEVMFullLoop(t *testing.T) {
 	defer srv.Close()
 
 	// sender posts a whisper TO ourAddr
-	sender := NewBackend(srv.URL, "obscura", "0xSender")
+	sender := NewBackend(srv.URL, "evm-fork", "0xSender")
 	codec := whisper.CanonicalCodec{}
-	if _, err := whisper.SendChain(context.Background(), sender, codec, ourAddr, "hi from obscura"); err != nil {
+	if _, err := whisper.SendChain(context.Background(), sender, codec, ourAddr, "hi from evm"); err != nil {
 		t.Fatal(err)
 	}
 
 	// receiver (us) scans
-	recv := NewBackend(srv.URL, "obscura", ourAddr)
+	recv := NewBackend(srv.URL, "evm-fork", ourAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ch, _ := whisper.RecvChain(ctx, recv, codec, chain.WatchOpts{MinHeight: 0, Interval: 30 * time.Millisecond})
 	for m := range ch {
-		if m.Text == "hi from obscura" {
+		if m.Text == "hi from evm" {
 			return // PASS
 		}
 	}
