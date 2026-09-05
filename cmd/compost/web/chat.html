@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compost · channel chat</title>
+<style>
+  :root{
+    --bg:#0c0f14; --panel:#151a22; --panel2:#1c2330; --line:#2a3342;
+    --fg:#e6e9ef; --muted:#8b95a5; --accent:#5eead4; --accent2:#38bdf8;
+    --danger:#f87171; --ok:#4ade80; --pub:#22c55e; --priv:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.45 ui-monospace,'SF Mono',Menlo,Consolas,monospace;height:100vh;display:flex}
+  /* left rail */
+  #rail{width:220px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;flex:0 0 auto}
+  .rail-brand{padding:14px;font-weight:700;letter-spacing:.5px;font-size:13px;
+    color:var(--accent);border-bottom:1px solid var(--line)}
+  .rail-section{padding:8px 10px 2px;font-size:11px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1px}
+  .room{display:flex;align-items:center;gap:6px;padding:7px 12px;cursor:pointer;
+    border-left:2px solid transparent}
+  .room:hover{background:var(--panel2)}
+  .room.active{background:var(--panel2);border-left-color:var(--accent)}
+  .room .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .room .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .room .cnt{margin-left:auto;color:var(--muted);font-size:11px}
+  #newroom{margin:6px 10px;background:transparent;border:1px dashed var(--line);color:var(--muted);
+    padding:6px;border-radius:6px;cursor:pointer;font:inherit}
+  #newroom:hover{color:var(--accent);border-color:var(--accent)}
+  /* main */
+  #main{flex:1;display:flex;flex-direction:column;min-width:0}
+  #topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);
+    background:var(--panel)}
+  #topbar .ch{font-weight:700;font-size:15px}
+  #topbar .vis{font-size:11px;padding:2px 8px;border-radius:10px}
+  .vis.pub{background:#12351a;color:var(--pub)}
+  .vis.priv{background:#2a1f4a;color:var(--priv)}
+  #online{color:var(--muted);font-size:12px}
+  #online .u{color:var(--ok)}
+  #messages{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:6px}
+  .msg{max-width:78%}
+  .msg .head{font-size:11px;color:var(--muted)}
+  .msg .head .nick{color:var(--accent2);font-weight:600}
+  .msg .head .t{opacity:.7}
+  .msg .body{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:7px 10px;margin-top:2px;white-space:pre-wrap;word-break:break-word}
+  .msg.priv .body{border-color:#4a3b7a;background:#1e1833}
+  .msg .body.unreadable{color:var(--muted);font-style:italic;background:var(--panel2)}
+  .sys{color:var(--muted);font-size:12px;text-align:center;opacity:.8}
+  /* input */
+  #compose{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
+  #compose input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+    padding:10px 12px;border-radius:8px;font:inherit}
+  #compose input:focus{outline:none;border-color:var(--accent)}
+  #compose button{background:var(--accent);color:#04121a;border:none;border-radius:8px;padding:0 18px;
+    font:600 14px inherit;cursor:pointer}
+  #compose button:hover{filter:brightness(1.1)}
+  /* modal */
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:10}
+  #modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;width:380px;max-width:92vw}
+  #modal h3{margin:0 0 12px;color:var(--fg)}
+  #modal label{display:block;margin:8px 0 4px;color:var(--muted);font-size:12px}
+  #modal input,#modal select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+    padding:8px;border-radius:6px;font:inherit;margin-bottom:6px}
+  #modal .row{display:flex;justify-content:space-between;gap:8px}
+  #modal .row button{flex:1}
+  #modal .buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  #modal .btn{border:none;border-radius:6px;padding:8px 14px;cursor:pointer;font:600 13px inherit}
+  .btn.primary{background:var(--accent);color:#04121a}
+  .btn.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+  #keyout{width:100%;word-break:break-all;background:var(--panel2);border:1px solid var(--line);
+    padding:8px;border-radius:6px;font-size:11px;color:var(--accent);user-select:all}
+  .err{color:var(--danger);font-size:12px;margin-top:6px}
+  .hint{color:var(--muted);font-size:12px}
+  ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+</style>
+</head>
+<body>
+<div id="rail">
+  <div class="rail-brand">⟁ compost</div>
+  <div class="rail-section">Rooms</div>
+  <div id="rooms"></div>
+  <button id="newroom">+ new room</button>
+</div>
+<div id="main">
+  <div id="topbar">
+    <span class="ch" id="chName">—</span>
+    <span class="vis" id="chVis">public</span>
+    <span id="online">● <span class="u" id="onlineList">connecting…</span></span>
+  </div>
+  <div id="messages"></div>
+  <div id="compose">
+    <input id="msg" placeholder="Type a message… (Enter to send)" autocomplete="off">
+    <button id="sendbtn">Send</button>
+  </div>
+</div>
+
+<div id="modal"><div class="box">
+  <h3 id="mTitle">New room</h3>
+  <div class="row">
+    <select id="vis"><option value="public">Public</option><option value="private">Private</option></select>
+    <button class="btn ghost" id="genKey" style="flex:0 0 auto">gen key</button>
+  </div>
+  <label>Room name</label><input id="mRoom" placeholder="#friends">
+  <label id="keyLabel">Room key (hex) — members need this</label><input id="mKey" placeholder="(blank public / leave empty)">
+  <div class="buttons"><button class="btn ghost" id="mCancel">cancel</button><button class="btn primary" id="mGo">join</button></div>
+  <div class="err" id="mErr"></div>
+  <div class="hint">Private rooms encrypt every line. Give the key to friends out-of-band; anyone without it sees only ciphertext.</div>
+</div></div>
+
+<script>
+// ---- config ----
+// The box base URL. When this page is served BY the box (compost web) it's
+// same-origin ""; override here for a remote box.
+const BOX = window.location.origin || "";
+const THEME_COLORS = {"#relay":"#38bdf8","#degen":"#f472b6","#build":"#4ade80","#team":"#a78bfa"};
+const MAXBACK = 200;            // lines of history a fresh viewer loads
+const POLL = 2000;              // ms
+
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const state = {
+  nick: localStorage.getItem("compost.nick")||"anon"+Math.floor(Math.random()*900+100),
+  rooms: new Map(),     // name -> {keyhex|null, cursor}
+  active: null,
+};
+let activeKey = null;   // KeyCrypto key object for active private room
+
+// ---- tiny crypto + base64 ----
+// The box stores the line `data` as Go []byte, so it is BASE64 on the wire.
+// Public lines carry base64(utf8(text)); private lines carry base64(iv||ct)
+// under AES-GCM with a 12-byte random iv.
+function b64enc(bytes){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s);}
+function b64dec(s){const t=atob(s);const a=new Uint8Array(t.length);for(let i=0;i<t.length;i++)a[i]=t.charCodeAt(i);return a;}
+function utf8enc(t){return new TextEncoder().encode(t);}
+function utf8dec(b){return new TextDecoder().decode(b);}
+
+async function getKey(hex){const raw=hexToBytes(hex);return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);}
+function hexToBytes(h){const b=new Uint8Array(h.length/2);for(let i=0;i<b.length;i++)b[i]=parseInt(h.substr(i*2,2),16);return b;}
+function bytesToHex(b){return Array.from(b).map(x=>x.toString(16).padStart(2,"0")).join("");}
+function rnd(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return a;}
+async function sealAes(key,text){const iv=rnd(12);const ct=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},key,utf8enc(text)));const out=new Uint8Array(12+ct.length);out.set(iv,0);out.set(ct,12);return b64enc(out);}
+async function openAes(key,blob){const b=b64dec(blob);const iv=b.slice(0,12);const ct=b.slice(12);const d=await crypto.subtle.decrypt({name:"AES-GCM",iv},key,ct);return utf8dec(new Uint8Array(d));}
+function genKeyHex(){return bytesToHex(rnd(32));}
+
+// ---- HTTP ----
+async function j(method,path,body){
+  const o={method,headers:{"Content-Type":"application/json"}};
+  if(body)o.body=JSON.stringify(body);
+  const r=await fetch(BOX+path,o);
+  if(!r.ok)throw new Error((await r.text()).slice(0,120)||r.status);
+  const t=await r.text();return t?JSON.parse(t):null;
+}
+
+// ---- render ----
+function addMsg(el){$("messages").appendChild(el);$("messages").scrollTop=$("messages").scrollHeight;}
+function sysText(t){const d=document.createElement("div");d.className="sys";d.textContent=t;addMsg(d);}
+function nickColor(n){let h=0;for(const c of n)h=(h*31+c.charCodeAt(0))>>>0;return`hsl(${h%360} 70% 70%)`;}
+function renderRoomList(){
+  const c=$("rooms");c.innerHTML="";
+  for(const [name,r] of state.rooms){
+    const d=document.createElement("div");d.className="room"+(name===state.active?" active":"");d.dataset.name=name;
+    const pub=!r.keyhex;
+    d.innerHTML=`<span class="dot" style="background:${pub?'var(--pub)':'var(--priv)'}"></span>
+      <span class="name">${esc(name)}</span><span class="cnt">${pub?'pub':'🔒'}</span>`;
+    d.onclick=()=>join(name,{keyhex:r.keyhex,switchv:true});
+    c.appendChild(d);
+  }
+}
+async function renderOnline(){
+  if(!state.active)return;
+  try{const list=await j("GET",`/online?channel=${encodeURIComponent(state.active)}`);
+    $("onlineList").textContent=list.length?list.join(", "):"just you";
+  }catch(e){$("onlineList").textContent="?";}
+}
+
+// ---- messaging ----
+async function poll(){
+  if(!state.active)return;
+  const room=state.rooms.get(state.active);
+  let lines;
+  try{lines=await j("GET",`/lines?channel=${encodeURIComponent(state.active)}&after=${room.cursor}`);}
+  catch(e){return;}
+  for(const ln of lines){
+    room.cursor=Math.max(room.cursor,ln.seq);
+    const el=document.createElement("div");
+    const ts=new Date(ln.ts).toLocaleTimeString();
+    el.className="msg"+(ln.private?" priv":"");
+    if(!ln.private){
+      el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> <span class="t">${ts}</span></div><div class="body">${esc(utf8dec(b64dec(ln.data)))}</div>`;
+    }else{
+      if(activeKey&&room.keyhex){try{
+        const pt=await openAes(activeKey,ln.data);
+        el.innerHTML=`<div class="head"><span class="nick" style="color:${nickColor(ln.sender)}">${esc(ln.sender)}</span> 🔒 <span class="t">${ts}</span></div><div class="body">${esc(pt)}</div>`;
+      }catch(e){el.innerHTML=`<div class="body unreadable">🔒 unreadable line</div>`;}}
+      else el.innerHTML=`<div class="head"><span class="t">${ts}</span></div><div class="body unreadable">🔒 private — need room key</div>`;
+    }
+    addMsg(el);
+  }
+  // cap DOM
+  const m=$("messages");while(m.children.length>MAXBACK)m.removeChild(m.firstChild);
+}
+
+async function send(){
+  const t=$("msg").value.trim();if(!t||!state.active)return;
+  const room=state.rooms.get(state.active);$("msg").value="";
+  let body,isPriv=false;
+  if(room.keyhex&&activeKey){try{isPriv=true;body=await sealAes(activeKey,t);}catch(e){return;}}
+  else body=b64enc(utf8enc(t));
+  try{await j("POST","/line",{channel:state.active,sender:state.nick,private:isPriv,data:body});}
+  catch(e){addMsgErr("send failed: "+e.message);}
+  poll();
+}
+function addMsgErr(t){const d=document.createElement("div");d.className="sys";d.style.color="var(--danger)";d.textContent=t;addMsg(d);}
+
+// heartbeat + poll
+setInterval(renderOnline,POLL*3);
+setInterval(poll,POLL);
+async function hb(){if(state.active){try{await j("POST","/presence",{channel:state.active,addr:state.nick});}catch(e){}}}
+setInterval(hb,15000);
+hb();
+window.addEventListener("beforeunload",()=>{try{navigator.sendBeacon(BOX+"/presence?channel="+encodeURIComponent(state.active||""),JSON.stringify({addr:state.nick}))}catch(e){}});
+
+// ---- join / UI ----
+async function join(name,{keyhex=null,switchv=false}={}){
+  name=(name.startsWith("#")?name:"#"+name).toLowerCase();
+  if(!state.rooms.has(name))state.rooms.set(name,{keyhex,cursor:0});
+  state.active=name;
+  const r=state.rooms.get(name);
+  activeKey=r.keyhex?await getKey(r.keyhex):null;
+  $("chName").textContent=name;
+  $("chVis").textContent=r.keyhex?"private":"public";
+  $("chVis").className="vis "+(r.keyhex?"priv":"pub");
+  renderRoomList();
+  $("messages").innerHTML="";
+  sysText(`joined ${name} as ${state.nick} (${r.keyhex?"private":"public"})`);
+  if(r.keyhex)sysText("room is encrypted — messages here are readable only by key holders");
+  localStorage.setItem("compost.nick",state.nick);
+  await poll();renderOnline();
+}
+// restore persisted rooms on load
+const saved=JSON.parse(localStorage.getItem("compost.rooms")||"{}");
+for(const k in saved)state.rooms.set(k,{keyhex:saved[k],cursor:0});
+if(state.rooms.size===0)join("#relay");
+else{const first=[...state.rooms.keys()][0];join(first);}
+
+// modal
+$("newroom").onclick=()=>{openModal("New room",null);};
+$("mCancel").onclick=()=>$("modal").style.display="none";
+$("genKey").onclick=()=>{$("mKey").value=genKeyHex();};
+function openModal(title,name){
+  $("mTitle").textContent=title;if(name!==null)$("mRoom").value=name;
+  $("mErr").textContent="";$("modal").style.display="flex";
+}
+$("mGo").onclick=async()=>{
+  const name=$("mRoom").value.trim(),vis=$("vis").value,key=$("mKey").value.trim();
+  $("mErr").textContent="";
+  if(!name){$("mErr").textContent="enter a room name";return;}
+  const keyhex=(vis==="private")?(key||genKeyHex()):null;
+  if(vis==="private"&&!key){$("mKey").value=keyhex;/* show the generated key */}
+  saveRooms();$("modal").style.display="none";
+  await join(name,{keyhex});
+};
+function saveRooms(){const o={};for(const[n,r]of state.rooms)o[n]=r.keyhex||"";localStorage.setItem("compost.rooms",JSON.stringify(o));}
+
+// actions
+$("sendbtn").onclick=send;
+$("msg").addEventListener("keydown",e=>{if(e.key==="Enter")send();});
+// nick edit: double-click brand
+$("rail").querySelector(".rail-brand").onclick=()=>{const n=prompt("nickname:",state.nick);if(n){state.nick=n;localStorage.setItem("compost.nick",n);renderOnline();}};
+</script>
+</body>
+</html>
