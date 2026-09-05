@@ -73,6 +73,8 @@ func mailboxUsage() {
              [-rpc URL] [-rpc-login u:p] [-from ADDR] [-keyfile SOL] [-program PID]
              [-peer-addr host:port] [-peer-bin B] [-interval 3s] [-reap 30s]
              [-min-height N]          (serve + scan + decrypt long bodies, always-on)
+             [-cert CERT] [-key KEY]  (serve HTTPS when both set)
+             [-token SECRET]          (require Authorization: Bearer SECRET on every route)
   mycelium mailbox list -dir DIR      (show decrypted messages)
   mycelium mailbox get -dir DIR <cid-or-txid>   (print one decrypted message)`)
 }
@@ -103,6 +105,9 @@ func mailboxRun(args []string) {
 	peerAddr := fs.String("peer-addr", "", "reachable sender peer (host:port) to pull bodies not pushed here")
 	peerBin := fs.String("peer-bin", "compost-peer", "path to the compost-peer binary")
 	privacy := fs.Bool("privacy", false, "hosted/privacy mode: don't record the sender in the message log")
+	cert := fs.String("cert", "", "TLS cert PEM path (serve HTTPS when set with -key)")
+	key := fs.String("key", "", "TLS key PEM path (serve HTTPS when set with -cert)")
+	token := fs.String("token", "", "shared secret; require `Authorization: Bearer <token>` on every HTTP route")
 	addChainFlags(fs)
 	_ = fs.Parse(args)
 
@@ -126,10 +131,26 @@ func mailboxRun(args []string) {
 
 	// HTTP surface: senders HTTP-push bodies to /put/<cid>; list/get read the
 	// mailbox while it runs; /body/<cid> serves stored bodies for peer pull.
-	hsrv := &http.Server{Addr: *listen, Handler: m.Handler()}
+	// When a shared -token is set the surface is gated behind it so a hosted
+	// mailbox isn't open to the internet; when -cert/-key are both set the
+	// surface is served over HTTPS (else plain HTTP, backward compatible).
+	var handler http.Handler = m.Handler()
+	if *token != "" {
+		handler = m.HandlerToken(*token)
+		log.Printf("mailbox: HTTP auth enabled — every route requires `Authorization: Bearer <token>`")
+	}
+	hsrv := &http.Server{Addr: *listen, Handler: handler}
+	serve := hsrv.ListenAndServe
+	scheme := "http"
+	if *cert != "" && *key != "" {
+		serve = func() error { return hsrv.ListenAndServeTLS(*cert, *key) }
+		scheme = "https"
+	} else if (*cert == "") != (*key == "") {
+		log.Fatalf("mailbox run: -cert and -key must both be set to serve TLS (got cert=%q key=%q)", *cert, *key)
+	}
 	go func() {
-		log.Printf("mailbox: serving on %s (dir %s)", *listen, *dir)
-		if err := hsrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("mailbox: serving on %s://%s (dir %s)", scheme, *listen, *dir)
+		if err := serve(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()
@@ -150,7 +171,7 @@ func mailboxRun(args []string) {
 	}()
 
 	log.Printf("mailbox: pubkey %s", hex.EncodeToString(m.PublicKey()))
-	log.Printf("mailbox: senders encrypt bodies to that pub; push the body to http://<this-host>%s/put/<cid>", *listen)
+	log.Printf("mailbox: senders encrypt bodies to that pub; push the body to %s://<this-host>%s/put/<cid>", scheme, *listen)
 	log.Printf("mailbox: scanning %s for pointer-whispers", c.Name())
 
 	// Fetch: the mailbox's own store first (HTTP-pushed bodies); fall back to

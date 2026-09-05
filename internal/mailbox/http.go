@@ -1,6 +1,7 @@
 package mailbox
 
 import (
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -12,6 +13,9 @@ import (
 	"github.com/liqdmetal/mycelium/internal/crypto"
 	"github.com/liqdmetal/mycelium/internal/store"
 )
+
+// bearerScheme is the Authorization scheme accepted by an auth-gated mailbox.
+const bearerScheme = "Bearer "
 
 // maxBodyBytes caps a /put body. Bodies are content-addressed ciphertext
 // (XChaCha20 output); a realistic envelope is a few KB. 64 MiB is generous
@@ -31,7 +35,24 @@ var maxBodyBytes = 64 << 20
 //	GET    /list              JSON array of decrypted messages (newest first)
 //	GET    /get/{cid-or-txid} JSON single message | 404
 func (m *Mailbox) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return m.handler("")
+}
+
+// HandlerToken returns the same HTTP surface, but gated behind a shared-secret
+// Bearer token. Every request must carry `Authorization: Bearer <token>` (or it
+// is refused with 401 before dispatch), so a hosted mailbox a phone reaches
+// over the internet is only readable/writable by parties that hold the secret.
+// The token is compared in constant time (crypto/subtle) to blunt timing
+// attacks. An empty token means "no auth" (open) — Handler() is that case.
+func (m *Mailbox) HandlerToken(secret string) http.Handler {
+	return m.handler(secret)
+}
+
+// handler is the routing mux behind Handler/HandlerToken. When secret is
+// non-empty the mux is wrapped in an auth middleware enforcing the Bearer token
+// on every route (/put, /body, /list, /get). Empty secret = open handler.
+func (m *Mailbox) handler(secret string) http.Handler {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
 		case strings.HasPrefix(path, "/put/"):
@@ -53,6 +74,19 @@ func (m *Mailbox) Handler() http.Handler {
 		default:
 			http.NotFound(w, r)
 		}
+	})
+	if secret == "" {
+		return inner
+	}
+	want := []byte(secret)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, bearerScheme) ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, bearerScheme)), want) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.ServeHTTP(w, r)
 	})
 }
 

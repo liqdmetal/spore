@@ -324,6 +324,77 @@ func TestHTTPRoutesRejectTraversalAndBadCID(t *testing.T) {
 	}
 }
 
+// TestHTTPTokenAuth: when a shared token is configured via HandlerToken, every
+// route requires `Authorization: Bearer <token>`. A request without the header,
+// or with the wrong token, is refused 401; the correct token succeeds. The open
+// Handler (no token) stays open for backward compatibility.
+func TestHTTPTokenAuth(t *testing.T) {
+	m := openMailbox(t)
+	const secret = "hunter2-mailbox-secret"
+	secured := httptest.NewServer(m.HandlerToken(secret))
+	defer secured.Close()
+
+	authed := func() *http.Request {
+		req, err := http.NewRequest(http.MethodGet, secured.URL+"/list", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+secret)
+		return req
+	}
+
+	// No Authorization header -> 401.
+	req, _ := http.NewRequest(http.MethodGet, secured.URL+"/list", nil)
+	if code := do(t, secured.Client(), req); code != http.StatusUnauthorized {
+		t.Fatalf("no header status = %d, want 401", code)
+	}
+
+	// Wrong token -> 401.
+	req, _ = http.NewRequest(http.MethodGet, secured.URL+"/list", nil)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	if code := do(t, secured.Client(), req); code != http.StatusUnauthorized {
+		t.Fatalf("wrong token status = %d, want 401", code)
+	}
+
+	// Malformed scheme (no "Bearer " prefix) -> 401.
+	req, _ = http.NewRequest(http.MethodGet, secured.URL+"/list", nil)
+	req.Header.Set("Authorization", secret)
+	if code := do(t, secured.Client(), req); code != http.StatusUnauthorized {
+		t.Fatalf("bare-token status = %d, want 401", code)
+	}
+
+	// Correct token -> 200 (the underlying /list succeeds on an empty mailbox).
+	if code := do(t, secured.Client(), authed()); code != http.StatusOK {
+		t.Fatalf("correct token status = %d, want 200", code)
+	}
+
+	// Auth is enforced on write routes too, not just reads.
+	req, _ = http.NewRequest(http.MethodPut, secured.URL+"/put/0000000000000000000000000000000000000000000000000000000000000000", nil)
+	if code := do(t, secured.Client(), req); code != http.StatusUnauthorized {
+		t.Fatalf("unauthed PUT status = %d, want 401", code)
+	}
+
+	// The open Handler with no token still serves /list unauthenticated.
+	open := httptest.NewServer(m.Handler())
+	defer open.Close()
+	req, _ = http.NewRequest(http.MethodGet, open.URL+"/list", nil)
+	if code := do(t, open.Client(), req); code != http.StatusOK {
+		t.Fatalf("open handler status = %d, want 200", code)
+	}
+}
+
+// do runs a request and returns the response status code.
+func do(t *testing.T, client *http.Client, req *http.Request) int {
+	t.Helper()
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	return res.StatusCode
+}
+
 // TestHTTPRoutesDontPanic: fuzz a handful of hostile raw paths through the real
 // handler; each must return a response with no panic (no 500 from an internal
 // error is also asserted where reasonable).
