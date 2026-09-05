@@ -84,6 +84,8 @@ func main() {
 		msgcmd(os.Args[2:])
 	case "mailbox":
 		mailboxcmd(os.Args[2:])
+	case "relay":
+		relaycmd(os.Args[2:])
 	case "status":
 		statuscmd(os.Args[2:])
 	default:
@@ -116,7 +118,10 @@ func usage() {
   mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)
   mycelium mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR] [-peer-addr H:P] [-rpc URL] [-from ADDR] [-keyfile SOL] [-program PID]   (always-on long-body serve+scan+decrypt)
   mycelium mailbox list -dir DIR                   (show decrypted messages)
-  mycelium mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)`)
+  mycelium mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)
+  mycelium relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
+             (store-and-forward hop for opaque bodies: push via X-Relay-Dest, forward to the mailbox)
+  mycelium relay -h, --help                         (relay help)`)
 }
 
 func check(err error) {
