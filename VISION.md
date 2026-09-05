@@ -38,19 +38,24 @@ Monero's tx payloads are NOT a general message field like DERO's. Monero has:
 - `tx_extra` — free-form bytes, but **not encrypted to a recipient key** the way
   DERO encrypts payload-0.
 - Payment IDs / integrated addresses — for identifying payments, not messaging.
+  Modern Monero (≥0.18) only allows **8-byte** payment IDs.
 
 So a "whisper on Monero" can't ride native per-recipient payload encryption the
-way it does on DERO. Options, honest:
-- **Off-chain mycelium on top of Monero identity**: use Monero wallet keys for
-  auth/identity but carry the encrypted body over the P2P/rendezvous layer
-  (which is chain-agnostic anyway). The whisper/pointer can ride a Monero
-  transaction's `tx_extra` as opaque bytes; privacy of the *content* then comes
-  from mycelium's own ECDH, not Monero's tx model.
-- **Off-chain substrate** (Waku/Iroh/libp2p) as the actual carrier, with Monero
-  as identity/settlement.
+way it does on DERO. The honest model (matching `internal/xmr`, built):
 
-Real talk: Monero gives mycelium an identity + a payment rail but NOT a free
-encrypted-message channel. The rendezvous layer does the private delivery.
+- **XMR tx = a knock, not content.** The backend posts a dust transfer whose
+  8-byte payment id carries a short mycelium signal (a reference/knock), never
+  the full whisper or pointer (which don't fit 8 bytes).
+- **Content rides off-chain rendezvous** (chain-agnostic, already in the core),
+  keyed by that signal — the actual private body never sits on-chain.
+- **Monero gives m³ identity + a payment rail**, not an encrypted-message
+  channel. The rendezvous layer does the private delivery.
+
+`internal/xmr` implements `chain.Chain` over the Monero wallet RPC
+(`transfer` with payment id, `get_transfers`, `get_address`, `get_height`) and
+is **mock-verified** (seam + payment-id→signal flow tested with a fake wallet
+RPC). It needs **live verification against a real `monero-wallet-rpc`** — e.g.
+the Hetzner node running an XMR node — before it's trusted the way DERO is.
 
 ## 4. The interconnection model — the mycelium relay fabric
 

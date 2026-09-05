@@ -21,7 +21,7 @@ Adding a tree means one `chain.Chain` backend + one payload codec. The seam
 | **ARRR (Pirate)** | ⚠️ Komodo/Zcash fork | same as Zcash path | M–H |
 | **Decred** | ⚠️ tx but no per-rcpt msg | m³ ECDH over a message tx / contract | M |
 | **Verge** | ⚠️ | m³ ECDH over tx payload | M |
-| **Monero** | ⚠️ tx_extra opaque, not rcpt-encrypted | identity + rendezvous delivery; m³ ECDH | M–H |
+| **Monero** | ⚠️ no per-rcpt msg; only 8-byte payment id | identity + signal rail; content off-chain rendezvous (Go `internal/xmr` backend built, mock-verified; needs live wallet-rpc to confirm) | M–H |
 | **Zama (FHE)** | ⚠️ NOT a message chain | FHE = compute-on-encrypted, different layer — likely out of transport scope | design |
 
 **Rule:** where the chain has no native per-recipient encrypted message field,
@@ -39,8 +39,9 @@ contract blob). The chain is identity + a carrier; m³ is the secrecy.
 3. **Relay fabric interconnection** — mycelium relay node: forward encrypted
    pointer/body across the substrate mesh (Waku/Iroh/libp2p). Relay nodes become
    the underground trunk between chains.
-4. **Monero** — identity + rendezvous delivery (no reliance on native payload
-   encryption).
+4. **Monero** — identity + signal rail; 8-byte payment-id knock, content off-chain
+   rendezvous (no reliance on native payload encryption). Go `internal/xmr`
+   backend built + mock-verified; confirm against a live `monero-wallet-rpc`.
 5. **Donation addresses** — `mycelium donate`, config `{chain: addr}`, one
    address per supported tree.
 6. **Cross-chain identity proof** (DERO↔EVM) — prove one key controls an

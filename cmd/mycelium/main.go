@@ -34,6 +34,7 @@ import (
 	"github.com/liqdmetal/mycelium/internal/channel"
 	derodaemon "github.com/liqdmetal/mycelium/internal/daemon"
 	"github.com/liqdmetal/mycelium/internal/dero"
+	"github.com/liqdmetal/mycelium/internal/donate"
 	"github.com/liqdmetal/mycelium/internal/longmsg"
 	"github.com/liqdmetal/mycelium/internal/peer"
 	"github.com/liqdmetal/mycelium/internal/session"
@@ -66,6 +67,8 @@ func main() {
 		webchat(os.Args[2:])
 	case "whisper":
 		whispercmd(os.Args[2:])
+	case "donate":
+		donatecmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -74,18 +77,19 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  compost demo
-  compost keygen
-  compost daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
-  compost send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
-  compost channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
-  compost chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
+  mycelium demo
+  mycelium keygen
+  mycelium daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
+  mycelium send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
+  mycelium channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
+  mycelium chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
-  compost web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
-  compost whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
-  compost whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
-  compost whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
-  compost whisper keygen [-key KFILE]`)
+  mycelium web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
+  mycelium whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
+  mycelium whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
+  mycelium whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
+  mycelium whisper keygen [-key KFILE]
+  mycelium donate [chain] | --all                          (per-chain donation rail)`)
 }
 
 func check(err error) {
@@ -719,4 +723,47 @@ func demo() {
 	}
 
 	fmt.Println("OK: body evicted, key erased, anchor inert.")
+}
+
+// defaultDonateRegistry builds the operator's per-chain donation addresses.
+// Replace with real addresses before publishing; these are the user's known
+// rails.
+func defaultDonateRegistry() *donate.Registry {
+	r := donate.New()
+	r.Register(donate.Entry{
+		Chain:   "dero",
+		Address: "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", // mycelium dev (DERO)
+		Note:    "DERO mainnet",
+	})
+	r.Register(donate.Entry{
+		Chain:   "xmr",
+		Address: "", // TODO: fill once the Hetzner XMR node / wallet is up
+		Note:    "Monero — fill after live monero-wallet-rpc",
+	})
+	r.Register(donate.Entry{
+		Chain:   "evm",
+		Address: "", // TODO: fill with the operator's EVM/EOA address
+		Note:    "EVM-compatible chains",
+	})
+	return r
+}
+
+func donatecmd(args []string) {
+	reg := defaultDonateRegistry()
+	if len(args) == 0 || args[0] == "--all" || args[0] == "-a" {
+		fmt.Print(reg.Render())
+		return
+	}
+	chainArg := args[0]
+	if chainArg == "-h" || chainArg == "--help" {
+		fmt.Println("usage: mycelium donate [chain]")
+		fmt.Println("       mycelium donate --all")
+		return
+	}
+	e, ok := reg.Get(chainArg)
+	if !ok {
+		fmt.Printf("no donation address registered for %q. registered: %v\n", chainArg, reg.Chains())
+		os.Exit(1)
+	}
+	fmt.Println(e.Address)
 }
