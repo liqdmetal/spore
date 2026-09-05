@@ -84,6 +84,8 @@ func main() {
 		msgcmd(os.Args[2:])
 	case "mailbox":
 		mailboxcmd(os.Args[2:])
+	case "status":
+		statuscmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -107,6 +109,7 @@ func usage() {
   mycelium donate [chain] | --all                          (per-chain donation rail)
   mycelium msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
   mycelium msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
+  mycelium status [-chain ...] [-mailbox-http URL]      (connection health HUD)
   mycelium msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
   mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
   mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
