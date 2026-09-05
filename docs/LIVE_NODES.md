@@ -79,6 +79,16 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
 
 ---
 
+### STATUS: EVM backend LIVE-VERIFIED — 2026-09-05
+- anvil 1.8.1 (foundry) running on Hetzner `127.0.0.1:8545` (`/var/log/anvil.log`).
+- `mycelium msg send -chain evm` → txid `0x69f8...9fa` mined in anvil block 1,
+  calldata `0x01001068692066726f...` (canonical kind 0x01 text "hi from evm live").
+- `mycelium msg recv -chain evm` on recipient account decoded it:
+  `msg 0x69f8048e4b15be…: hi from evm live`.
+- **internal/evm is now LIVE-VERIFIED** (no longer mock-only). To prove it
+  against a real chain later, point at a funded account on a real EVM RPC —
+  backend logic is identical.
+
 ## 2. EVM node / RPC target
 
 ### Reality check (why a public testnet alone isn't enough)
