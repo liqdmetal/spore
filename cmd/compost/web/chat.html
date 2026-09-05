@@ -75,6 +75,15 @@
     padding:8px;border-radius:6px;font-size:11px;color:var(--accent);user-select:all}
   .err{color:var(--danger);font-size:12px;margin-top:6px}
   .hint{color:var(--muted);font-size:12px}
+  #whisperPane{padding:6px 10px}
+  #whisperPane input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+    padding:6px 8px;border-radius:6px;font:inherit;margin-bottom:5px;font-size:12px}
+  #wSend{width:100%;background:var(--accent2);color:#04121a;border:none;border-radius:6px;padding:7px;
+    font:600 13px inherit;cursor:pointer;margin-bottom:4px}
+  .inbox{max-height:200px;overflow-y:auto;font-size:11px;color:var(--muted)}
+  .inbox .wline{border-bottom:1px solid var(--line);padding:4px 2px}
+  .inbox .wsender{color:var(--accent2)}
+  .inbox .wtext{color:var(--fg);word-break:break-word}
   ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 </style>
 </head>
@@ -84,6 +93,14 @@
   <div class="rail-section">Rooms</div>
   <div id="rooms"></div>
   <button id="newroom">+ new room</button>
+  <div class="rail-section">Whisper (1:1, no relay)</div>
+  <div id="whisperPane">
+    <input id="wTo" placeholder="recipient dero addr">
+    <input id="wMsg" placeholder="short msg (~90 chars)" maxlength="90">
+    <button id="wSend">whisper →</button>
+    <div class="rail-section">Inbox</div>
+    <div id="wInbox" class="inbox"></div>
+  </div>
 </div>
 <div id="main">
   <div id="topbar">
@@ -272,6 +289,35 @@ $("sendbtn").onclick=send;
 $("msg").addEventListener("keydown",e=>{if(e.key==="Enter")send();});
 // nick edit: double-click brand
 $("rail").querySelector(".rail-brand").onclick=()=>{const n=prompt("nickname:",state.nick);if(n){state.nick=n;localStorage.setItem("compost.nick",n);renderOnline();}};
+
+// ---- whisper lane (1:1 no-relay, proxied through wallet) ----
+const wseen = new Set();
+async function whisperSend(){
+  const to=$("wTo").value.trim(), msg=$("wMsg").value.trim();
+  if(!to||!msg){alert("recipient + message");return;}
+  $("wMsg").value="";
+  try{
+    await j("POST","/whisper/send",{to,msg});
+    sysText(`whisper sent to ${to.slice(0,12)}…`);
+  }catch(e){alert("whisper send failed: "+e.message);}
+}
+async function whisperRecv(){
+  try{
+    const msgs=await j("GET","/whisper/recv");
+    for(const m of msgs){
+      if(wseen.has(m.txid))continue;
+      wseen.add(m.txid);
+      const d=document.createElement("div");d.className="wline";
+      d.innerHTML=`<span class="wsender">${esc((m.sender||"?").slice(0,12))}…</span> <span class="wtext">${esc(m.text)}</span>`;
+      $("wInbox").prepend(d);
+    }
+  }catch(e){}
+}
+$("wSend").onclick=whisperSend;
+$("wMsg").addEventListener("keydown",e=>{if(e.key==="Enter")whisperSend();});
+setInterval(whisperRecv,5000);
+whisperRecv();
+
 </script>
 </body>
 </html>

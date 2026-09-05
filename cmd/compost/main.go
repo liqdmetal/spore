@@ -18,12 +18,14 @@ import (
 	"context"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -83,6 +85,12 @@ func check(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// writeJSON writes v as a JSON response.
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func parseLogin(login string) (u, p string) {
@@ -267,12 +275,29 @@ func webchat(args []string) {
 		ReapEvery: 30 * time.Second, MaxLines: *maxlines,
 	})
 	api := channel.WithCORS(channel.BoxRoutes(b))
+
+	// wallet RPC the browser routes to for whispers (must hold the key).
+	wrc := fs.String("wallet-rpc", "", "wallet RPC /json_rpc endpoint for whisper send")
+	wlogin := fs.String("wallet-login", "", "wallet RPC basic auth user:pass")
+
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/chat" || r.URL.Path == "/index.html" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write(chatHTML)
 			return
+		}
+		// Whisper endpoints: proxy send/recv to the wallet so the browser can
+		// post no-relay messages without holding keys itself.
+		if *wrc != "" {
+			if r.URL.Path == "/whisper/send" && r.Method == "POST" {
+				webWhisperSend(w, r, *wrc, *wlogin)
+				return
+			}
+			if r.URL.Path == "/whisper/recv" && r.Method == "GET" {
+				webWhisperRecv(w, r, *wrc, *wlogin)
+				return
+			}
 		}
 		api.ServeHTTP(w, r)
 	}))
@@ -283,6 +308,51 @@ func webchat(args []string) {
 	}
 	log.Printf("compost web chat on http://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// webWhisperSend posts a whisper through the daemon's wallet RPC (the browser
+// can't sign txs itself). Body: {"to":addr,"msg":text}.
+func webWhisperSend(w http.ResponseWriter, r *http.Request, wrc, wlogin string) {
+	u, p := parseLogin(wlogin)
+	client := dero.NewClient(wrc, u, p)
+	var req struct {
+		To  string `json:"to"`
+		Msg string `json:"msg"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	txid, err := whisper.Send(r.Context(), client, req.To, req.Msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]string{"txid": txid})
+}
+
+// webWhisperRecv polls the wallet for incoming whispers and returns them.
+func webWhisperRecv(w http.ResponseWriter, r *http.Request, wrc, wlogin string) {
+	u, p := parseLogin(wlogin)
+	client := dero.NewClient(wrc, u, p)
+	minHeight, _ := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+	entries, err := client.GetTransfers(r.Context(), dero.GetTransfersParams{In: true, MinHeight: minHeight})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	type wm struct {
+		Txid   string `json:"txid"`
+		Sender string `json:"sender"`
+		Text   string `json:"text"`
+	}
+	var out []wm
+	for _, e := range entries {
+		if text, ok := whisper.ParseArgs(e.PayloadRPC); ok {
+			out = append(out, wm{Txid: e.TXID, Sender: e.Sender, Text: text})
+		}
+	}
+	writeJSON(w, out)
 }
 
 // chat joins a channel box as one nick. With -say it posts one line and exits;
