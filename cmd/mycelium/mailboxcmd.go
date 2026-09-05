@@ -103,7 +103,7 @@ func mailboxRun(args []string) {
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval")
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	peerAddr := fs.String("peer-addr", "", "reachable sender peer (host:port) to pull bodies not pushed here")
-	peerBin := fs.String("peer-bin", "compost-peer", "path to the compost-peer binary")
+	peerBin := fs.String("peer-bin", "mycelium-peer", "path to the mycelium-peer binary")
 	privacy := fs.Bool("privacy", false, "hosted/privacy mode: don't record the sender in the message log")
 	cert := fs.String("cert", "", "TLS cert PEM path (serve HTTPS when set with -key)")
 	key := fs.String("key", "", "TLS key PEM path (serve HTTPS when set with -cert)")

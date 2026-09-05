@@ -544,7 +544,7 @@ func whisperKeygen(args []string) {
 
 // whisperSendLong encrypts a long body to the recipient's compost pubkey, holds
 // it locally, and posts a pointer-whisper. Body never rides a block. The sender
-// must run `compost-peer serve` so the recipient can fetch the body.
+// must run `mycelium-peer serve` so the recipient can fetch the body.
 func whisperSendLong(args []string) {
 	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
 	to := fs.String("to", "", "recipient DERO address or dero-name")
@@ -588,7 +588,7 @@ func whisperSendLong(args []string) {
 	check(err)
 	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
 	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
-	fmt.Println("recipient needs your reachable node; run:  compost-peer serve --dir " + *outDir)
+	fmt.Println("recipient needs your reachable node; run:  mycelium-peer serve --dir " + *outDir)
 }
 
 func whisperSend(args []string) {
@@ -629,8 +629,8 @@ func whisperRecv(args []string) {
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	keyFile := fs.String("key", "", "persistent long-term privkey (hex) to decrypt long bodies")
 	inDir := fs.String("in-dir", "compost-inbox", "dir to hold fetched bodies")
-	peerAddr := fs.String("peer-addr", "", "sender's reachable compost-peer serve address host:port (for long bodies)")
-	peerBin := fs.String("peer-bin", "compost-peer", "path to compost-peer binary")
+	peerAddr := fs.String("peer-addr", "", "sender's reachable mycelium-peer serve address host:port (for long bodies)")
+	peerBin := fs.String("peer-bin", "mycelium-peer", "path to mycelium-peer binary")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
 
@@ -677,7 +677,7 @@ func whisperRecv(args []string) {
 				continue
 			}
 			if *peerAddr == "" {
-				fmt.Println("  (no -peer-addr given; sender must run compost-peer serve and share its address)")
+				fmt.Println("  (no -peer-addr given; sender must run mycelium-peer serve and share its address)")
 				continue
 			}
 			body, err := peer.Fetch(ctx, *peerBin, *peerAddr, m.BodyCID)

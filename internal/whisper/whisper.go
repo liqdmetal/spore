@@ -43,7 +43,7 @@ const (
 	WhisperV1 uint64 = 0x571 // "W" version 1
 	// PointerV1 marks a pointer-whisper: the payload carries K (sender
 	// ephemeral pub) + C (body CID) and NO text. The long body is fetched
-	// peer-to-peer (compost-peer) and decrypted with the ephemeral pub.
+	// peer-to-peer (mycelium-peer) and decrypted with the ephemeral pub.
 	PointerV1 uint64 = 0x5710 // "W" pointer version 1
 )
 
