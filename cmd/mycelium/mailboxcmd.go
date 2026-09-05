@@ -44,6 +44,7 @@ func addChainFlags(fs *flag.FlagSet) {
 	fs.String("from", "", "our address (evm / chain)")
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
+	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
 }
 
 func mailboxcmd(args []string) {
