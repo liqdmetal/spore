@@ -154,3 +154,90 @@ func TestKeyPairFromPriv(t *testing.T) {
 		t.Fatal("reconstructed pubkey differs")
 	}
 }
+
+// TestSharedSecretRejectsLowOrderPoint: ECDH against an invalid (low-order)
+// remote public key must return an error, not panic or silently return zeros,
+// and must NOT mutate the caller's private or public slices.
+func TestSharedSecretRejectsLowOrderPoint(t *testing.T) {
+	a, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Zero(a.Priv)
+	privCopy := append([]byte(nil), a.Priv...)
+	// All-zero is a low-order/invalid X25519 public key.
+	badPub := make([]byte, 32)
+	if _, err := SharedSecret(a.Priv, badPub); err == nil {
+		t.Fatal("expected ECDH failure against low-order public key")
+	}
+	if !bytes.Equal(a.Priv, privCopy) {
+		t.Fatal("SharedSecret mutated the caller's private scalar on failure")
+	}
+	// badPub itself must be untouched (it is all-zero; ensure it stayed so).
+	if !bytes.Equal(badPub, make([]byte, 32)) {
+		t.Fatal("SharedSecret mutated the peer public key on failure")
+	}
+}
+
+// TestKeyPairFromPrivRejectsWrongLength: wrong-length scalars are rejected and
+// the caller's buffer is left untouched.
+func TestKeyPairFromPrivRejectsWrongLength(t *testing.T) {
+	for _, n := range []int{0, 1, 31, 33, 64} {
+		in := make([]byte, n)
+		for i := range in {
+			in[i] = byte(i)
+		}
+		saved := append([]byte(nil), in...)
+		if _, err := KeyPairFromPriv(in); err == nil {
+			t.Fatalf("KeyPairFromPriv(%d bytes) should error", n)
+		}
+		if !bytes.Equal(in, saved) {
+			t.Fatalf("KeyPairFromPriv(%d bytes) mutated its input", n)
+		}
+	}
+}
+
+// TestSealOpenRejectBadKeyNonceLengths: wrong nonce/key lengths must error, not
+// panic.
+func TestSealOpenRejectBadKeyNonceLengths(t *testing.T) {
+	msg := []byte("x")
+	for _, n := range []int{0, 1, NonceSize - 1, NonceSize + 1} {
+		if _, err := Seal(msg, make([]byte, KeySize), make([]byte, n)); err == nil {
+			t.Fatalf("Seal with %d-byte nonce should error", n)
+		}
+	}
+	for _, n := range []int{0, 1, KeySize - 1, KeySize + 1} {
+		// Nonce must be valid for the key-length error to surface distinctly.
+		if _, err := Seal(msg, make([]byte, n), make([]byte, NonceSize)); err == nil {
+			t.Fatalf("Seal with %d-byte key should error", n)
+		}
+	}
+	ct, err := Seal(msg, make([]byte, KeySize), make([]byte, NonceSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ct, make([]byte, KeySize), make([]byte, NonceSize-1)); err == nil {
+		t.Fatal("Open with short nonce should error")
+	}
+	if _, err := Open(ct, make([]byte, 0), make([]byte, NonceSize)); err == nil {
+		t.Fatal("Open with empty key should error")
+	}
+}
+
+// TestEmptyPlaintextSeals: the zero-length plaintext boundary is legal.
+func TestEmptyPlaintextSeals(t *testing.T) {
+	ct, err := Seal(nil, make([]byte, KeySize), make([]byte, NonceSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ct) != 16 { // tag only
+		t.Fatalf("empty ciphertext len = %d, want 16", len(ct))
+	}
+	pt, err := Open(ct, make([]byte, KeySize), make([]byte, NonceSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pt) != 0 {
+		t.Fatalf("empty open returned %d bytes", len(pt))
+	}
+}

@@ -13,6 +13,12 @@ import (
 	"github.com/liqdmetal/mycelium/internal/store"
 )
 
+// maxBodyBytes caps a /put body. Bodies are content-addressed ciphertext
+// (XChaCha20 output); a realistic envelope is a few KB. 64 MiB is generous
+// headroom and bounds the memory a single request can force us to read and
+// hash. A var (not const) so tests can shrink it.
+var maxBodyBytes = 64 << 20
+
 // Handler returns the HTTP surface for a mailbox:
 //
 //	PUT    /put/{cidhex}     body = raw ciphertext, X-Burn-Deadline: unix sec
@@ -69,9 +75,17 @@ func (m *Mailbox) handlePut(w http.ResponseWriter, r *http.Request, cid [32]byte
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024*1024+1))
+	body, err := io.ReadAll(&io.LimitedReader{R: r.Body, N: int64(maxBodyBytes) + 1})
 	if err != nil {
 		http.Error(w, "read", http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxBodyBytes {
+		// Oversized body: reject explicitly instead of silently truncating a
+		// too-long body and hashing only its prefix. The old LimitReader+1 read
+		// would misreport an oversized body as a CID mismatch (400) and was
+		// ambiguous about what the real cap was.
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	if crypto.CID(body) != cid {

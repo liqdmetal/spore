@@ -6,12 +6,13 @@
 //
 //	eph_pub(32) || nonce(24) || ciphertext
 //
-// ciphertext = XChaCha20-Poly1305(key, nonce, canonical_payload), where
-// key+nonce are HKDF-derived from ECDH(sender_priv, recipient_pub). The sender
-// generates a fresh ephemeral key per message; the recipient derives the same
-// secret from their own priv + the on-wire eph_pub. So the chain (and anyone
-// scanning it) sees only ciphertext — nobody but the recipient can read it,
-// even on a chain that exposes calldata in the clear.
+//	ciphertext = XChaCha20-Poly1305(key, nonce, canonical_payload), where the
+//	AEAD key is HKDF-derived from ECDH(sender_priv, recipient_pub) and the 24-byte
+//	nonce is a fresh random value transmitted in-band (it is public). The sender
+//	generates a fresh ephemeral key per message; the recipient derives the same
+//	secret from their own priv + the on-wire eph_pub. So the chain (and anyone
+//	scanning it) sees only ciphertext — nobody but the recipient can read it,
+//	even on a chain that exposes calldata in the clear.
 //
 // The envelope is what the chain.Chain carries (its Payload). Content
 // semantics (text vs pointer) live inside the ciphertext via the canonical
@@ -19,6 +20,7 @@
 package secure
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 
@@ -57,11 +59,12 @@ func Encrypt(senderPriv, recipientPub, canonical []byte) ([]byte, error) {
 }
 
 // EncryptStatic is like Encrypt but uses senderPriv directly for ECDH (no
-// fresh ephemeral per message). Prefer Encrypt; this exists for tests/long
-// persistent streams where one keypair is reused. NOTE: static ECDH means the
-// same secret is derived every message — safe only if key+nonce derivation
-// varies (HKDF info includes a counter) — which it does not here, so use
-// Encrypt, never this, for real traffic.
+// fresh ephemeral per message). It exists for tests / long-lived streams where
+// one keypair is reused. Each message still gets a fresh random nonce (see
+// sealWith), so no (key, nonce) pair is ever repeated. NOTE: static ECDH means
+// the SAME AEAD key is derived for every message — XChaCha20 is safe under key
+// reuse only with unique nonces (true here), but there is no forward secrecy
+// and no per-message separation. Use Encrypt, never this, for real traffic.
 func EncryptStatic(senderPriv, recipientPub, canonical []byte) ([]byte, error) {
 	if len(senderPriv) != 32 || len(recipientPub) != 32 {
 		return nil, fmt.Errorf("secure: keys must be 32 bytes (got %d/%d)", len(senderPriv), len(recipientPub))
@@ -89,8 +92,14 @@ func sealWith(ephPub, secret, canonical []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer crypto.Zero(key)
-	nonce, err := crypto.DeriveNonce(secret)
-	if err != nil {
+	// The nonce is random and transmitted in-band (it need not be secret). We
+	// deliberately do NOT derive it from the secret: a sender that ever reuses
+	// an ECDH secret (see EncryptStatic) would otherwise silently re-encrypt
+	// under an identical (key, nonce) — a catastrophic two-time pad. A fresh
+	// random nonce per message keeps every envelope safe regardless of secret
+	// reuse, and Decrypt already reads the nonce from the envelope.
+	nonce := make([]byte, NonceLen)
+	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
 	ct, err := crypto.Seal(canonical, key, nonce)

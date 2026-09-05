@@ -50,10 +50,16 @@ func KeyPairFromPriv(priv []byte) (*KeyPair, error) {
 }
 
 func keyPairFromPriv(priv []byte) (*KeyPair, error) {
+	// NOTE: priv is often the CALLER's own buffer (a persisted scalar loaded via
+	// KeyPairFromPriv / session / longmsg). Never Zero it here on failure —
+	// wiping a caller's private key without consent is data loss, and it is
+	// inconsistent with SharedSecret, which leaves the caller's scalars alone.
+	// (ecdh.X25519 clamps scalars and only ever rejects a wrong length, which
+	// callers gate before reaching this point, so the wipe would be dead code
+	// anyway.)
 	curve := ecdh.X25519()
 	k, err := curve.NewPrivateKey(priv)
 	if err != nil {
-		Zero(priv)
 		return nil, err
 	}
 	return &KeyPair{Priv: priv, Pub: k.PublicKey().Bytes()}, nil
