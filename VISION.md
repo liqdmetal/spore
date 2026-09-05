@@ -1,4 +1,4 @@
-# Mycelium — cross-chain private communication & transport
+# Mycelium — M³: Mycelium Multi-chain Messenger
 
 *Vision / architecture note. Mycelium was built and verified live on DERO
 (short no-relay whisper, long nobody-but-us bodies, rooms that rot). This doc
@@ -9,7 +9,7 @@ RelayOS nodes as the interconnection fabric.*
 
 ## 1. What mycelium actually is (don't lose this)
 
-Mycelium is NOT a chain. It is a **transport + coordination layer** that rides on
+M³ (Mycelium Multi-chain Messenger) is NOT a chain. It is a **transport + coordination layer** that rides on
 a chain. It depends on only two things any chain provides:
 
 1. **A point-to-point encrypted payload** (the tx message field) — carries a
