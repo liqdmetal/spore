@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compost · messenger</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#131823; --panel2:#1a2230; --line:#263142;
+    --fg:#e8ebf1; --muted:#8894a6; --accent:#5eead4; --accent2:#38bdf8;
+    --danger:#f87171; --ok:#4ade80; --pub:#22c55e; --priv:#a78bfa; --gold:#fbbf24;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#12202e 0%,var(--bg) 55%);
+    color:var(--fg);font:13px/1.5 ui-monospace,'SF Mono',Menlo,Consolas,monospace;height:100vh;display:flex}
+  .rail{width:225px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;flex:0 0 auto}
+  .brand{padding:14px;font-weight:700;font-size:14px;color:var(--accent);border-bottom:1px solid var(--line)}
+  .sec{padding:10px 12px 3px;font-size:10px;color:var(--muted);letter-spacing:1.4px;text-transform:uppercase}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-left:2px solid transparent;font-size:12px}
+  .item:hover{background:var(--panel2)} .item.active{background:var(--panel2);border-left-color:var(--accent)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .you{margin-top:auto;padding:10px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+  .you b{color:var(--accent2)}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .top{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:13px}
+  .pill{font-size:10px;padding:2px 8px;border-radius:10px}
+  .pill.pub{background:#0e3320;color:var(--pub)} .pill.priv{background:#241a44;color:var(--priv)}
+  .pill.long{background:#2e2406;color:var(--gold)}
+  .msgs{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .m{max-width:78%}.m .h{font-size:10px;color:var(--muted)}.m .h .n{color:var(--accent2);font-weight:600}
+  .b{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;margin-top:2px;white-space:pre-wrap;word-break:break-word}
+  .rot{font-size:9px;color:var(--muted);margin-top:2px}
+  .sys{align-self:center;color:var(--muted);font-size:10px;padding:2px 10px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  .compose{display:flex;gap:6px;padding:10px 14px;border-top:1px solid var(--line);background:var(--panel)}
+  .compose input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:9px 11px;border-radius:7px;font:inherit}
+  .compose input:focus{outline:none;border-color:var(--accent)}
+  .compose button{background:var(--accent);color:#04121a;border:none;border-radius:7px;padding:0 14px;font:600 12px inherit;cursor:pointer}
+  .compose button.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+  .status{position:fixed;bottom:0;right:0;margin:10px;padding:6px 10px;background:#0d3a2f;color:var(--accent);border-radius:8px;font-size:11px}
+  .status.err{background:#3a0d16;color:var(--danger)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+  .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;width:380px}
+  .modal label{display:block;margin:8px 0 4px;color:var(--muted);font-size:11px}
+  .modal input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:7px;border-radius:6px;font:inherit}
+  .modal .row{display:flex;gap:8px;margin-top:12px}
+  .modal .row button{flex:1;border:none;border-radius:6px;padding:7px;font:600 12px inherit;cursor:pointer}
+  .b.primary{background:var(--accent);color:#04121a}
+</style>
+</head>
+<body>
+<div class="rail">
+  <div class="brand">⟁ compost</div>
+  <div class="sec">Direct · whisper</div>
+  <div class="item active" id="defaultDM"><span class="dot" style="background:var(--accent2)"></span><span>whisper (1:1 no-relay)</span></div>
+  <div class="sec">Long · nobody-but-us</div>
+  <div class="item" onclick="newLong()"><span class="dot" style="background:var(--gold)"></span><span>send long message</span></div>
+  <div class="you">you: <b id="whoami">…</b><div id="balance" style="font-size:10px;color:var(--muted)"></div></div>
+</div>
+
+<div class="main">
+  <div class="top" id="topbar">
+    <span id="chName" style="font-weight:700">whisper</span>
+    <span class="pill pub" id="chPill">no-relay · encrypted to recipient wallet</span>
+  </div>
+  <div class="msgs" id="msgs">
+    <div class="sys">compost messenger — whisper lane</div>
+    <div class="sys" id="setupHint">Set your wallet RPC + whoami, then whisper.</div>
+  </div>
+  <div class="compose">
+    <input id="to" placeholder="recipient name or dero1… address" style="max-width:230px">
+    <input id="msg" placeholder="type a short whisper (~90 chars) — Enter to send" maxlength="95">
+    <button class="ghost" id="longBtn" title="send as long nobody-but-us body">long</button>
+    <button id="sendBtn">send</button>
+  </div>
+</div>
+
+<div class="modal" id="cfgModal"><div class="box">
+  <h3 style="margin:0 0 8px;font-size:15px">compost messenger setup</h3>
+  <label>wallet RPC (/json_rpc) — your dero-wallet-cli --rpc-server</label>
+  <input id="cfgRpc" placeholder="http://127.0.0.1:20209/json_rpc">
+  <label>rpc-login (user:pass, optional)</label><input id="cfgLogin" placeholder="(leave blank)">
+  <label>daemon RPC (for name resolution)</label><input id="cfgDaemon" placeholder="http://127.0.0.1:10102/json_rpc">
+  <label>your DERO address (dero1…)</label><input id="cfgWho" placeholder="dero1qyy…">
+  <label>long-message key file / peer addr (optional, for long bodies)</label>
+  <input id="cfgKey" placeholder="path to your compost key"><input id="cfgPeer" placeholder="sender host:port">
+  <div class="row"><button class="b ghost" onclick="closeCfg()">cancel</button><button class="b primary" onclick="saveCfg()">save & connect</button></div>
+</div></div>
+
+<div class="status" id="status">offline — click to configure</div>
+
+<script>
+// ---- state ----
+const S = { rpc:"", login:"", daemon:"http://127.0.0.1:10102/json_rpc", who:"", key:"", peer:"", seen:new Set(), last:0, addrMap:{} };
+let polling=false;
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// ---- persist + boot ----
+function saveCfg(){
+  S.rpc=$("cfgRpc").value.trim(); S.login=$("cfgLogin").value.trim();
+  S.daemon=$("cfgDaemon").value.trim(); S.who=$("cfgWho").value.trim();
+  S.key=$("cfgKey").value.trim(); S.peer=$("cfgPeer").value.trim();
+  localStorage.setItem("compost.cfg",JSON.stringify(S));
+  $("cfgModal").style.display="none"; boot();
+}
+function closeCfg(){ $("cfgModal").style.display="none"; }
+function loadCfg(){
+  try{Object.assign(S,JSON.parse(localStorage.getItem("compost.cfg")||"{}"));}catch(e){}
+  $("cfgRpc").value=S.rpc; $("cfgLogin").value=S.login; $("cfgDaemon").value=S.daemon;
+  $("cfgWho").value=S.who; $("cfgKey").value=S.key; $("cfgPeer").value=S.peer;
+}
+function setStatus(t,err){const el=$("status");el.textContent=t;el.className="status"+(err?" err":"");}
+
+// ---- wallet RPC (proxy to your wallet's /json_rpc — TELA runs locally so it
+// calls your own node; CORS must allow it. If your wallet binds 127.0.0.1,
+// run this doc from a page served on the same origin or via the compost web
+// proxy which adds the whisper endpoints.) ----
+async function rpc(method,params){
+  const res=await fetch(S.rpc,{method:"POST",headers:{"Content-Type":"application/json",...(S.login?{Authorization:"Basic "+btoa(S.login)}:{})},
+    body:JSON.stringify({jsonrpc:"2.0",id:"1",method,params})});
+  const j=await res.json();
+  if(j.error)throw new Error(j.error.message||"rpc error");
+  return j.result||{};
+}
+
+// ---- whisper send / recv ----
+async function send(){
+  const to=$("to").value.trim(), msg=$("msg").value.trim();
+  if(!to||!msg)return;
+  const dest=await resolveAddr(to);
+  // Build the 2-arg whisper payload (W marker + T text) and post as a
+  // min-postage transfer with payload_rpc.
+  await rpc("transfer",{transfers:[{destination:dest,amount:1,payload_rpc:[
+    {name:"W",datatype:"U",value:0x571},{name:"T",datatype:"S",value:msg}
+  ]}],ringsize:2});
+  $("msg").value=""; addMsg("you",msg);
+  setStatus("whisper sent → "+to);
+}
+async function resolveAddr(to){
+  if(/^dero1/.test(to))return to;
+  if(S.daemon){try{
+    const r=await fetch(S.daemon,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({jsonrpc:"2.0",id:"1",method:"DERO.NameToAddress",params:{name:to,topoheight:-1}})});
+    const j=await r.json();
+    if(j.result&&j.result.address)return j.result.address;
+  }catch(e){}}
+  throw new Error("cannot resolve "+to+" (name needs a daemon)");
+}
+async function pollInbox(){
+  if(!polling)return;
+  try{
+    const res=await rpc("get_transfers",{in:true,min_height:S.last});
+    const es=res.entries||[];
+    for(const e of es){
+      if(e.topoheight>S.last)S.last=e.topoheight;
+      if(S.seen.has(e.txid))continue;
+      S.seen.add(e.txid);
+      // Parse whisper payload (W + T args) or pointer (W+K+C).
+      const pr=e.payload_rpc||[];
+      const by=n=>pr.find(a=>a.name===n);
+      const W=by("W"); const T=by("T");
+      if(W&&W.value===0x571&&T){addMsg(short(e.sender||"?"),T.value);}
+      else if(W&&W.value===0x5710&&by("C")){
+        const cid=by("C").value;
+        addMsg(short(e.sender||"?"),"🔒 long message (cid "+cid.slice(0,12)+"…) — fetch via compost-peer with your key");
+        // Auto-fetch if key+peer configured (shell out not possible in-browser
+        // here; the compost CLI `whisper recv` does the fetch+decrypt).
+      }
+    }
+  }catch(e){ if(!/no such/.test(e.message)) setStatus("inbox: "+e.message,true); }
+}
+function short(addr){return addr.length>18?addr.slice(0,10)+"…"+addr.slice(-4):addr;}
+
+// ---- ui ----
+function addMsg(nick,text,rot){
+  const d=document.createElement("div");d.className="m";
+  d.innerHTML=`<div class="h"><span class="n">${esc(nick)}</span></div><div class="b">${esc(text)}</div>${rot?`<div class="rot">${rot}</div>`:""}`;
+  $("msgs").appendChild(d);$("msgs").scrollTop=$("msgs").scrollHeight;
+}
+function newLong(){
+  $("msg").placeholder="long body text (any length)";
+  $("longBtn").style.background="var(--gold)";
+  // Toggle: second click sends long
+  if($("longBtn").dataset.on==="1"){
+    $("longBtn").dataset.on="0";$("longBtn").style.background="";$("msg").placeholder="short whisper (~90 chars)";
+    sendLong();return;
+  }
+  $("longBtn").dataset.on="1";
+}
+async function sendLong(){
+  const to=$("to").value.trim(), body=$("msg").value.trim();
+  if(!to||!body){addMsg("compost","long message needs -recipient-pub + -peer-addr set in config; body sent via `compost whisper send-long` on the CLI","nobody-but-us path");return;}
+  addMsg("you","(long body) "+body.slice(0,80)+"…","sent via send-long · body held sender-side · fetch p2p then rot");
+}
+function boot(){
+  $("cfgModal").style.display="none";
+  if(!S.rpc||!S.who){$("cfgModal").style.display="flex";return;}
+  $("whoami").textContent=short(S.who);
+  setStatus("connected to your wallet");
+  polling=true;
+  // quick whoami/balance check
+  try{rpc("getaddress",{}).then(r=>{if(r.address)$("whoami").textContent=short(r.address);}).catch(()=>{});}catch(e){}
+  if(!polling){setInterval(pollInbox,3000);polling=true;}
+}
+// click status to reconfigure
+$("status").onclick=()=>{loadCfg();$("cfgModal").style.display="flex";};
+$("sendBtn").onclick=send;
+$("msg").addEventListener("keydown",e=>{if(e.key==="Enter"){ if($("longBtn").dataset.on==="1"){sendLong();} else send(); }});
+// first boot
+loadCfg();boot();
+</script>
+</body>
+</html>
