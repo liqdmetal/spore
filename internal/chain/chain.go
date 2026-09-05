@@ -19,7 +19,7 @@ import (
 
 // ErrNotWhisper is returned by ParsePayload when the payload isn't one our
 // messenger understands (e.g. a plain transfer with no message).
-var ErrNotWhisper = errors.New("chain: not a mycelium payload")
+var ErrNotWhisper = errors.New("chain: not a spore payload")
 
 // Argument is one typed field in a payload (chain-agnostic shape). Different
 // chains carry arguments differently (DERO: CBOR rpc.Arguments; EVM: calldata;

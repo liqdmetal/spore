@@ -9,11 +9,11 @@ import (
 
 	"github.com/gagliardetto/solana-go"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/dero"
-	"github.com/liqdmetal/mycelium/internal/evm"
-	solanaBackend "github.com/liqdmetal/mycelium/internal/solana"
-	"github.com/liqdmetal/mycelium/internal/xmr"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/dero"
+	"github.com/liqdmetal/spore/internal/evm"
+	solanaBackend "github.com/liqdmetal/spore/internal/solana"
+	"github.com/liqdmetal/spore/internal/xmr"
 )
 
 // ChainConfig describes how to build one chain backend.

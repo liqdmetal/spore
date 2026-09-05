@@ -28,11 +28,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/longmsg"
-	"github.com/liqdmetal/mycelium/internal/store"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/longmsg"
+	"github.com/liqdmetal/spore/internal/store"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // keyFile is the name (inside the mailbox dir) of the hex-encoded 32-byte

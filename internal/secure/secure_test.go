@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // alice/bob keypairs for tests.

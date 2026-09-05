@@ -6,7 +6,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // evmBlock is the minimal eth_getBlockByNumber result shape.
@@ -24,7 +24,7 @@ type evmTx struct {
 
 // evmScanIncoming scans blocks from minHeight to current height (bounded to
 // avoid archive-node needs) and returns txs whose `to` equals our address,
-// treating each tx's calldata as a received mycelium payload.
+// treating each tx's calldata as a received spore payload.
 func evmScanIncoming(ctx context.Context, b *Backend, minHeight uint64) ([]chain.Incoming, error) {
 	top, err := b.Height(ctx)
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/spore/internal/anchor"
 )
 
 func TestRoundTrip(t *testing.T) {

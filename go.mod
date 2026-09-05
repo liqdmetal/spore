@@ -1,4 +1,4 @@
-module github.com/liqdmetal/mycelium
+module github.com/liqdmetal/spore
 
 go 1.23
 

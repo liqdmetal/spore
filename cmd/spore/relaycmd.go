@@ -1,6 +1,6 @@
 // relay — the relay-fabric hop command.
 //
-//	mycelium relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
+//	spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
 //
 // A relay is an always-on store-and-forward middle node: a phone pushes an
 // opaque body bound for a destination mailbox (X-Relay-Dest) and the relay
@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/relay"
-	"github.com/liqdmetal/mycelium/internal/store"
+	"github.com/liqdmetal/spore/internal/relay"
+	"github.com/liqdmetal/spore/internal/store"
 )
 
 func relaycmd(args []string) {
@@ -43,9 +43,9 @@ func relaycmd(args []string) {
 
 func relayUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  mycelium relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
+  spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
              (store-and-forward hop for opaque bodies; always-on)
-  mycelium relay -h, --help
+  spore relay -h, --help
 
 flags:
   -listen    relay HTTP listen address (default :19300)

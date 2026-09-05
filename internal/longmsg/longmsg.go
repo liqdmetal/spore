@@ -12,8 +12,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/store"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/store"
 )
 
 // Endpoint is one party's long-message state. It owns its long-term X25519

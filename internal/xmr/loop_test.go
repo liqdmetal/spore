@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // twoWalletNode emulates a Monero wallet RPC shared by a sender and receiver

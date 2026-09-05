@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/anchor"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // Backend adapts *Client (low-level RPC) to chain.Chain.

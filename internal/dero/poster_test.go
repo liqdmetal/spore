@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/spore/internal/anchor"
 )
 
 // TestPostAnchorWireShape pins the exact JSON the wallet RPC must receive:

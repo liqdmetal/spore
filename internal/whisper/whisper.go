@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/dero"
+	"github.com/liqdmetal/spore/internal/anchor"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/dero"
 )
 
 // Payload markers. A whisper is carried as typed Arguments in the tx payload.
@@ -43,7 +43,7 @@ const (
 	WhisperV1 uint64 = 0x571 // "W" version 1
 	// PointerV1 marks a pointer-whisper: the payload carries K (sender
 	// ephemeral pub) + C (body CID) and NO text. The long body is fetched
-	// peer-to-peer (mycelium-peer) and decrypted with the ephemeral pub.
+	// peer-to-peer (spore-peer) and decrypted with the ephemeral pub.
 	PointerV1 uint64 = 0x5710 // "W" pointer version 1
 )
 
@@ -326,7 +326,7 @@ func Send(ctx context.Context, client *dero.Client, recipientAddr, text string) 
 	return client.PostPayload(ctx, recipientAddr, args, 2)
 }
 
-// Codec renders/parses mycelium payloads into a chain.Chain's native form.
+// Codec renders/parses spore payloads into a chain.Chain's native form.
 // whisper talks to a chain only through Codec + chain.Chain, so the core has
 // no dependency on any specific chain backend.
 type Codec interface {

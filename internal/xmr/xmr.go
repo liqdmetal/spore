@@ -1,7 +1,7 @@
 // Package xmr implements the chain.Chain backend for Monero (XMR).
 //
 // Honest model (see VISION §3): Monero has NO on-chain channel that can carry
-// a mycelium payload. Its only free-form per-tx field exposed by the standard
+// a spore payload. Its only free-form per-tx field exposed by the standard
 // wallet RPC is an 8-byte payment ID (modern Monero rejects 32-byte ids).
 // So unlike DERO (encrypted payload field) or EVM (calldata), an XMR tx cannot
 // transport a whisper (~83 B) or even a long-body pointer (67 B).
@@ -36,7 +36,7 @@ import (
 
 	"github.com/icholy/digest"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // MaxSignal is the 8-byte payload cap (Monero payment id).
@@ -205,7 +205,7 @@ type xmrIncoming struct {
 }
 
 // ListIncoming implements chain.Chain. It returns incoming transfers whose
-// payment id decodes to a mycelium signal (i.e. a payload ≤8 B). Transfers
+// payment id decodes to a spore signal (i.e. a payload ≤8 B). Transfers
 // without a payload-bearing payment id are not mycelium and are skipped.
 func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
 	list, err := b.getTransfers(ctx, true, minHeight)

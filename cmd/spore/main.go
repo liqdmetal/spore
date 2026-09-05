@@ -30,20 +30,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
-	"github.com/liqdmetal/mycelium/internal/backend"
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/channel"
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	derodaemon "github.com/liqdmetal/mycelium/internal/daemon"
-	"github.com/liqdmetal/mycelium/internal/dero"
-	"github.com/liqdmetal/mycelium/internal/donate"
-	"github.com/liqdmetal/mycelium/internal/longmsg"
-	"github.com/liqdmetal/mycelium/internal/peer"
-	"github.com/liqdmetal/mycelium/internal/secure"
-	"github.com/liqdmetal/mycelium/internal/session"
-	"github.com/liqdmetal/mycelium/internal/store"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/anchor"
+	"github.com/liqdmetal/spore/internal/backend"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/channel"
+	"github.com/liqdmetal/spore/internal/crypto"
+	derodaemon "github.com/liqdmetal/spore/internal/daemon"
+	"github.com/liqdmetal/spore/internal/dero"
+	"github.com/liqdmetal/spore/internal/donate"
+	"github.com/liqdmetal/spore/internal/longmsg"
+	"github.com/liqdmetal/spore/internal/peer"
+	"github.com/liqdmetal/spore/internal/secure"
+	"github.com/liqdmetal/spore/internal/session"
+	"github.com/liqdmetal/spore/internal/store"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 //go:embed web/chat.html
@@ -58,7 +58,7 @@ func main() {
 		os.Exit(2)
 	}
 	if os.Args[1] == "-version" || os.Args[1] == "version" {
-		fmt.Printf("mycelium %s\n", version)
+		fmt.Printf("spore %s\n", version)
 		return
 	}
 	switch os.Args[1] {
@@ -96,32 +96,32 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  mycelium demo
-  mycelium keygen
-  mycelium daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
-  mycelium send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
-  mycelium channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
-  mycelium chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
+  spore demo
+  spore keygen
+  spore daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
+  spore send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
+  spore channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
+  spore chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
-  mycelium web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
-  mycelium whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
-  mycelium whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
-  mycelium whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
-  mycelium whisper keygen [-key KFILE]
-  mycelium donate [chain] | --all                          (per-chain donation rail)
-  mycelium msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
-  mycelium msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
-  mycelium status [-chain ...] [-mailbox-http URL]      (connection health HUD)
-  mycelium msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
-  mycelium msg keygen [-out FILE]           (identity keypair for E2E encryption)
-  mycelium msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
-  mycelium msg recv ... -key HEX                   (decrypt E2E with our priv)
-  mycelium mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR] [-peer-addr H:P] [-rpc URL] [-from ADDR] [-keyfile SOL] [-program PID]   (always-on long-body serve+scan+decrypt)
-  mycelium mailbox list -dir DIR                   (show decrypted messages)
-  mycelium mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)
-  mycelium relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
+  spore web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
+  spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
+  spore whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
+  spore whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
+  spore whisper keygen [-key KFILE]
+  spore donate [chain] | --all                          (per-chain donation rail)
+  spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
+  spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
+  spore status [-chain ...] [-mailbox-http URL]      (connection health HUD)
+  spore msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
+  spore msg keygen [-out FILE]           (identity keypair for E2E encryption)
+  spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
+  spore msg recv ... -key HEX                   (decrypt E2E with our priv)
+  spore mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR] [-peer-addr H:P] [-rpc URL] [-from ADDR] [-keyfile SOL] [-program PID]   (always-on long-body serve+scan+decrypt)
+  spore mailbox list -dir DIR                   (show decrypted messages)
+  spore mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)
+  spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
              (store-and-forward hop for opaque bodies: push via X-Relay-Dest, forward to the mailbox)
-  mycelium relay -h, --help                         (relay help)`)
+  spore relay -h, --help                         (relay help)`)
 }
 
 func check(err error) {
@@ -549,7 +549,7 @@ func whisperKeygen(args []string) {
 
 // whisperSendLong encrypts a long body to the recipient's compost pubkey, holds
 // it locally, and posts a pointer-whisper. Body never rides a block. The sender
-// must run `mycelium-peer serve` so the recipient can fetch the body.
+// must run `spore-peer serve` so the recipient can fetch the body.
 func whisperSendLong(args []string) {
 	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
 	to := fs.String("to", "", "recipient DERO address or dero-name")
@@ -593,7 +593,7 @@ func whisperSendLong(args []string) {
 	check(err)
 	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
 	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
-	fmt.Println("recipient needs your reachable node; run:  mycelium-peer serve --dir " + *outDir)
+	fmt.Println("recipient needs your reachable node; run:  spore-peer serve --dir " + *outDir)
 }
 
 func whisperSend(args []string) {
@@ -634,8 +634,8 @@ func whisperRecv(args []string) {
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	keyFile := fs.String("key", "", "persistent long-term privkey (hex) to decrypt long bodies")
 	inDir := fs.String("in-dir", "compost-inbox", "dir to hold fetched bodies")
-	peerAddr := fs.String("peer-addr", "", "sender's reachable mycelium-peer serve address host:port (for long bodies)")
-	peerBin := fs.String("peer-bin", "mycelium-peer", "path to mycelium-peer binary")
+	peerAddr := fs.String("peer-addr", "", "sender's reachable spore-peer serve address host:port (for long bodies)")
+	peerBin := fs.String("peer-bin", "spore-peer", "path to spore-peer binary")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
 
@@ -682,7 +682,7 @@ func whisperRecv(args []string) {
 				continue
 			}
 			if *peerAddr == "" {
-				fmt.Println("  (no -peer-addr given; sender must run mycelium-peer serve and share its address)")
+				fmt.Println("  (no -peer-addr given; sender must run spore-peer serve and share its address)")
 				continue
 			}
 			body, err := peer.Fetch(ctx, *peerBin, *peerAddr, m.BodyCID)
@@ -764,7 +764,7 @@ func defaultDonateRegistry() *donate.Registry {
 	r := donate.New()
 	r.Register(donate.Entry{
 		Chain:   "dero",
-		Address: "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", // mycelium dev (DERO)
+		Address: "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", // spore dev (DERO)
 		Note:    "DERO mainnet",
 	})
 	r.Register(donate.Entry{
@@ -788,8 +788,8 @@ func donatecmd(args []string) {
 	}
 	chainArg := args[0]
 	if chainArg == "-h" || chainArg == "--help" {
-		fmt.Println("usage: mycelium donate [chain]")
-		fmt.Println("       mycelium donate --all")
+		fmt.Println("usage: spore donate [chain]")
+		fmt.Println("       spore donate --all")
 		return
 	}
 	e, ok := reg.Get(chainArg)
@@ -800,12 +800,12 @@ func donatecmd(args []string) {
 	fmt.Println(e.Address)
 }
 
-// msg sends/receives a mycelium message on ANY registered chain backend,
+// msg sends/receives a spore message on ANY registered chain backend,
 // dispatching on -chain. Uses the chain-agnostic canonical codec so the same
 // wire semantics hold across DERO, EVM, and XMR.
 func msgcmd(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long|keygen [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-long|keygen [flags]")
 		fmt.Fprintln(os.Stderr, "       (chain-agnostic; see -chain)")
 		os.Exit(2)
 	}
@@ -819,7 +819,7 @@ func msgcmd(args []string) {
 	case "keygen":
 		msgKeygen(args[1:])
 	case "-h", "--help":
-		fmt.Fprintln(os.Stderr, "usage: mycelium msg send|recv|send-long|keygen [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-long|keygen [flags]")
 	default:
 		fmt.Fprintf(os.Stderr, "msg: unknown subcommand %q (want send|recv|send-long|keygen)\n", args[0])
 		os.Exit(2)
@@ -852,8 +852,8 @@ func msgSend(args []string) {
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
-	fs.String("key", "", "our mycelium priv key (64 hex) for E2E encryption")
-	fs.String("peer-pub", "", "recipient mycelium pub key (64 hex) for E2E encryption")
+	fs.String("key", "", "our spore priv key (64 hex) for E2E encryption")
+	fs.String("peer-pub", "", "recipient spore pub key (64 hex) for E2E encryption")
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
@@ -879,7 +879,7 @@ func msgRecv(args []string) {
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
-	fs.String("key", "", "our mycelium priv key (64 hex) to decrypt E2E messages")
+	fs.String("key", "", "our spore priv key (64 hex) to decrypt E2E messages")
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
@@ -888,7 +888,7 @@ func msgRecv(args []string) {
 	codec := secureRecvCodec(fs, c.Name())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	log.Printf("msg recv on %s: listening for mycelium messages", c.Name())
+	log.Printf("msg recv on %s: listening for spore messages", c.Name())
 	ch, errc := whisper.RecvChain(ctx, c, codec, chain.WatchOpts{MinHeight: *minHeight, Interval: *interval})
 	for {
 		select {
@@ -909,7 +909,7 @@ func msgRecv(args []string) {
 	}
 }
 
-// msgKeygen generates a mycelium identity keypair for end-to-end encryption.
+// msgKeygen generates a spore identity keypair for end-to-end encryption.
 // Give the PUB half to people who send you messages; keep the PRIV to decrypt.
 func msgKeygen(args []string) {
 	fs := flag.NewFlagSet("msg keygen", flag.ExitOnError)
@@ -982,7 +982,7 @@ func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
 // on-chain, so XMR contributes identity only; DERO delivers the pointer; the
 // body itself never rides any block and is fetched peer-to-peer by CID.
 //
-//   - The body is E2E-encrypted (X25519) to the recipient's mycelium pub and held
+//   - The body is E2E-encrypted (X25519) to the recipient's spore pub and held
 //     in the sender's out-dir disk store — nobody but sender and receiver.
 //   - The pointer (sender ephemeral pub + body CID) is posted as a DERO whisper
 //     to the recipient's DERO delivery address (-to): the only live long-body
@@ -999,10 +999,10 @@ func msgSendLong(args []string) {
 	fs := flag.NewFlagSet("msg send-long", flag.ExitOnError)
 	fs.String("chain", "dero", "delivery chain for the pointer whisper (only dero is wired for long bodies)")
 	to := fs.String("to", "", "recipient DERO delivery address (receives the pointer whisper)")
-	recipPubHex := fs.String("recipient-pub", "", "recipient mycelium X25519 pubkey (64 hex) to encrypt the body to")
+	recipPubHex := fs.String("recipient-pub", "", "recipient spore X25519 pubkey (64 hex) to encrypt the body to")
 	file := fs.String("file", "", "file whose contents to send")
 	msg := fs.String("msg", "", "or literal message text (long)")
-	outDir := fs.String("out-dir", "mycelium-outbox", "dir to hold the outbound body")
+	outDir := fs.String("out-dir", "spore-outbox", "dir to hold the outbound body")
 	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
 	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
 	xmrAddr := fs.String("xmr", "", "recipient XMR address to tag the body with (identity metadata; prepended as a header line)")
@@ -1058,7 +1058,7 @@ func msgSendLong(args []string) {
 		fmt.Printf("  tagged for XMR recipient %s\n", *xmrAddr)
 	}
 	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
-	fmt.Println("recipient needs your reachable node + their whisper recv to fetch+decrypt; run:  mycelium msg recv -chain dero")
+	fmt.Println("recipient needs your reachable node + their whisper recv to fetch+decrypt; run:  spore msg recv -chain dero")
 }
 
 // xmrTagBody prefixes an "xmr:<address>\n" header line onto a body so the

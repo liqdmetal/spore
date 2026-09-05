@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/store"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/store"
 )
 
 // fakeMailbox stands in for the destination mailbox's /put route in tests. It

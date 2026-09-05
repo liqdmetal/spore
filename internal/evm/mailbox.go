@@ -7,7 +7,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 	"golang.org/x/crypto/sha3"
 )
 

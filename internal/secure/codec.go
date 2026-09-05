@@ -8,9 +8,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // ErrNoKey is returned when the codec is missing a needed key.

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
-	"github.com/liqdmetal/mycelium/internal/store"
+	"github.com/liqdmetal/spore/internal/anchor"
+	"github.com/liqdmetal/spore/internal/store"
 )
 
 func TestSendReceive(t *testing.T) {

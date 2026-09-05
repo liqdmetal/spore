@@ -28,7 +28,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // Backend implements chain.Chain over an EVM JSON-RPC endpoint.

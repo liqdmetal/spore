@@ -1,6 +1,6 @@
 # m³ — Multi-chain roadmap (the mycorrhizal network, tree by tree)
 
-*Trees are the endpoints — each a wallet+node on its own chain. Mycelium is the
+*Trees are the endpoints — each a wallet+node on its own chain. Spore is the
 underground no-relay substrate. m³ is the common mycorrhizal network they form.
 Adding a tree means one `chain.Chain` backend + one payload codec. The seam
 (`internal/chain`) makes each new chain bounded.*
@@ -25,8 +25,8 @@ Adding a tree means one `chain.Chain` backend + one payload codec. The seam
 - **E2E secure layer** — `internal/secure` X25519 ECDH + HKDF-SHA256 +
   XChaCha20-Poly1305 envelope (`kind 0xE0`) that keeps EVM/Solana/XMR content
   private on public chains. `internal/crypto` holds the primitives + key-zeroing.
-- **Donate rail** — `mycelium donate [chain] | --all`, per-chain address registry.
-- **Multi-chain CLI** — `mycelium msg send|recv|send-long|keygen -chain
+- **Donate rail** — `spore donate [chain] | --all`, per-chain address registry.
+- **Multi-chain CLI** — `spore msg send|recv|send-long|keygen -chain
   dero|evm|xmr|solana` dispatch via `internal/backend`.
 
 ## Remaining (honest, in rough priority order)
@@ -37,7 +37,7 @@ Adding a tree means one `chain.Chain` backend + one payload codec. The seam
 | 2 | **Deploy `MyceliumMailbox.sol`** | written + backend proven; needs a funded EVM account on a real chain. |
 | 3 | **Solana cross-wallet delivery** | program requires recipient to sign; today client self-messages. Both parties must run the backend to deliver cross-wallet. |
 | 4 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs (BSD-3, clean-room, mainnet-proven) watches the node txpool and decrypts before mining. |
-| 5 | **Relay fabric interconnection** | mycelium relay node forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p) — the underground trunk between chains. |
+| 5 | **Relay fabric interconnection** | spore relay node forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p) — the underground trunk between chains. |
 | 6 | **Zcash / ARRR / Decred / Verge** | each a `chain.Chain` backend reusing the envelope/relay pattern. |
 | 7 | **Cross-chain identity proof** (DERO↔EVM) | research crypto — the hard piece. Gates true interchain messaging (a pointer from a DERO tree read by an EVM tree). |
 | 8 | **Zama / FHE** | compute-on-encrypted, a different primitive — parked. |

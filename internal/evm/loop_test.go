@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // A mock EVM node that actually stores calldata and serves it back in blocks.

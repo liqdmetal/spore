@@ -1,7 +1,7 @@
-// Package peer is the seam from Go to the mycelium-peer Rust transport: a small
+// Package peer is the seam from Go to the spore-peer Rust transport: a small
 // helper that fetches a body by CID over the peer transport and returns it.
 //
-// The mycelium-peer binary (derohe-rs, BSD-3) serves/fetches ECDH-encrypted
+// The spore-peer binary (derohe-rs, BSD-3) serves/fetches ECDH-encrypted
 // bodies by CID with sha256 integrity. This Go seam shells out to it so the
 // long-message recv path can pull a body without reimplementing the TCP
 // framing.
@@ -55,14 +55,14 @@ func verifyBody(res bodyResult, cid [32]byte) error {
 	return nil
 }
 
-// Fetch retrieves the body for cid from addr via the mycelium-peer binary.
+// Fetch retrieves the body for cid from addr via the spore-peer binary.
 // addr is host:port of the sender's peer transport. The body bytes are
 // returned AFTER verifying sha256(body) == cid, so a tampered or wrong body
 // never reaches the caller's decrypt. Caller then decrypts with the ECDH key
 // from the whisper pointer.
 func Fetch(ctx context.Context, binary, addr string, cid [32]byte) ([]byte, error) {
 	if binary == "" {
-		binary = "mycelium-peer"
+		binary = "spore-peer"
 	}
 	cidHex := hex.EncodeToString(cid[:])
 	tmp, err := os.CreateTemp("", "compost-body-*")

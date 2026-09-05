@@ -1,12 +1,12 @@
 # Model B — premium private remote-node + hosted-mailbox service
 
 *The service for phone / low-power users who can't run a DERO or XMR node.
-Phone holds the mycelium keys; the service is a BLIND courier — it relays and
-stores ciphertext, never keys or plaintext. Model B preserves mycelium's
+Phone holds the spore keys; the service is a BLIND courier — it relays and
+stores ciphertext, never keys or plaintext. Model B preserves spore's
 privacy promise for devices that can't self-host.*
 
 ## Why this exists
-A phone can't run a DERO node or a Monero node. But it CAN hold its mycelium
+A phone can't run a DERO node or a Monero node. But it CAN hold its spore
 keys and sign/decrypt locally. What a phone user needs from a service is:
 1. a **reachable, always-on node** (to send txs / read the chain), and
 2. an **always-on mailbox** (to receive long bodies / messages while offline).
@@ -39,7 +39,7 @@ content and (largely) metadata private** for a phone.
 ## Architecture (built pieces + what to add)
 ```
 phone (Termux/Android)
-   └ mycelium keys (local) — sign/decrypt on device
+   └ spore keys (local) — sign/decrypt on device
       └ -rpc <service-node>        (send txs)      [built: -rpc seam accepts any URL]
       └ mailbox run -privacy       (receive long)  [built: hosted mailbox, sender-blank]
            └ reachable over Tor/hidden service      [add: operator infra]

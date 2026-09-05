@@ -25,7 +25,7 @@ import (
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // DefaultRPCURL is the public Solana mainnet JSON-RPC endpoint used when none
@@ -92,7 +92,7 @@ func (b *Backend) signerFn() func(solana.PublicKey) *solana.PrivateKey {
 
 // PostPayload implements chain.Chain.
 //
-// It builds and submits a `deliver` instruction to the mycelium mailbox
+// It builds and submits a `deliver` instruction to the spore mailbox
 // program, posting the opaque payload (E2E envelope) to the RECIPIENT's inbox
 // PDA. The signer is the sender/payer and does NOT need to be the recipient —
 // anyone may deliver to an address (email semantics, matching the v3 program).

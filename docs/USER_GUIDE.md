@@ -1,23 +1,23 @@
-# Mycelium — user guide
+# Spore — user guide
 
-> **This guide is the DERO path.** Mycelium is multi-chain — the same core runs
-> on EVM, Solana and (pending live-verify) Monero via `mycelium msg ... -chain
+> **This guide is the DERO path.** Spore is multi-chain — the same core runs
+> on EVM, Solana and (pending live-verify) Monero via `spore msg ... -chain
 > dero|evm|xmr|solana`. See `README.md` for the chain-status table and
 > `docs/LIVE_NODES.md` for what's verified.
 
-Mycelium is a **no-relay private messenger on the DERO blockchain**. You write to
+Spore is a **no-relay private messenger on the DERO blockchain**. You write to
 a person's DERO address; the message reaches them without ever passing through
 a server you don't control. Messages are designed to *rot*: what lingers
 on-chain is a hash and a dead key, not readable content.
 
-This guide covers the `mycelium` CLI. Companion docs: `README.md` (overview),
+This guide covers the `spore` CLI. Companion docs: `README.md` (overview),
 `design.md` (threat model + status), `WHISPER.md` (the no-relay architecture),
 `UX_PREVIEW.html` (UI mockup).
 
-## 1. What mycelium is — the privacy promise in plain language
+## 1. What spore is — the privacy promise in plain language
 
 **The core claim.** Every DERO transaction already encrypts its payload
-point-to-point so that only the recipient's wallet can read it. Mycelium rides
+point-to-point so that only the recipient's wallet can read it. Spore rides
 that property instead of fighting it.
 
 - **Short messages ("whispers")** are tucked into the payload of a real DERO
@@ -41,12 +41,12 @@ limit, spelled out in section 7.
 
 For any messaging mode you need:
 
-1. **A DERO wallet running its RPC server.** Mycelium signs through the wallet.
+1. **A DERO wallet running its RPC server.** Spore signs through the wallet.
    Start your wallet with `--rpc-server`, which by default listens on
-   `http://127.0.0.1:20209/json_rpc`. Pass that URL to mycelium with `-rpc`.
+   `http://127.0.0.1:20209/json_rpc`. Pass that URL to spore with `-rpc`.
    If your wallet RPC is password-protected, add `-rpc-login user:pass`.
    You need a little DERO balance to pay transaction postage when sending.
-2. **A DERO node (daemon).** Mycelium resolves DERO names and confirms sends
+2. **A DERO node (daemon).** Spore resolves DERO names and confirms sends
    against a daemon's RPC, default `http://127.0.0.1:10102/json_rpc`.
    - **Run your own node for full privacy.** Then your wallet and your traffic
      touch only infrastructure you own.
@@ -54,7 +54,7 @@ For any messaging mode you need:
      convenience-vs-privacy tradeoff: a public daemon is fine for name
      resolution and confirming that a transaction was mined, but you are
      trusting that node operator more than if you ran your own.
-3. **The Rust `mycelium-peer` transport binary** (from the `derohe-rs` repo) —
+3. **The Rust `spore-peer` transport binary** (from the `derohe-rs` repo) —
    needed **only for long messages** (section 4). Short whispers don't need it.
 
 ## 3. Quick start: short messages (whispers)
@@ -67,21 +67,21 @@ of text. This is for a line, an invite, a ping — not prose.
 **Sender** — Alice writes to Bob's address (or his DERO name, section 6):
 
 ```sh
-mycelium whisper send \
+spore whisper send \
   -rpc http://127.0.0.1:20209/json_rpc \
   -daemon http://127.0.0.1:10102/json_rpc \
   -to <bob's dero1... address or name> \
   -msg "meet at the usual place"
 ```
 
-Mycelium prints the transaction id. Once mined (roughly one block), Bob can read
+Spore prints the transaction id. Once mined (roughly one block), Bob can read
 it.
 
 **Recipient** — Bob runs a poller that watches his own wallet for incoming
 whispers and prints them as they land:
 
 ```sh
-mycelium whisper recv -rpc http://127.0.0.1:20209/json_rpc
+spore whisper recv -rpc http://127.0.0.1:20209/json_rpc
 ```
 
 Each incoming whisper prints as `whisper <txid>: <text>`. Leave `recv` running,
@@ -91,7 +91,7 @@ pushed from a third-party server.
 ## 4. Long messages, end to end
 
 A whisper can't carry prose. For anything longer (or a file), the body is
-encrypted to the recipient's **mycelium long-term key**, held on the **sender's
+encrypted to the recipient's **spore long-term key**, held on the **sender's
 disk**, and a short *pointer-whisper* (sender ephemeral pubkey + body checksum)
 is sent on-chain. The recipient later fetches the body peer-to-peer, verifies
 its checksum (sha256), decrypts, and both sides let the keys rot.
@@ -99,7 +99,7 @@ its checksum (sha256), decrypts, and both sides let the keys rot.
 ### Step 0 — each side generates a long-term key once
 
 ```sh
-mycelium whisper keygen -key mycompost.key
+spore whisper keygen -key mycompost.key
 ```
 
 This writes a persistent private key to `mycompost.key` (permissions 0600) and
@@ -113,9 +113,9 @@ the private key file to yourself.
 ### Step 1 — sender encrypts and holds the body
 
 ```sh
-mycelium whisper send-long \
+spore whisper send-long \
   -to <recipient address or name> \
-  -recipient-pub <recipient's mycelium long-term pubkey hex> \
+  -recipient-pub <recipient's spore long-term pubkey hex> \
   -msg "the real long message goes here, as long as you like" \
   -out-dir myoutbox \
   -daemon http://127.0.0.1:10102/json_rpc \
@@ -124,13 +124,13 @@ mycelium whisper send-long \
 
 Use `-file /path/to/doc` instead of `-msg` to send a file's contents. The body
 is encrypted to the recipient's key and written to `-out-dir` (default
-`mycelium-outbox`) on **your** machine; a pointer-whisper goes on-chain. The
+`spore-outbox`) on **your** machine; a pointer-whisper goes on-chain. The
 body itself never rides a block.
 
-Mycelium then tells you to make the body fetchable:
+Spore then tells you to make the body fetchable:
 
 ```sh
-mycelium-peer serve --dir myoutbox
+spore-peer serve --dir myoutbox
 ```
 
 Run that in the background and leave it up until the recipient has fetched.
@@ -141,18 +141,18 @@ Share your reachable `host:port` with the recipient.
 Bob runs `whisper recv` with his key file and Alice's peer address:
 
 ```sh
-mycelium whisper recv \
+spore whisper recv \
   -rpc http://127.0.0.1:20209/json_rpc \
   -key mycompost.key \
   -peer-addr <alice's host:port> \
-  -peer-bin mycelium-peer \
+  -peer-bin spore-peer \
   -in-dir myinbox
 ```
 
 When the pointer-whisper for a long body arrives, `recv` fetches the ciphertext
 from Alice's peer transport, verifies its checksum against the pointer, and
 decrypts it with your key, printing `>>> long message (<N> bytes): ...`. Bodies
-are pulled into `-in-dir` (default `mycelium-inbox`).
+are pulled into `-in-dir` (default `spore-inbox`).
 
 **Both peers must be online at fetch time.** If Bob is down when Alice serves,
 the body waits on Alice's disk. This is the built-in store-and-forward tax of
@@ -179,8 +179,8 @@ point that relays short, TTL-bounded lines and tracks who's online.
 **Host the box:**
 
 ```sh
-mycelium channel -listen :19192        # CLI/chat API box
-mycelium web -listen :19192            # same box + an in-browser chat UI
+spore channel -listen :19192        # CLI/chat API box
+spore web -listen :19192            # same box + an in-browser chat UI
 ```
 
 `web` also accepts `-cert cert.pem -key key.pem` to serve over HTTPS, and
@@ -191,7 +191,7 @@ your wallet. `channel` and `web` both set TTLs via `-linettl` and presence via
 **Join a room:**
 
 ```sh
-mycelium chat -box http://host:19192 -channel general -nick alice
+spore chat -box http://host:19192 -channel general -nick alice
 ```
 
 Post a single line and exit with `-say "hello"`, print who's online with
@@ -199,8 +199,8 @@ Post a single line and exit with `-say "hello"`, print who's online with
 casual, semi-public lane — use whispers (sections 3–4) when you want the
 no-relay, no-box hard-privacy path.
 
-*(Mycelium also ships an older Model A "mailbox" mode — `mycelium daemon` +
-`mycelium send` — where each endpoint runs a durable inbox and bodies are pushed
+*(Spore also ships an older Model A "mailbox" mode — `spore daemon` +
+`spore send` — where each endpoint runs a durable inbox and bodies are pushed
 over HTTP then burned at a TTL. See the reference table below.)*
 
 ## 6. DERO names
@@ -209,10 +209,10 @@ Instead of a long `dero1...` address you can address someone by their DERO name
 in any `-to` flag:
 
 ```sh
-mycelium whisper send -to alice -msg "hello"
+spore whisper send -to alice -msg "hello"
 ```
 
-Mycelium resolves the name through the daemon you point at with `-daemon`
+Spore resolves the name through the daemon you point at with `-daemon`
 (default `http://127.0.0.1:10102/json_rpc`). A full `dero1...` address is used
 directly and needs no daemon. Name resolution is a convenience over your node
 — one more reason an honest operator runs their own.
@@ -227,7 +227,7 @@ bodies live on a sender's disk under a TTL, then are reaped and their keys
 erased. After a message is read (or its TTL passes), old bodies are gone even
 to the participants.
 
-Be clear-eyed about what mycelium does *not* hide:
+Be clear-eyed about what spore does *not* hide:
 
 - **Metadata persists.** A whisper is a real transaction; anyone watching the
   chain can see "a transaction happened at roughly this time." The ring
@@ -248,17 +248,17 @@ Be clear-eyed about what mycelium does *not* hide:
 
 | Command | What it does |
 |---|---|
-| `mycelium demo` | Runs an in-process send → receive → burn lifecycle with no node (sanity check). |
-| `mycelium whisper send -rpc URL [-rpc-login u:p] -daemon URL -to ADDR-OR-NAME -msg TEXT` | Send a short (~80–95 byte) no-relay message as a DERO tx payload. |
-| `mycelium whisper send-long -to ADDR-OR-NAME -recipient-pub HEX -file F \| -msg TEXT [-out-dir D] [-daemon URL] [-rpc URL]` | Encrypt a long body/file to the recipient's key, hold it locally, post a pointer-whisper. |
-| `mycelium whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B] [-in-dir D]` | Poll for incoming; print whispers; fetch + decrypt long bodies when `-key`/`-peer-addr` are set. |
-| `mycelium whisper keygen [-key KFILE]` | Create a persistent long-term pub/priv key (writes priv to `KFILE` at 0600). |
-| `mycelium keygen` | Print a fresh medium-term key (pub + priv hex) for the Model A mailbox mode. |
-| `mycelium daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]` | Run a recipient mailbox: durable HTTP inbox + chain scanner that decrypts and burns bodies (Model A). |
-| `mycelium send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-ttl 1h] [-rpc URL]` | Model A: encrypt to the recipient's medium-term key, push the body to their inbox, post an anchor. |
-| `mycelium channel -listen :PORT [-linettl 15m] [-presencettl 1m]` | Run an IRC-style channel box (public/private rooms, presence, TTL lines). |
-| `mycelium chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s] [-say TEXT] [-online]` | Join a channel box room: tail it, post a line, list who's online, or decrypt a private room. |
-| `mycelium web -listen :PORT [-cert C -key K] [-wallet-rpc URL]` | Run a channel box **and** serve the in-browser chat UI on the same origin; optional HTTPS. |
+| `spore demo` | Runs an in-process send → receive → burn lifecycle with no node (sanity check). |
+| `spore whisper send -rpc URL [-rpc-login u:p] -daemon URL -to ADDR-OR-NAME -msg TEXT` | Send a short (~80–95 byte) no-relay message as a DERO tx payload. |
+| `spore whisper send-long -to ADDR-OR-NAME -recipient-pub HEX -file F \| -msg TEXT [-out-dir D] [-daemon URL] [-rpc URL]` | Encrypt a long body/file to the recipient's key, hold it locally, post a pointer-whisper. |
+| `spore whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B] [-in-dir D]` | Poll for incoming; print whispers; fetch + decrypt long bodies when `-key`/`-peer-addr` are set. |
+| `spore whisper keygen [-key KFILE]` | Create a persistent long-term pub/priv key (writes priv to `KFILE` at 0600). |
+| `spore keygen` | Print a fresh medium-term key (pub + priv hex) for the Model A mailbox mode. |
+| `spore daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]` | Run a recipient mailbox: durable HTTP inbox + chain scanner that decrypts and burns bodies (Model A). |
+| `spore send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-ttl 1h] [-rpc URL]` | Model A: encrypt to the recipient's medium-term key, push the body to their inbox, post an anchor. |
+| `spore channel -listen :PORT [-linettl 15m] [-presencettl 1m]` | Run an IRC-style channel box (public/private rooms, presence, TTL lines). |
+| `spore chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s] [-say TEXT] [-online]` | Join a channel box room: tail it, post a line, list who's online, or decrypt a private room. |
+| `spore web -listen :PORT [-cert C -key K] [-wallet-rpc URL]` | Run a channel box **and** serve the in-browser chat UI on the same origin; optional HTTPS. |
 
 Every short-whisper and send command also accepts `-rpc-login user:pass` when
 your wallet RPC uses basic auth.

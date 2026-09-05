@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/rendezvous"
-	"github.com/liqdmetal/mycelium/internal/store"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/rendezvous"
+	"github.com/liqdmetal/spore/internal/store"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // TestAssembledNobodyButUs is the end-to-end assembled flow: Alice encrypts a

@@ -1,4 +1,4 @@
-// Command liveevmsend is a live end-to-end driver for the mycelium long-body
+// Command liveevmsend is a live end-to-end driver for the spore long-body
 // mailbox on an EVM/anvil dev node. It exercises the exact Model-A long-body
 // delivery path against a running `mailbox run` (evm backend, MyceliumMailbox
 // contract) using the real internal packages (longmsg/secure/whisper/store/evm):
@@ -25,12 +25,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/crypto"
-	"github.com/liqdmetal/mycelium/internal/evm"
-	"github.com/liqdmetal/mycelium/internal/longmsg"
-	"github.com/liqdmetal/mycelium/internal/secure"
-	"github.com/liqdmetal/mycelium/internal/store"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/evm"
+	"github.com/liqdmetal/spore/internal/longmsg"
+	"github.com/liqdmetal/spore/internal/secure"
+	"github.com/liqdmetal/spore/internal/store"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 const (

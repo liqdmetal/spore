@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/liqdmetal/mycelium/internal/anchor"
+	"github.com/liqdmetal/spore/internal/anchor"
 )
 
 // TestPointerRoundTrip: build + parse a pointer-whisper (K + C hashes).

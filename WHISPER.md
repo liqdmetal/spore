@@ -1,9 +1,9 @@
-# Mycelium whisper — no-relay messenger
+# Spore whisper — no-relay messenger
 
 *Whisper is now the chain-agnostic payload codec (`internal/whisper`: kind byte
 0x01 text / 0x02 pointer, length-prefixed) shared by every backend. On DERO —
 the tree this was proven on first — it is the native no-relay unicast described
-below. The same codec rides EVM/Solana/XMR via `mycelium msg ... -chain`,
+below. The same codec rides EVM/Solana/XMR via `spore msg ... -chain`,
 sealed by the m³ secure envelope on chains without native encryption. See
 `README.md` (chain-status table) and `design.md` (the secure layer).*
 
@@ -36,7 +36,7 @@ difference is WHERE the receiver looks:
 
 | | Where receiver sees it | Latency | Status |
 |---|---|---|---|
-| **L3 — mined anchor** | wallet `get_transfers` in:true (proven path) | ~1 block (~18s) | **BUILT** — `mycelium whisper send/recv`, unit-tested green |
+| **L3 — mined anchor** | wallet `get_transfers` in:true (proven path) | ~1 block (~18s) | **BUILT** — `spore whisper send/recv`, unit-tested green |
 | **L1 — mempool catch** | own node daemon `gettxpool` → `gettransactions` | ~1-2s | **Scaffolded** — `internal/daemon` pool watcher green; needs payload decrypt |
 
 ### L1 pool catch — why it needs Rust (and why that's cheap)
@@ -55,8 +55,8 @@ the `decode_as_json` fetch seam the Rust tool or a Go bridge can reuse.
 ## CLI (built, green)
 
 ```
-mycelium whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   # no-relay
-mycelium whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]       # mined catch
+spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   # no-relay
+spore whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]       # mined catch
 ```
 
 ## Remaining (not built)

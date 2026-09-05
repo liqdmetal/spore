@@ -1,10 +1,10 @@
 // mailbox — the always-on, cross-chain long-body recipient command.
 //
-//	mycelium mailbox run  -dir DIR [-chain CHAIN ...] [-listen :ADDR] [-peer-addr HOST:PORT]
-//	mycelium mailbox list -dir DIR
-//	mycelium mailbox get  -dir DIR <cid-or-txid>
+//	spore mailbox run  -dir DIR [-chain CHAIN ...] [-listen :ADDR] [-peer-addr HOST:PORT]
+//	spore mailbox list -dir DIR
+//	spore mailbox get  -dir DIR <cid-or-txid>
 //
-// A mailbox holds the recipient's long-term mycelium X25519 key + a durable
+// A mailbox holds the recipient's long-term spore X25519 key + a durable
 // store in -dir (key generated on first run and printed). It runs a body
 // server (so senders whose node isn't publicly reachable can HTTP-PUSH the
 // body by CID to /put/<cid>) plus a chain scanner over ANY backend
@@ -27,12 +27,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
-	"github.com/liqdmetal/mycelium/internal/mailbox"
-	"github.com/liqdmetal/mycelium/internal/peer"
-	"github.com/liqdmetal/mycelium/internal/secure"
-	"github.com/liqdmetal/mycelium/internal/store"
-	"github.com/liqdmetal/mycelium/internal/whisper"
+	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/mailbox"
+	"github.com/liqdmetal/spore/internal/peer"
+	"github.com/liqdmetal/spore/internal/secure"
+	"github.com/liqdmetal/spore/internal/store"
+	"github.com/liqdmetal/spore/internal/whisper"
 )
 
 // addChainFlags registers the chain backend selection flags (shared by the
@@ -69,14 +69,14 @@ func mailboxcmd(args []string) {
 
 func mailboxUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  mycelium mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR]
+  spore mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR]
              [-rpc URL] [-rpc-login u:p] [-from ADDR] [-keyfile SOL] [-program PID]
              [-peer-addr host:port] [-peer-bin B] [-interval 3s] [-reap 30s]
              [-min-height N]          (serve + scan + decrypt long bodies, always-on)
              [-cert CERT] [-key KEY]  (serve HTTPS when both set)
              [-token SECRET]          (require Authorization: Bearer SECRET on every route)
-  mycelium mailbox list -dir DIR      (show decrypted messages)
-  mycelium mailbox get -dir DIR <cid-or-txid>   (print one decrypted message)`)
+  spore mailbox list -dir DIR      (show decrypted messages)
+  spore mailbox get -dir DIR <cid-or-txid>   (print one decrypted message)`)
 }
 
 // mailboxKeyPath is where mailbox.Open persists the long-term scalar.
@@ -103,7 +103,7 @@ func mailboxRun(args []string) {
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval")
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	peerAddr := fs.String("peer-addr", "", "reachable sender peer (host:port) to pull bodies not pushed here")
-	peerBin := fs.String("peer-bin", "mycelium-peer", "path to the mycelium-peer binary")
+	peerBin := fs.String("peer-bin", "spore-peer", "path to the spore-peer binary")
 	privacy := fs.Bool("privacy", false, "hosted/privacy mode: don't record the sender in the message log")
 	cert := fs.String("cert", "", "TLS cert PEM path (serve HTTPS when set with -key)")
 	key := fs.String("key", "", "TLS key PEM path (serve HTTPS when set with -cert)")

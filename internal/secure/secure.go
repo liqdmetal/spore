@@ -1,4 +1,4 @@
-// Package secure provides end-to-end encryption for mycelium messages on
+// Package secure provides end-to-end encryption for spore messages on
 // chains that do NOT natively encrypt payloads (EVM calldata, XMR payment id
 // are public; only DERO encrypts to the recipient natively).
 //
@@ -24,7 +24,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/liqdmetal/mycelium/internal/crypto"
+	"github.com/liqdmetal/spore/internal/crypto"
 )
 
 // Envelope layout.
@@ -39,7 +39,7 @@ const (
 // tamper, or not an envelope).
 var ErrDecrypt = errors.New("secure: cannot decrypt envelope")
 
-// Encrypt wraps a canonical mycelium payload into a transport envelope for the
+// Encrypt wraps a canonical spore payload into a transport envelope for the
 // recipient. senderPriv is our long-term key; recipientPub is theirs.
 func Encrypt(senderPriv, recipientPub, canonical []byte) ([]byte, error) {
 	if len(senderPriv) != 32 || len(recipientPub) != 32 {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // mockChain is a chain.Chain that stores payloads in memory (no DERO). It

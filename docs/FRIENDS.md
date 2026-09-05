@@ -1,16 +1,16 @@
-# Chat with a friend using mycelium — 5-minute setup
+# Chat with a friend using spore — 5-minute setup
 
 Both you and your friend each need **two things running**: your DERO wallet's
-RPC server, and the `mycelium` binary. Everything else is a command.
+RPC server, and the `spore` binary. Everything else is a command.
 
 ## 1. Get the binaries
 
-**mycelium** (download, no Go needed):
-- Linux/macOS/Windows binaries: https://github.com/liqdmetal/mycelium/releases/latest
-- pick your OS, download `mycelium-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
+**spore** (download, no Go needed):
+- Linux/macOS/Windows binaries: https://github.com/liqdmetal/spore/releases/latest
+- pick your OS, download `spore-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
 
-**mycelium-peer** (only needed for LONG messages, not short whispers):
-- Build from https://github.com/liqdmetal/mycelium-peer (`cargo build --release`)
+**spore-peer** (only needed for LONG messages, not short whispers):
+- Build from https://github.com/liqdmetal/spore-peer (`cargo build --release`)
   or use the copy already on a shared box.
 
 ## 2. Start your wallet RPC
@@ -38,12 +38,12 @@ curl http://127.0.0.1:20209/json_rpc -H 'Content-Type: application/json' \
 
 **Receive** (leave running in a terminal):
 ```sh
-mycelium whisper recv -rpc http://127.0.0.1:20209/json_rpc
+spore whisper recv -rpc http://127.0.0.1:20209/json_rpc
 ```
 
 **Send** (your friend is Bob; address him by his DERO name or full address):
 ```sh
-mycelium whisper send \
+spore whisper send \
   -rpc http://127.0.0.1:20209/json_rpc \
   -daemon http://127.0.0.1:10102/json_rpc \
   -to bob -msg "meet at the usual place"
@@ -64,7 +64,7 @@ in the middle — each of you only ever talks to your own wallet + node.
 
 Short whispers top out ~90 bytes. For anything longer, see the full guide at
 `docs/USER_GUIDE.md` — it's keygen → send-long → serve → recv fetch. Both peers
-must be online to transfer the body, and the sender must run `mycelium-peer
+must be online to transfer the body, and the sender must run `spore-peer
 serve` so the recipient can pull it.
 
 ## Notes

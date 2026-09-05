@@ -8,7 +8,7 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
 1. **EVM** — ✅ **live-verified** on a local anvil node (below).
 2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
 3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
-   `mycelium msg send/recv -chain xmr` can verify end-to-end like DERO did.
+   `spore msg send/recv -chain xmr` can verify end-to-end like DERO did.
 
 ---
 
@@ -24,7 +24,7 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
 - **Remaining on XMR path** (after sync reaches tip):
   1. Create + fund a test wallet (`monero-wallet-cli`), note the seed.
   2. Run `monero-wallet-rpc` on `127.0.0.1:18082` (behind auth / SSH tunnel).
-  3. `mycelium msg send/recv -chain xmr` live round-trip.
+  3. `spore msg send/recv -chain xmr` live round-trip.
 
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet
@@ -60,14 +60,14 @@ box.
 5. monero-wallet-cli --generate-from-json or monero-wallet-cli --daemon-address
      127.0.0.1:18081  (create the test wallet; keep a copy of the seed)
 6. Fund wallet with a small XMR amount (postage ~ micro-XMR per tx)
-7. monero-wallet-rpc --wallet-file /opt/monero/wallet/mycelium \
+7. monero-wallet-rpc --wallet-file /opt/monero/wallet/spore \
      --rpc-bind-port 18082 --daemon-address 127.0.0.1:18081 \
-     --rpc-login mycelium:CHANGEME --password-file <...> &
+     --rpc-login spore:CHANGEME --password-file <...> &
 8. systemd units for monerod + monero-wallet-rpc (restart on boot)
 9. Verify locally on the box:
-     mycelium msg send -chain xmr -rpc http://127.0.0.1:18082/json_rpc \
+     spore msg send -chain xmr -rpc http://127.0.0.1:18082/json_rpc \
         -to <wallet-b-subaddr> -msg "hi"
-     mycelium msg recv -chain xmr -rpc http://127.0.0.1:18082/json_rpc
+     spore msg recv -chain xmr -rpc http://127.0.0.1:18082/json_rpc
 ```
 
 ### XMR note (repeat)
@@ -80,9 +80,9 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
 
 ### STATUS: EVM backend LIVE-VERIFIED — 2026-09-05
 - anvil 1.8.1 (foundry) running on Hetzner `127.0.0.1:8545` (`/var/log/anvil.log`).
-- `mycelium msg send -chain evm` → txid `0x69f8...9fa` mined in anvil block 1,
+- `spore msg send -chain evm` → txid `0x69f8...9fa` mined in anvil block 1,
   calldata `0x01001068692066726f...` (canonical kind 0x01 text "hi from evm live").
-- `mycelium msg recv -chain evm` on recipient account decoded it:
+- `spore msg recv -chain evm` on recipient account decoded it:
   `msg 0x69f8048e4b15be…: hi from evm live`.
 - **internal/evm is now LIVE-VERIFIED** (no longer mock-only). To prove it
   against a real chain later, point at a funded account on a real EVM RPC —
@@ -115,9 +115,9 @@ The backend logic is identical; only the RPC endpoint + funded key change.
 ```
 1. Install foundry (anvil) on the box:  curl -L https://foundry.paradigm.xyz | bash
 2. anvil --port 8545 &   (pre-funded accounts on 127.0.0.1:8545)
-3. mycelium msg send -chain evm -rpc http://127.0.0.1:8545 \
+3. spore msg send -chain evm -rpc http://127.0.0.1:8545 \
         -from 0x<anvil-account-0> -to 0x<account-1> -msg "hi"
-   mycelium msg recv -chain evm -rpc http://127.0.0.1:8545 -from 0x<account-0>
+   spore msg recv -chain evm -rpc http://127.0.0.1:8545 -from 0x<account-0>
 4. Round-trip a message between two anvil accounts.
 ```
 

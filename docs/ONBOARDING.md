@@ -1,4 +1,4 @@
-# Mycelium m³ — onboarding (zero → first message)
+# Spore m³ — onboarding (zero → first message)
 
 **What it is, in one line:** an E2E-encrypted, no-relay private messenger. You
 talk point-to-point (wallet-to-wallet, no server/relay in the middle), and
@@ -11,14 +11,14 @@ first, prose second.
 
 ```bash
 # either download from the releases page, or build from source:
-curl -LO https://github.com/liqdmetal/mycelium/releases/latest/download/mycelium-windows-amd64.exe
-#  ^ then run the rest of this guide as:  ./mycelium-windows-amd64.exe <cmd>
+curl -LO https://github.com/liqdmetal/spore/releases/latest/download/spore-windows-amd64.exe
+#  ^ then run the rest of this guide as:  ./spore-windows-amd64.exe <cmd>
 #  or, if you build/install it:
-go install github.com/liqdmetal/mycelium/cmd/mycelium@latest
+go install github.com/liqdmetal/spore/cmd/spore@latest
 ```
-Every command below is shown as `mycelium …` — substitute
-`./mycelium-windows-amd64.exe` if you downloaded the exe. Verify with
-`mycelium -version`.
+Every command below is shown as `spore …` — substitute
+`./spore-windows-amd64.exe` if you downloaded the exe. Verify with
+`spore -version`.
 
 ---
 
@@ -29,7 +29,7 @@ in-process (encrypt, deliver, TTL-expire, and reject after burn). Nothing
 touches a network.
 
 ```bash
-mycelium demo
+spore demo
 ```
 
 Expected tail: `OK: body evicted, key erased, anchor inert.` If that runs,
@@ -59,12 +59,12 @@ per-chain fast paths.
 ## Identity keys — the one concept to get
 
 For chains without native payload encryption (EVM, Solana, XMR) your message
-is wrapped in mycelium's own E2E envelope, keyed to a **mycelium identity
+is wrapped in spore's own E2E envelope, keyed to a **spore identity
 keypair** — *chain-independent*, one identity across every chain.
 
 ```bash
-mycelium msg keygen          # prints:  pub: <64 hex>   priv: <64 hex>
-mycelium msg keygen -out key # or write priv to a file (0600); keeps stdout clean
+spore msg keygen          # prints:  pub: <64 hex>   priv: <64 hex>
+spore msg keygen -out key # or write priv to a file (0600); keeps stdout clean
 ```
 
 - Give **`pub`** to anyone who will message you — they encrypt to it.
@@ -90,16 +90,16 @@ dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:2020
 
 # terminal 2 — send a first "hi" to a friend's dero1… address.
 # whisper's default RPC is 127.0.0.1:20209 — matches the wallet above.
-mycelium whisper send -to dero1q…your-friend… -msg "hi"
+spore whisper send -to dero1q…your-friend… -msg "hi"
 
 # same terminal / another — watch for replies (leave running):
-mycelium whisper recv
+spore whisper recv
 ```
 
 Full friend-to-friend setup: [`docs/PEER_SETUP.md`](PEER_SETUP.md).
 
 > The `msg` surface also drives DERO (`-chain dero`, the default) but needs an
-> explicit `-rpc URL`: `mycelium msg send -chain dero -rpc
+> explicit `-rpc URL`: `spore msg send -chain dero -rpc
 > http://127.0.0.1:20209/json_rpc -to dero1… -msg "hi"`. `whisper` exists purely
 > as the no-extra-flag DERO shortcut above.
 
@@ -107,7 +107,7 @@ Full friend-to-friend setup: [`docs/PEER_SETUP.md`](PEER_SETUP.md).
 
 ## Solana — live mainnet, self-test in one command
 
-A mycelium mailbox program is **deployed and verified on Solana mainnet**
+A spore mailbox program is **deployed and verified on Solana mainnet**
 (default program `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa`, v3). Today the
 client self-messages (delivers to your own inbox); cross-wallet delivery needs
 both parties running the backend.
@@ -118,10 +118,10 @@ both parties running the backend.
 # your signer keypair JSON (create with `solana-keygen new -o id.json`, or reuse one)
 
 # SEND to yourself — pass YOUR base58 public key as -to (not the literal word "self"):
-mycelium msg send -chain solana -keyfile id.json -to <your-solana-pubkey> -msg "hi"
+spore msg send -chain solana -keyfile id.json -to <your-solana-pubkey> -msg "hi"
 
 # RECEIVE from your own inbox:
-mycelium msg recv -chain solana -keyfile id.json
+spore msg recv -chain solana -keyfile id.json
 ```
 
 > ⚠️ `-to self` does **not** work — the backend needs a real base58 address.
@@ -137,13 +137,13 @@ node; not against a public EVM chain yet.** Needs your address + identity keys.
 
 ```bash
 anvil &                                # local dev node on http://127.0.0.1:8545
-mycelium msg keygen                    # one-time: your identity pub/priv
+spore msg keygen                    # one-time: your identity pub/priv
 
-mycelium msg send -chain evm -rpc http://127.0.0.1:8545 \
+spore msg send -chain evm -rpc http://127.0.0.1:8545 \
   -from <0x-your-anvil-account> -to <0x-friend-account> \
   -key <your-priv> -peer-pub <friend-pub> -msg "hi"
 
-mycelium msg recv -chain evm -rpc http://127.0.0.1:8545 \
+spore msg recv -chain evm -rpc http://127.0.0.1:8545 \
   -from <0x-your-anvil-account> -key <your-priv>
 ```
 
@@ -167,9 +167,9 @@ whisper path (XMR contributes identity only). The **mailbox** is the always-on
 cross-chain receiver that serves + scans + decrypts long bodies headless:
 
 ```bash
-mycelium mailbox run -dir ~/my-mb -chain dero -rpc http://127.0.0.1:20209/json_rpc   # serve+scan+decrypt (keep open)
-mycelium mailbox list -dir ~/my-mb                    # show what arrived
-mycelium mailbox get  -dir ~/my-mb <cid-or-txid>      # print one message
+spore mailbox run -dir ~/my-mb -chain dero -rpc http://127.0.0.1:20209/json_rpc   # serve+scan+decrypt (keep open)
+spore mailbox list -dir ~/my-mb                    # show what arrived
+spore mailbox get  -dir ~/my-mb <cid-or-txid>      # print one message
 ```
 
 `mailbox run` needs the same wallet RPC your DERO endpoint uses (`-rpc`, above
@@ -187,22 +187,22 @@ first run — give it to senders so they encrypt bodies to you.
 - **Solana** self-messaging today; cross-wallet needs both ends running the
   backend.
 - **No relay = point-to-point unicast.** Group *broadcast* still needs a relay
-  or smart contract. For shared-key rooms instead, use `mycelium web` or
-  `mycelium channel`.
+  or smart contract. For shared-key rooms instead, use `spore web` or
+  `spore channel`.
 
 ## Donations
 ```bash
-mycelium donate --all
+spore donate --all
 ```
 
 ## Commands at a glance
 ```
-mycelium demo                             in-process send→recv→burn (no chain)
-mycelium msg send|recv -chain dero|evm|xmr|solana     short message, any chain
-mycelium msg send-long -to dero1… -recipient-pub HEX -msg "long body"
-mycelium msg keygen                       identity keypair (E2E on non-DERO)
-mycelium mailbox run|list|get             always-on cross-chain long-body receiver
-mycelium whisper send|recv                DERO no-relay short (default -chain dero)
-mycelium donate [chain] | --all           per-chain donation rail
-mycelium web / channel / chat             browser chat / IRC-style rooms (DERO)
+spore demo                             in-process send→recv→burn (no chain)
+spore msg send|recv -chain dero|evm|xmr|solana     short message, any chain
+spore msg send-long -to dero1… -recipient-pub HEX -msg "long body"
+spore msg keygen                       identity keypair (E2E on non-DERO)
+spore mailbox run|list|get             always-on cross-chain long-body receiver
+spore whisper send|recv                DERO no-relay short (default -chain dero)
+spore donate [chain] | --all           per-chain donation rail
+spore web / channel / chat             browser chat / IRC-style rooms (DERO)
 ```

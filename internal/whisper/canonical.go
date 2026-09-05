@@ -1,6 +1,6 @@
 // Canonical m³ payload encoding — chain-agnostic.
 //
-// A mycelium message has ONE canonical wire form regardless of which chain
+// A spore message has ONE canonical wire form regardless of which chain
 // carries it (DERO CBOR args, EVM calldata, Monero tx_extra). This keeps the
 // crypto/core identical across trees; only the transport wrapping differs.
 //
@@ -17,7 +17,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // Canonical message kinds.

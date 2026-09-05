@@ -1,6 +1,6 @@
-// status — the mycelium HUD: connection health at a glance.
+// status — the spore HUD: connection health at a glance.
 //
-//	mycelium status [-chain dero|evm|xmr|solana ...] [-mailbox ADDR] [-timeout 5s]
+//	spore status [-chain dero|evm|xmr|solana ...] [-mailbox ADDR] [-timeout 5s]
 //
 // Reports per configured chain whether the RPC/wallet endpoint is reachable,
 // our address, and the current chain height — plus whether a mailbox (if one
@@ -16,7 +16,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // statusProbe is one connection's health result.
@@ -110,7 +110,7 @@ func probeMailbox(ctx context.Context, base string) statusProbe {
 
 // renderStatus prints the HUD.
 func renderStatus(probes []statusProbe) {
-	fmt.Println("mycelium status")
+	fmt.Println("spore status")
 	fmt.Println("---------------")
 	anyDown := false
 	for _, p := range probes {

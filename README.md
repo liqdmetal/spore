@@ -1,4 +1,4 @@
-# Mycelium — m³ · Mycelium Multi-chain Messenger
+# Spore — m³ · Multi-chain Messenger
 
 **In one line:** an E2E-encrypted, **no-relay** private messenger — you talk
 wallet-to-wallet over DERO, EVM, Solana, or Monero; no server, relay, or box
@@ -8,7 +8,7 @@ sits in the middle, and messages rot by design.
 EVM is verified on a local node (dev); XMR backend is built but **not yet live**.
 
 **Want to send your first message? → [`docs/ONBOARDING.md`](docs/ONBOARDING.md)**
-(run `mycelium demo` first — it works with no chain, no wallet).
+(run `spore demo` first — it works with no chain, no wallet).
 
 ---
 
@@ -16,11 +16,12 @@ EVM is verified on a local node (dev); XMR backend is built but **not yet live**
 
 In a forest, trees look separate — but underground they are joined by a shared
 mycorrhizal network through which they exchange nutrients and warn each other.
-That is the model here:
+That is the model here — Spore is the messenger of the Spore stack
+(hyphae carry it; the Rhizome Sea is the commons it travels across):
 
 - **Trees = the users / endpoints.** Each is an independent wallet + node on
   its own chain (DERO, EVM, Solana, Monero…). Separate canopies, self-sovereign.
-- **Mycelium = the substrate running underneath.** The private, no-relay
+- **Spore = the substrate running underneath.** The private, no-relay
   transport that lets any tree signal another — quietly, point-to-point, no
   relay or box in between.
 - **The common mycorrhizal network (m³)** is what emerges: trees on different
@@ -85,7 +86,7 @@ carry no plaintext — only the recipient's private key decrypts.
   sealed by the m³ secure envelope.
 - **No relay**: a whisper is a real tx that P2P-fans to the recipient's own
   node. No intermediary ever holds both halves of a conversation.
-- **Mycelium**: bodies are TTL-evicted; keys are ephemeral and erased; the
+- **Spore**: bodies are TTL-evicted; keys are ephemeral and erased; the
   on-chain record is a hash + a dead key. Old messages become unrecoverable.
 - **Honest limits**: "a tx happened at ~time" is visible chain-wide (DERO's ring
   sig hides the sender; EVM/Solana/XMR expose tx metadata — content stays
@@ -97,9 +98,9 @@ carry no plaintext — only the recipient's private key decrypts.
 ## CLI
 
 ```
-mycelium demo | keygen | daemon | send | channel | chat | web | donate
-mycelium whisper send|send-long|recv|keygen          # DERO no-relay unicast
-mycelium msg send|recv|send-long|keygen -chain dero|evm|xmr|solana   # multi-chain
+spore demo | keygen | daemon | send | channel | chat | web | donate
+spore whisper send|send-long|recv|keygen          # DERO no-relay unicast
+spore msg send|recv|send-long|keygen -chain dero|evm|xmr|solana   # multi-chain
 ```
 
 `msg` dispatches to the right backend via `internal/backend` (default `-chain
@@ -115,9 +116,9 @@ go test ./...
 
 ## Peer setup (message a friend)
 
-Mycelium is **no-relay**: you and a friend each run a wallet, no server in
+Spore is **no-relay**: you and a friend each run a wallet, no server in
 between. **Start with [`docs/ONBOARDING.md`](docs/ONBOARDING.md)** — it's the
-status-first, copy-paste "first message" guide (`mycelium demo` works with no
+status-first, copy-paste "first message" guide (`spore demo` works with no
 chain). The DERO friend path in one breath:
 
 ```bash
@@ -126,9 +127,9 @@ chain). The DERO friend path in one breath:
 dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
 
 # terminal 2 — SEND to your friend's dero1… address:
-mycelium whisper send -to <friend-dero1-addr> -msg "hi"
+spore whisper send -to <friend-dero1-addr> -msg "hi"
 #   RECEIVE (keep running):
-mycelium whisper recv
+spore whisper recv
 ```
 
 Full walkthrough: [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md).
@@ -143,5 +144,5 @@ Full walkthrough: [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md).
 
 ## License
 
-BSD 3-Clause. Mycelium is clean-room Go; it imports no derohe source. derohe-rs
+BSD 3-Clause. Spore is clean-room Go; it imports no derohe source. derohe-rs
 (the Rust port used for L1) is separately BSD-3-Clause.

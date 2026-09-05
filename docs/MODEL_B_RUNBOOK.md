@@ -2,30 +2,30 @@
 
 *How an operator provisions a phone user a private remote node + hosted
 mailbox. Phone holds keys; the service is the blind courier. Everything below
-uses the shipped mycelium binary (v0.2.x) on a Linux box like the Hetzner node.*
+uses the shipped spore binary (v0.2.x) on a Linux box like the Hetzner node.*
 
 ## 0. What you're running (one per paid user, or shared for free tier)
 1. A **node/wallet RPC** the phone's `-rpc` points at (DERO wallet RPC, or a
    chain RPC for EVM/Solana/XMR). Reuse the DERO node already on the box.
-2. A **hosted mailbox** (`mycelium mailbox run -privacy`) the phone receives
+2. A **hosted mailbox** (`spore mailbox run -privacy`) the phone receives
    long bodies through.
 
 Phone commands once provisioned:
 ```
 # on the phone (Termux):
-mycelium msg send -chain dero -rpc https://<your-host>:<port>/json_rpc \
+spore msg send -chain dero -rpc https://<your-host>:<port>/json_rpc \
   -to <friend-dero1...> -msg "hi"
-mycelium mailbox run -dir ~/mb -chain dero -rpc <your-rpc> -privacy \
+spore mailbox run -dir ~/mb -chain dero -rpc <your-rpc> -privacy \
   -token <user-token> -cert /path/cert.pem   # receive, secure
 ```
 
 ## 1. Provision a user (operator side)
 ```bash
 # 1. user's mailbox dir + key (fresh, per user)
-MBROOT=/var/mycelium/users
+MBROOT=/var/spore/users
 mkdir -p "$MBROOT/$user"
 # 2. run their mailbox with TLS + token, bound to their own port
-mycelium mailbox run -dir "$MBROOT/$user" \
+spore mailbox run -dir "$MBROOT/$user" \
   -chain dero -rpc http://127.0.0.1:10102/json_rpc \
   -listen 0.0.0.0:$PORT -privacy -token "$TOKEN" \
   -cert /etc/letsencrypt/live/$HOST/fullchain.pem \
@@ -60,10 +60,10 @@ The mailbox's durable log only holds decrypted text + txid (no Sender in
 Tier per the plan: free = shared node + small mailbox; premium = private
 endpoint + bigger mailbox + privacy/padding (all shipped code). Provisioning +
 billing automation is the remaining ops work (a control script / panel), not
-core mycelium code.
+core spore code.
 
 ## Sanity checklist
-- [ ] `mycelium demo` runs (binary sane)
+- [ ] `spore demo` runs (binary sane)
 - [ ] mailbox starts, prints pubkey, serves on its TLS port
 - [ ] `curl -k -H "Authorization: Bearer $TOKEN" https://host:PORT/list` returns 200/JSON
 - [ ] same without token returns 401

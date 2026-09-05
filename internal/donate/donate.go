@@ -1,11 +1,11 @@
-// Package donate holds the per-chain donation rail for the mycelium network.
+// Package donate holds the per-chain donation rail for the spore network.
 //
-// A mycelium node/relay operator can advertise one address per supported
+// A spore node/relay operator can advertise one address per supported
 // chain (DERO / XMR / EVM) as the donation rail. Because identity = your
 // wallet address on whatever chain you're on, donation is just a config
 // mapping {chain -> address}. The CLI prints the right one for the user's
-// current chain (mycelium donate <chain>), and a relay operator publishes all
-// of them (mycelium donate --all).
+// current chain (spore donate <chain>), and a relay operator publishes all
+// of them (spore donate --all).
 package donate
 
 import (

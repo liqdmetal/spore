@@ -1,10 +1,10 @@
-# Mycelium — a compostable multi-chain messenger
+# Spore — a compostable multi-chain messenger
 
 Messages that rot. The body never enters a block; the key never survives the
 exchange. What stays on-chain is a hash and dead public keys — permanently
 inert no matter what breaks later.
 
-Mycelium is chain-agnostic by design. The **seam** (`internal/chain`: the
+Spore is chain-agnostic by design. The **seam** (`internal/chain`: the
 `Chain` interface + `Watch` poller) is what any chain plugs into; `internal/whisper`
 is the canonical codec; `internal/secure` is the E2E envelope for chains that
 don't encrypt natively. This doc spells out the design on the tree that proved
@@ -75,7 +75,7 @@ inboxes that store envelopes; the program/contract never holds a key.
   message).
 - Body CID = sha256(ciphertext): retrieval key + on-chain commitment + tamper
   check (a fetched body whose sha256 ≠ CID is rejected before decrypt).
-- Key rotation + erasure = the "mycelium": after fetch / on rotation, old bodies
+- Key rotation + erasure = the "spore": after fetch / on rotation, old bodies
   are unrecoverable even by participants.
 
 ## Honest residual limits
@@ -96,7 +96,7 @@ inboxes that store envelopes; the program/contract never holds a key.
 
 ## Status
 
-- **DERO** — live, mainnet-verified (2026-09-05): `mycelium whisper send`→anchor
+- **DERO** — live, mainnet-verified (2026-09-05): `spore whisper send`→anchor
   mined, `whisper recv`→decrypted exactly once, long nobody-but-us path proven
   live, bodies survive restart (DiskStore). Whisper, rendezvous, and longmsg are
   unit-tested green (incl. wrong-key + tamper rejection). Channel box + web chat
@@ -121,11 +121,11 @@ Full nobody-but-us long-message path proven live on the node:
 1. Alice `whisper keygen` + `whisper send-long` → body encrypted to Bob's key,
    held on Alice's node (disk 0600), pointer-whisper (C cid + K ephemeral) mined
    on-chain.
-2. Alice runs `mycelium-peer serve` on her reachable node.
+2. Alice runs `spore-peer serve` on her reachable node.
 3. Bob `whisper recv -key bob.key -peer-addr alice:port` → saw the pointer,
    fetched the body over the peer transport, decrypted with his key → printed
    the message. Nobody but Alice and Bob ever held it.
 
-CLI: `mycelium whisper {send|send-long|recv|keygen}` + the Rust `mycelium-peer`
-transport (derohe-rs); the multi-chain `mycelium msg ... -chain` path is the
+CLI: `spore whisper {send|send-long|recv|keygen}` + the Rust `spore-peer`
+transport (derohe-rs); the multi-chain `spore msg ... -chain` path is the
 same model on EVM/Solana/XMR.

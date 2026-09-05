@@ -1,6 +1,6 @@
-# Mycelium — peer setup for friends
+# Spore — peer setup for friends
 
-Mycelium m³ is a **no-relay private messenger**. Two people talk **point to
+Spore m³ is a **no-relay private messenger**. Two people talk **point to
 point**: a whisper rides a real DERO transaction, encrypted end-to-end by
 DERO. There is no server, no box, no operator in the middle — but that means
 **each person runs their own endpoint**. This guide is the 5-minute friend path.
@@ -13,8 +13,8 @@ DERO. There is no server, no box, no operator in the middle — but that means
 
 ## What you need (one-time)
 
-1. **The `mycelium` binary** — download `mycelium-windows-amd64.exe` from the
-   [releases page](https://github.com/liqdmetal/mycelium/releases).
+1. **The `spore` binary** — download `spore-windows-amd64.exe` from the
+   [releases page](https://github.com/liqdmetal/spore/releases).
 2. **A DERO wallet** — install [dero-wallet-cli](https://github.com/deroproject/derohe/releases)
    and create one. You need a tiny bit of DERO for postage (~0.001 DERO per
    message) and a one-time registration fee.
@@ -41,8 +41,8 @@ balance lasts a long time.
 dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
 ```
 
-Leave it running. Mycelium whispers send and receive **through this wallet** —
-you do not run a node. `20209` is the port mycelium's `whisper` commands expect
+Leave it running. Spore whispers send and receive **through this wallet** —
+you do not run a node. `20209` is the port spore's `whisper` commands expect
 by default.
 
 ## Step 3 — message!
@@ -50,19 +50,19 @@ by default.
 In a second terminal:
 
 ```bash
-# your wallet RPC is on 20209 (mycelium's default, so -rpc is optional).
+# your wallet RPC is on 20209 (spore's default, so -rpc is optional).
 # SEND a whisper (<=80 chars)
-mycelium-windows-amd64.exe whisper send \
+spore-windows-amd64.exe whisper send \
   -to dero1q...friend-address... \
-  -msg "hey from mycelium"
+  -msg "hey from spore"
 
 # RECEIVE (keep running to watch for messages)
-mycelium-windows-amd64.exe whisper recv
+spore-windows-amd64.exe whisper recv
 ```
 
 When a message arrives you'll see:
 ```
-whisper 954f149f…: hey from mycelium
+whisper 954f149f…: hey from spore
 ```
 
 That's it. If someone else runs the same three steps with **their** wallet, you
@@ -89,13 +89,13 @@ but the two of you.
   `README.md` for their precise status.
 - A friend must run their **own** wallet + `whisper recv`. This is the privacy
   model: no shared box to subpoena, no operator. The cost is that "just chat in
-  a browser with no setup" isn't the experience — use `mycelium web`
+  a browser with no setup" isn't the experience — use `spore web`
   (shared-key rooms) for that instead.
 
 ## Dev / power-user
 
 ```bash
-go install github.com/liqdmetal/mycelium/cmd/mycelium@latest
-mycelium -version
-mycelium donate --all   # per-chain donation rail
+go install github.com/liqdmetal/spore/cmd/spore@latest
+spore -version
+spore donate --all   # per-chain donation rail
 ```

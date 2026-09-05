@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liqdmetal/mycelium/internal/chain"
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // mock EVM JSON-RPC node.
