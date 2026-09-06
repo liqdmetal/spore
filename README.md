@@ -45,6 +45,26 @@ poller) is the seam, and `internal/whisper` is the canonical payload codec.
 Everything above — the crypto, rendezvous, rooms, body store, UI — sits above
 the chain and never touches consensus.
 
+## One home node, every device (the privacy default)
+
+There are two ways to run Spore. **Run your own home node** — it is your
+server, and only yours:
+
+| You run (encouraged default) | You run only if you have NO home node |
+|---|---|
+| An always-on **home node** (your DERO/Solana node + `spore mailbox run`, optionally `spore relay run`). It **is** the server. | A paid **hosted service** (Model B) runs a node + mailbox for you. |
+| Your **phone/laptop dial your own home node** over TLS + token auth — the phone holds the keys. | Your phone dials the **service's** node/mailbox (blind courier, never keys). |
+| No third party ever sits in the middle. Your data, your server. | The service sees traffic happened + timing (content stays E2E-private). |
+
+**Run a home node.** Your always-on node receives + decrypts for you, your
+phone connects to *your* machine, and no service is in between. → **Start
+here: [`docs/HOME_NODE.md`](docs/HOME_NODE.md)** (copy-paste).
+
+**No home node?** A phone can't run a DERO node, so Spore's hosted service is
+the fallback: the phone still holds the keys; the service is a blind courier.
+→ [`docs/MODEL_B_SERVICE.md`](docs/MODEL_B_SERVICE.md) + operator
+[`docs/MODEL_B_RUNBOOK.md`](docs/MODEL_B_RUNBOOK.md).
+
 ## Chain status
 
 | Tree | Backend | Payload seam | Secrecy | Status |

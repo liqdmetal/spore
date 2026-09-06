@@ -9,14 +9,14 @@ A functional single-file messenger UI that talks to **your own** DERO wallet RPC
 on-chain and execute locally. Names resolve via the daemon's `DERO.NameToAddress`.
 
 ## The honest boundary (read this)
-A browser-hosted TELA doc **cannot shell out to `mycelium-peer`** — browsers have
+A browser-hosted TELA doc **cannot shell out to `spore-peer`** — browsers have
 no process/child-process access. So inside the doc:
 - **whisper (short, no-relay)** — fully works: it posts the 2-arg payload via
   your wallet's `transfer` and polls `get_transfers`.
 - **long nobody-but-us body** — the doc detects the pointer-whisper and shows
   "fetch via your key", but the actual P2P fetch+decrypt must run on the CLI
-  (`mycelium whisper recv -key … -peer-addr …`) because that shells to
-  `mycelium-peer`. TELA is the UI over your local wallet/daemon, not a full P2P
+  (`spore whisper recv -key … -peer-addr …`) because that shells to
+  `spore-peer`. TELA is the UI over your local wallet/daemon, not a full P2P
   client.
 
 That split is structural, not a shortcoming of this file — it's how TELA's
@@ -41,7 +41,7 @@ tela/mycelium-messenger/
 
 ## CORS note
 The doc calls your wallet `/json_rpc`. If the wallet binds `127.0.0.1`, serve the
-doc from a same-origin page OR go through the `mycelium web` proxy (which adds
+doc from a same-origin page OR go through the `spore web` proxy (which adds
 `/whisper/*` endpoints + CORS). Otherwise the browser blocks cross-origin calls
 to the wallet.
 
