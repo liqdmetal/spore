@@ -48,6 +48,8 @@ type Mailbox struct {
 	st  store.Store // durable ciphertext store (HTTP-pushed + local bodies)
 	ep  *longmsg.Endpoint
 	log *MessageLog
+	// logTTL bounds how long decrypted messages persist on disk (rot).
+	logTTL time.Duration
 	// noSenderLog, when set, blanks the Sender field before a message is
 	// persisted to the durable plaintext log. A Model-B hosted mailbox operator
 	// (who reads the log) then cannot tell WHO sent each message — only that one
@@ -57,10 +59,26 @@ type Mailbox struct {
 	noSenderLog bool
 }
 
+// CorruptLogLines reports how many undecryptable log lines were skipped on the
+// last read/trim (health signal).
+func (m *Mailbox) CorruptLogLines() int { return m.log.CorruptLines() }
+
 // SetNoSenderLog toggles whether the durable log records the sender. Intended
 // for a hosted/Model-B mailbox where the operator must not learn who messages
 // whom. Safe to call at any time; affects messages persisted after the call.
 func (m *Mailbox) SetNoSenderLog(on bool) { m.noSenderLog = on }
+
+// SetLogTTL sets how long decrypted messages stay in the on-disk log before
+// TrimLog rewrites them away (default DefaultLogTTL; <= 0 disables trimming).
+func (m *Mailbox) SetLogTTL(ttl time.Duration) { m.logTTL = ttl }
+
+// TrimLog rewrites the message log, dropping messages older than the log TTL
+// (rot, audit H5), re-encrypting any legacy plaintext lines, and dropping
+// corrupt lines. Returns the number of messages kept. Call periodically
+// (mailbox run does, on the reap cadence).
+func (m *Mailbox) TrimLog(now time.Time) (int, error) {
+	return m.log.Trim(now, m.logTTL)
+}
 
 // sanitize blanks metadata the mailbox operator should not retain when
 // noSenderLog is set.
@@ -119,11 +137,17 @@ func Open(dir string, priv []byte) (*Mailbox, error) {
 		crypto.Zero(privRaw)
 		return nil, err
 	}
-	ml, err := OpenLog(filepath.Join(dir, msgsFile))
+	// The message log is encrypted with a key derived from the mailbox scalar
+	// (audit H5: the old plaintext JSONL log defeated the compost model).
+	logKey, err := LogKey(privRaw)
 	if err != nil {
 		return nil, err
 	}
-	return &Mailbox{dir: dir, st: st, ep: ep, log: ml}, nil
+	ml, err := OpenLog(filepath.Join(dir, msgsFile), logKey)
+	if err != nil {
+		return nil, err
+	}
+	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL}, nil
 }
 
 // Dir returns the mailbox's data directory.

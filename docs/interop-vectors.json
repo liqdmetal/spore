@@ -1,0 +1,41 @@
+{
+  "_comment": "Golden interop vectors for the Spore wire formats. Source of truth: docs/WIRE_SPEC.md. Regenerate: go test ./internal/secure/ -run TestGenerateWireSpecVectors.",
+  "canonical": {
+    "encode_pointer_body_cid": "9b380613c88bc1086d3cf1a83612b9aed39f056a3169a6380df78c97ebc4cb76",
+    "encode_pointer_eph_pub": "4eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b652",
+    "encode_pointer_hex": "0200404eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b6529b380613c88bc1086d3cf1a83612b9aed39f056a3169a6380df78c97ebc4cb76",
+    "encode_text_hex": "01001a6d656574206d65206174207468652067617264656e2067617465",
+    "encode_text_input": "meet me at the garden gate"
+  },
+  "derived_keys": {
+    "aead_key": "6a779e73161f4be916a466b9663f321fae2331c7445d762e8b60b162bb6ad0dc",
+    "alice_sig_pub": "501476813e6fef765a64ea71af81d739affa357d50b273cee52c8cb7b3e23320",
+    "alice_x25519_pub": "d729111d729ed68bcb5b7ed6ac2fcc2210cc9febc89ecee152880230e206ac60",
+    "bob_x25519_pub": "6e8e9280f5cee390ddd633c3f5fe58ef7ac441d27a1c11d90bcfbe33591dc364",
+    "eph_x25519_pub": "4eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b652"
+  },
+  "envelope_v2_pointer": {
+    "expected_payload_hex": "e1501476813e6fef765a64ea71af81d739affa357d50b273cee52c8cb7b3e233204eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b65248afaa80a6bf22b8b38bf2ff0dfcd68a6614a40fa383da88c589fe0cc40b9464c369f66daa76ea73459b451c3216c9391f078c478d4480c1805557eadcfad4ec5c9a8ba839a4249f8051b39be7cc80620405093fe0e2dc0b6a323dda84cd670c244144cdca32f0cb5abb8a8c6c9f9951f2f705b1923ff3547022eb821cee09a36cc51f2ec7c2cdaf44829e21aee0c31eb7cf194fbfa371517190f176db0a7288a3965e6fff1f25cda883b1"
+  },
+  "envelope_v2_text": {
+    "ciphertext_hex": "693267f90f8d8f123cce64de28388ea55de865cb11099f763a66c34625a8cfd84835c55cec65a40278dfe113af",
+    "eph_x25519_priv": "75c6afb74edec95a4a41871823222cd92e7883b550ec1fcd0c61e0f50290c932",
+    "expected_payload_hex": "e1501476813e6fef765a64ea71af81d739affa357d50b273cee52c8cb7b3e233204eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b65248afaa80a6bf22b8b38bf2ff0dfcd68a6614a40fa383da8863c01dd546697c62e2cf366086e6d1b8c1f56671c35cc4ffabe6ca688ed597d4ee29197dcea64ad95db88d47961dbc7cf376352d6944d1bdf55d655dd3b56b0e693267f90f8d8f123cce64de28388ea55de865cb11099f763a66c34625a8cfd84835c55cec65a40278dfe113af",
+    "inner_canonical_hex": "01001a6d656574206d65206174207468652067617264656e2067617465",
+    "nonce": "48afaa80a6bf22b8b38bf2ff0dfcd68a6614a40fa383da88",
+    "recipient_x25519_pub": "6e8e9280f5cee390ddd633c3f5fe58ef7ac441d27a1c11d90bcfbe33591dc364",
+    "sender_x25519_priv": "44024e185811e5a9ecb1ec6d2b5e307303a3c34f5a488a4c3d079d361bc0b16d"
+  },
+  "fixed_scalars": {
+    "alice_x25519_priv": "44024e185811e5a9ecb1ec6d2b5e307303a3c34f5a488a4c3d079d361bc0b16d",
+    "bob_x25519_priv": "a6bd83bf8534dd6d6ac9abcfd8648b10582b61b9b5e916c59ab8df223216d4d0",
+    "eph_x25519_priv": "75c6afb74edec95a4a41871823222cd92e7883b550ec1fcd0c61e0f50290c932",
+    "nonce_24": "48afaa80a6bf22b8b38bf2ff0dfcd68a6614a40fa383da88"
+  },
+  "spore_peer_frame": {
+    "body_hex": "34343434abcd",
+    "expected_err_frame": "0e00000001343034206e6f7420666f756e64",
+    "expected_err_text": "404 not found",
+    "expected_ok_frame": "070000000034343434abcd"
+  }
+}

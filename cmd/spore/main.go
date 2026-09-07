@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -35,6 +36,7 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/channel"
 	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/safehttp"
 	derodaemon "github.com/liqdmetal/spore/internal/daemon"
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/donate"
@@ -163,9 +165,12 @@ func addRPCFlags(fs *flag.FlagSet) {
 func keygen() {
 	e, err := session.New(store.NewMemStore())
 	check(err)
+	sigPub, err := secure.SigPubOf(e.PrivKey())
+	check(err)
 	fmt.Printf("pub:  %s\n", hex.EncodeToString(e.PublicKey()))
+	fmt.Printf("sig:  %s\n", hex.EncodeToString(sigPub))
 	fmt.Printf("priv: %s\n", hex.EncodeToString(e.PrivKey()))
-	fmt.Println("give 'pub' to senders; run your daemon with 'priv'.")
+	fmt.Println("give 'pub' AND 'sig' to senders; run your daemon with 'priv'.")
 }
 
 // daemon runs a recipient's mailbox: an HTTP inbox that accepts pushed bodies
@@ -174,7 +179,7 @@ func keygen() {
 // third party. Bodies are reaped once their TTL passes.
 func daemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	listen := fs.String("listen", ":19191", "mailbox listen address (sender inbox)")
+	listen := fs.String("listen", "127.0.0.1:19191", "mailbox listen address (sender inbox; default loopback-only)")
 	dir := fs.String("dir", "", "data dir for the durable body store")
 	priv := fs.String("priv", "", "our medium-term privkey (hex)")
 	interval := fs.Duration("interval", 5*time.Second, "anchor poll interval")
@@ -185,6 +190,12 @@ func daemon(args []string) {
 	if *dir == "" || *priv == "" {
 		fmt.Fprintln(os.Stderr, "daemon: -dir and -priv required")
 		fs.Usage()
+		os.Exit(2)
+	}
+	// Exposure policy (audit C2): the daemon inbox accepts pushed bodies from
+	// the network; refuse a non-loopback bind without a token.
+	if err := safehttp.CheckBind(*listen, "", "daemon"); err != nil {
+		fmt.Fprintln(os.Stderr, "daemon:", err)
 		os.Exit(2)
 	}
 	privRaw, err := hex.DecodeString(*priv)
@@ -285,7 +296,7 @@ func send(args []string) {
 // stores a private room's ciphertext without being able to read it.
 func channelserve(args []string) {
 	fs := flag.NewFlagSet("channel", flag.ExitOnError)
-	listen := fs.String("listen", ":19192", "listen address")
+	listen := fs.String("listen", "127.0.0.1:19192", "listen address (default loopback-only)")
 	linettl := fs.Duration("linettl", 7*24*time.Hour, "line retention (rooms compost after this)")
 	presencettl := fs.Duration("presencettl", time.Minute, "presence window")
 	maxlines := fs.Int("maxlines", 2000, "per-channel ring cap")
@@ -308,6 +319,13 @@ func channelserve(args []string) {
 			ReapEvery: 30 * time.Second, MaxLines: *maxlines,
 		})
 	}
+	// Exposure policy (audit C3/M3): the box relays any room it is given and
+	// its sender names are client-supplied — refuse a network bind without a
+	// token and serve the tokened surface.
+	if err := safehttp.CheckBind(*listen, "", "channel"); err != nil {
+		fmt.Fprintln(os.Stderr, "channel:", err)
+		os.Exit(2)
+	}
 	log.Printf("channel box on %s (lines rot after %s; presence %s)", *listen, *linettl, *presencettl)
 	log.Fatal(http.ListenAndServe(*listen, channel.NewServer(b)))
 }
@@ -318,7 +336,7 @@ func channelserve(args []string) {
 // pages too.
 func webchat(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
-	listen := fs.String("listen", ":19192", "listen address")
+	listen := fs.String("listen", "127.0.0.1:19192", "listen address (default loopback-only)")
 	linettl := fs.Duration("linettl", 7*24*time.Hour, "line retention (rooms compost after this)")
 	presencettl := fs.Duration("presencettl", 2*time.Minute, "presence window")
 	maxlines := fs.Int("maxlines", 5000, "per-channel ring cap")
@@ -329,8 +347,26 @@ func webchat(args []string) {
 	// Registered BEFORE Parse so the flags are known.
 	wrc := fs.String("wallet-rpc", "", "wallet RPC /json_rpc endpoint for whisper send")
 	wlogin := fs.String("wallet-login", "", "wallet RPC basic auth user:pass")
+	// Exposure policy (audit C1): the browser whisper proxy makes the wallet
+	// SPEND (real postage per send) and serves the DECRYPTED inbox. It is
+	// therefore off unless explicitly enabled, and a non-loopback bind with
+	// the proxy on requires a token.
+	allowSpend := fs.Bool("allow-browser-spend", false, "enable the /whisper/send + /whisper/recv browser proxy (UNSAFE: wallet spend + inbox read; requires -token on non-loopback binds)")
+	webToken := fs.String("token", "", "shared secret; require `Authorization: Bearer <token>` on the whisper proxy routes")
 	dir := fs.String("dir", "", "persist rooms to this dir (survives restart); empty = in-memory")
 	_ = fs.Parse(args)
+
+	if err := safehttp.CheckBind(*listen, *webToken, "web"); err != nil {
+		fmt.Fprintln(os.Stderr, "web:", err)
+		os.Exit(2)
+	}
+	if *wrc != "" && !*allowSpend {
+		log.Printf("web: -wallet-rpc given but the browser whisper proxy is DISABLED (it lets any visitor spend wallet postage and read the inbox). Pass -allow-browser-spend (and use a -token) to enable it deliberately.")
+	}
+	if *allowSpend && !safehttp.HostIsLoopback(*listen) && *webToken == "" {
+		fmt.Fprintln(os.Stderr, "web: refusing to expose the wallet proxy on a non-loopback bind without -token (audit C1)")
+		os.Exit(2)
+	}
 
 	var b *channel.Box
 	if *dir != "" {
@@ -359,7 +395,16 @@ func webchat(args []string) {
 		}
 		// Whisper endpoints: proxy send/recv to the wallet so the browser can
 		// post no-relay messages without holding keys itself.
-		if *wrc != "" {
+		if *wrc != "" && *allowSpend {
+			// Token gate when configured (mandatory on non-loopback binds).
+			if *webToken != "" {
+				auth := r.Header.Get("Authorization")
+				if !strings.HasPrefix(auth, "Bearer ") ||
+					subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, "Bearer ")), []byte(*webToken)) != 1 {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+			}
 			if r.URL.Path == "/whisper/send" && r.Method == "POST" {
 				webWhisperSend(w, r, *wrc, *wlogin)
 				return
@@ -918,7 +963,10 @@ func msgKeygen(args []string) {
 	kp, err := crypto.GenerateKey()
 	check(err)
 	defer crypto.Zero(kp.Priv)
+	sigPub, err := secure.SigPubOf(kp.Priv)
+	check(err)
 	pubHex := hex.EncodeToString(kp.Pub)
+	sigHex := hex.EncodeToString(sigPub)
 	privHex := hex.EncodeToString(kp.Priv)
 	if *outFile != "" {
 		if err := os.WriteFile(*outFile, []byte(privHex), 0o600); err != nil {
@@ -927,9 +975,10 @@ func msgKeygen(args []string) {
 		fmt.Printf("wrote priv key to %s\n", *outFile)
 	} else {
 		fmt.Printf("pub:  %s\n", pubHex)
+		fmt.Printf("sig:  %s\n", sigHex)
 		fmt.Printf("priv: %s\n", privHex)
 	}
-	fmt.Println("give 'pub' to people messaging you; they encrypt to it. Keep 'priv' secret.")
+	fmt.Println("give 'pub' AND 'sig' to people messaging you; they encrypt to it, you verify sender signatures against 'sig'. Keep 'priv' secret.")
 }
 
 // secureFlags returns the send-side secure codec when -key and -peer-pub are
@@ -971,6 +1020,14 @@ func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
 	key, err := hex.DecodeString(keyHex)
 	if err != nil || len(key) != 32 {
 		check(fmt.Errorf("msg: -key must be 64 hex chars (32 bytes)"))
+	}
+	// Public chains (evm/xmr/solana): STRICT — only signed envelopes decode.
+	// DERO: legacy mode — its native point-to-point payload encryption is the
+	// trusted secrecy layer, so non-envelope whispers still decode.
+	if chainType == "dero" {
+		sc, err := secure.NewRecvCodecLegacy(base, key)
+		check(err)
+		return sc
 	}
 	sc, err := secure.NewRecvCodec(base, key)
 	check(err)

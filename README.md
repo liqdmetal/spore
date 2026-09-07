@@ -94,11 +94,21 @@ Precisely:
   content goes off-chain rendezvous. Not yet live — a pruned `monerod` is
   **syncing (~60%)** on the Hetzner node to enable a real wallet-rpc verify.
 
-**E2E secure layer.** Chains without native payload encryption (EVM, Solana,
-XMR) expose their tx/metadata publicly. `internal/secure` restores privacy: an
-XChaCha20-Poly1305 envelope (`kind 0xE0 ‖ eph_pub 32B ‖ nonce 24B ‖
-ciphertext`), sealed with X25519 ECDH + HKDF-SHA256. Calldata / inbox records
-carry no plaintext — only the recipient's private key decrypts.
+**E2E secure layer (signed envelopes).** Chains without native payload
+encryption (EVM, Solana, XMR) expose their tx/metadata publicly.
+`internal/secure` restores privacy AND proves who sent each message: an
+XChaCha20-Poly1305 envelope signed by the sender's Ed25519 key (`kind 0xE1 ‖
+sig_pub 32B ‖ eph_pub 32B ‖ nonce 24B ‖ sig 64B ‖ ciphertext`), sealed with
+X25519 ECDH + HKDF-SHA256 where the AEAD key binds BOTH public keys of the
+exchange, and the Ed25519 signature (derived from the sender's own key, print
+it with `spore keygen` — the `sig:` line) binds the sender key, ephemeral,
+nonce, recipient prekey, and ciphertext — so messages cannot be forged,
+ciphertext-swapped, or replayed to a different recipient. Receivers are
+STRICT on public chains: only signed envelopes decode; plaintext injection is
+refused. Pin your contacts' `sig` keys (Codec.Pin) and unpinned senders'
+mail never arrives. Calldata / inbox records carry no plaintext — only the
+recipient's private key decrypts. Threat model: `docs/SENDER_AUTH.md`;
+wire formats + interop vectors: `docs/WIRE_SPEC.md`.
 
 ## Privacy model
 
@@ -113,7 +123,8 @@ carry no plaintext — only the recipient's private key decrypts.
   private only via the envelope). Group *broadcast* still needs a relay or an SC
   — no-relay is unicast by construction. Cross-chain direct messaging is
   impossible (different key crypto); cross-chain = rendezvous/relay + identity
-  proof. Read `WHISPER.md` and `design.md` for the full threat model.
+  proof. Full details: `docs/SENDER_AUTH.md` (sender-auth threat model),
+  `docs/WIRE_SPEC.md` (wire formats + interop vectors), `WHISPER.md`, `design.md`.
 
 ## CLI
 

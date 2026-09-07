@@ -2,9 +2,13 @@ package solana
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
 
 	"github.com/gagliardetto/solana-go"
+
+	"github.com/liqdmetal/spore/internal/chain"
 )
 
 // TestEncodeDecodeInboxRoundTrip verifies a borsh Inbox with one StoredMessage
@@ -167,5 +171,105 @@ func TestBackendSelfConsistency(t *testing.T) {
 	}
 	if pda != ref {
 		t.Errorf("inboxPDA = %s, want %s", pda, ref)
+	}
+}
+
+// TestInboxToIncomingSeqKeys verifies every inbox message gets a distinct,
+// stable, non-empty TxID — the old code returned TxID "" for ALL messages,
+// which made chain.Watch's dedup drop everything after the first message
+// (audit H2).
+func TestInboxToIncomingSeqKeys(t *testing.T) {
+	in := &Inbox{Messages: []StoredMessage{
+		{From: [32]byte{1}, Data: []byte("one"), Seq: 0},
+		{From: [32]byte{2}, Data: []byte("two"), Seq: 1},
+		{From: [32]byte{3}, Data: []byte("three"), Seq: 2},
+	}}
+	got := inboxToIncoming(in)
+	if len(got) != 3 {
+		t.Fatalf("got %d incoming, want 3", len(got))
+	}
+	seen := map[string]bool{}
+	for i, inc := range got {
+		if inc.TxID == "" {
+			t.Errorf("message %d has empty TxID — dedup would swallow it", i)
+		}
+		if seen[inc.TxID] {
+			t.Errorf("duplicate TxID %q across messages", inc.TxID)
+		}
+		seen[inc.TxID] = true
+		if inc.Sender == "" {
+			t.Errorf("message %d has empty Sender", i)
+		}
+		if string(inc.Payload) != []string{"one", "two", "three"}[i] {
+			t.Errorf("message %d payload = %q", i, inc.Payload)
+		}
+	}
+	// Stability: a second decode of the same inbox yields identical keys (so
+	// mailbox log dedup and chain.Watch dedup survive restarts).
+	again := inboxToIncoming(in)
+	for i := range got {
+		if got[i].TxID != again[i].TxID {
+			t.Errorf("TxID not stable across calls: %q vs %q", got[i].TxID, again[i].TxID)
+		}
+	}
+}
+
+// fakeChain returns the same incoming list on every poll — mimicking the
+// Solana backend, which re-reads the FULL inbox every poll.
+type fakeChain struct{ list []chain.Incoming }
+
+func (f *fakeChain) Name() string { return "fake" }
+func (f *fakeChain) Address(ctx context.Context) (string, error) {
+	return "fake", nil
+}
+func (f *fakeChain) Height(ctx context.Context) (uint64, error) { return 0, nil }
+func (f *fakeChain) PostPayload(ctx context.Context, recipientAddr string, p chain.Payload, amountHint uint64) (chain.PostResult, error) {
+	return chain.PostResult{TxID: "fake"}, nil
+}
+func (f *fakeChain) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
+	return f.list, nil
+}
+
+// TestWatchDeliversEverySolanaMessage is the regression test for audit H2:
+// the Solana backend re-lists the whole inbox each poll, and every entry used
+// to carry TxID "" — chain.Watch's dedup then delivered exactly ONE message
+// per process lifetime. With seq-keyed TxIDs, all messages must be delivered
+// exactly once.
+func TestWatchDeliversEverySolanaMessage(t *testing.T) {
+	fc := &fakeChain{list: inboxToIncoming(&Inbox{Messages: []StoredMessage{
+		{From: [32]byte{1}, Data: []byte("m0"), Seq: 0},
+		{From: [32]byte{2}, Data: []byte("m1"), Seq: 1},
+		{From: [32]byte{3}, Data: []byte("m2"), Seq: 2},
+	}})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	in, errc := chain.Watch(ctx, fc, chain.WatchOpts{Interval: time.Millisecond})
+
+	got := map[string]int{}
+	for {
+		select {
+		case inc, ok := <-in:
+			if !ok {
+				in = nil
+				continue
+			}
+			got[inc.TxID]++
+		case err := <-errc:
+			t.Fatalf("watch error: %v", err)
+			return
+		case <-ctx.Done():
+			// Several polls have run (1ms interval vs 150ms budget); each poll
+			// re-listed all 3 messages. Each must have been delivered exactly once.
+			for _, want := range []string{"sol-inbox-0", "sol-inbox-1", "sol-inbox-2"} {
+				if got[want] != 1 {
+					t.Errorf("message %s delivered %d times, want exactly 1 (old bug: only the first ever arrived)", want, got[want])
+				}
+			}
+			if len(got) != 3 {
+				t.Errorf("delivered %d distinct messages, want 3", len(got))
+			}
+			return
+		}
 	}
 }

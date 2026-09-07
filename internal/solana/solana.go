@@ -149,11 +149,31 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	return chain.PostResult{TxID: sig.String()}, nil
 }
 
+// inboxToIncoming maps a decoded inbox into chain.Incoming entries. Every
+// entry carries a STABLE, UNIQUE TxID derived from its sequence number —
+// previously all entries had TxID "", and chain.Watch's txid dedup map then
+// silently dropped every message after the first, forever (audit H2). The seq
+// is monotonic per inbox PDA (assigned by the on-chain program), so it is a
+// durable delivery key that also survives process restarts.
+func inboxToIncoming(loaded *Inbox) []chain.Incoming {
+	out := make([]chain.Incoming, 0, len(loaded.Messages))
+	for _, m := range loaded.Messages {
+		out = append(out, chain.Incoming{
+			TxID:       fmt.Sprintf("sol-inbox-%d", m.Seq),
+			TopoHeight: 0,
+			Sender:     pubkeyBytesToBase58(m.From[:]),
+			Payload:    chain.Payload(m.Data),
+		})
+	}
+	return out
+}
+
 // ListIncoming implements chain.Chain.
 //
 // It reads the signer's own inbox PDA, deserializes the borsh Vec<StoredMessage>,
-// and returns each envelope as a chain.Incoming. If the inbox account does not
-// exist yet (nothing ever delivered), it returns an empty list.
+// and returns each envelope as a chain.Incoming (seq-keyed TxIDs; see
+// inboxToIncoming). If the inbox account does not exist yet (nothing ever
+// delivered), it returns an empty list.
 func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
 	recipient := b.signer.PublicKey()
 	inbox, err := b.inboxPDA(recipient)
@@ -177,16 +197,7 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 		return nil, fmt.Errorf("solana: decode inbox: %w", err)
 	}
 
-	out := make([]chain.Incoming, 0, len(loaded.Messages))
-	for _, m := range loaded.Messages {
-		out = append(out, chain.Incoming{
-			TxID:       "",
-			TopoHeight: 0,
-			Sender:     pubkeyBytesToBase58(m.From[:]),
-			Payload:    chain.Payload(m.Data),
-		})
-	}
-	return out, nil
+	return inboxToIncoming(loaded), nil
 }
 
 // pubkeyBytesToBase58 renders a 32-byte pubkey as base58 (or a placeholder if

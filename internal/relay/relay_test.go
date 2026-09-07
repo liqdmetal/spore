@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,9 +70,14 @@ func (f *fakeMailbox) count() int {
 }
 
 // newRelay spins up a relay httptest server over a fresh memory store.
-func newRelay(t *testing.T, secret string) (*Relay, *httptest.Server) {
+// Any dests given are registered on the forwarding allowlist (deny-by-default
+// otherwise, per audit C3).
+func newRelay(t *testing.T, secret string, allowed ...string) (*Relay, *httptest.Server) {
 	t.Helper()
 	r := New(store.NewMemStore())
+	if len(allowed) > 0 {
+		r.SetAllowedDests(allowed)
+	}
 	var h http.Handler = r.Handler()
 	if secret != "" {
 		h = r.HandlerToken(secret)
@@ -107,7 +113,7 @@ func TestHoldThenForward(t *testing.T) {
 	destsrv := httptest.NewServer(dest.Handler())
 	defer destsrv.Close()
 
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", destsrv.URL)
 	body := "opaque-e2e-ciphertext-hop-one"
 	cid, cidHex := mustCID(body)
 
@@ -153,7 +159,7 @@ func TestForwardRetriesWhenDown(t *testing.T) {
 	dest := newFakeMailbox(http.StatusOK)
 	destsrv := httptest.NewServer(dest.Handler())
 
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", destsrv.URL)
 	body := "retry-me"
 	cid, _ := mustCID(body)
 
@@ -176,7 +182,7 @@ func TestForwardRetriesWhenDown(t *testing.T) {
 // is rejected (400) and nothing is stored. The relay is content-addressed like
 // the mailbox: a wrong body can never be planted under a referenced cid.
 func TestContentAddressing(t *testing.T) {
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
 	goodCID := crypto.CID([]byte("expected-body"))
 	wrongBody := []byte("does-not-hash-to-goodCID")
 
@@ -216,7 +222,7 @@ func TestContentAddressing(t *testing.T) {
 // addressed — only a party that knows the cid can get it) and a missing cid is
 // 404. DELETE drops a held body.
 func TestPullRoute(t *testing.T) {
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
 	body := "pulled-body"
 	cid, cidHex := mustCID(body)
 	if err := PushViaRelay(context.Background(), rsrv.URL, "http://127.0.0.1:1", cid, []byte(body), time.Now().Add(time.Hour)); err != nil {
@@ -265,6 +271,7 @@ func TestPullRoute(t *testing.T) {
 func TestTokenAuth(t *testing.T) {
 	const secret = "relay-hop-secret"
 	r := New(store.NewMemStore())
+	r.SetAllowedDests([]string{"http://127.0.0.1:1"})
 	secured := httptest.NewServer(r.HandlerToken(secret))
 	defer secured.Close()
 
@@ -335,7 +342,7 @@ func TestBurnExpiryNotForwarded(t *testing.T) {
 	destsrv := httptest.NewServer(dest.Handler())
 	defer destsrv.Close()
 
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", destsrv.URL)
 	body := "burn-me"
 	cid, _ := mustCID(body)
 	past := time.Now().Add(-time.Minute)
@@ -364,7 +371,7 @@ func TestBurnExpiryNotForwarded(t *testing.T) {
 // TestReapEvictsExpired: Reap drops every held body past its deadline and
 // leaves live bodies alone.
 func TestReapEvictsExpired(t *testing.T) {
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
 	liveCID, _ := mustCID("live")
 	deadCID, _ := mustCID("dead")
 
@@ -402,7 +409,7 @@ func TestForwardLoopDelivery(t *testing.T) {
 	destsrv := httptest.NewServer(dest.Handler())
 	defer destsrv.Close()
 
-	r, rsrv := newRelay(t, "")
+	r, rsrv := newRelay(t, "", destsrv.URL)
 	body := "loop-delivery"
 	cid, _ := mustCID(body)
 	if err := PushViaRelay(context.Background(), rsrv.URL, destsrv.URL, cid, []byte(body), time.Now().Add(time.Hour)); err != nil {
@@ -429,4 +436,148 @@ func TestForwardLoopDelivery(t *testing.T) {
 	cancel()
 	<-done
 	t.Fatalf("forward loop did not deliver: dest count=%d relay Len=%d", dest.count(), r.Len())
+}
+
+// ------------------------- hardening tests (audit C3) -------------------------
+
+// pushVia is a raw push helper returning the status code.
+func pushVia(t *testing.T, rsrvURL, dest, body string, deadline time.Time) int {
+	t.Helper()
+	_, cidHex := mustCID(body)
+	req, _ := http.NewRequest(http.MethodPost, rsrvURL+"/relay/"+cidHex, bytes.NewReader([]byte(body)))
+	req.Header.Set("X-Relay-Dest", dest)
+	if !deadline.IsZero() {
+		req.Header.Set("X-Burn-Deadline", strconv.FormatInt(deadline.Unix(), 10))
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	return res.StatusCode
+}
+
+// TestDestDeniedByDefault: an unconfigured relay refuses to accept pushes bound
+// for ANY destination (403) — the SSRF primitive is closed, not just discouraged.
+func TestDestDeniedByDefault(t *testing.T) {
+	r, rsrv := newRelay(t, "")
+	code := pushVia(t, rsrv.URL, "http://169.254.169.254", "ssrf-target", time.Now().Add(time.Hour))
+	if code != http.StatusForbidden {
+		t.Fatalf("push to unlisted dest = %d, want 403", code)
+	}
+	if r.Len() != 0 {
+		t.Fatal("refused push must not be held")
+	}
+	// Nothing stored either.
+	cid, _ := mustCID("ssrf-target")
+	if _, err := r.st.Get(cid); err != store.ErrNotFound {
+		t.Fatalf("refused body must not be stored, err=%v", err)
+	}
+}
+
+// TestDestAllowlistVariants: normalization — trailing slashes, case, and path
+// suffixes must not smuggle a dest past (or off) the allowlist.
+func TestDestAllowlistVariants(t *testing.T) {
+	_, rsrv := newRelay(t, "", "https://mail.example.com")
+	body := "variant-body"
+	// Exact match (with trailing slash) is allowed.
+	if code := pushVia(t, rsrv.URL, "https://MAIL.example.com/", body, time.Now().Add(time.Hour)); code != http.StatusAccepted {
+		t.Fatalf("allowlisted dest (normalized) = %d, want 202", code)
+	}
+	// A different host is refused.
+	if code := pushVia(t, rsrv.URL, "https://evil.example.com", body, time.Now().Add(time.Hour)); code != http.StatusForbidden {
+		t.Fatalf("non-allowlisted host = %d, want 403", code)
+	}
+	// A same-scheme path extension on the allowlisted host is refused too
+	// (the operator allowed the mailbox base, not arbitrary paths).
+	if code := pushVia(t, rsrv.URL, "https://mail.example.com/admin", body, time.Now().Add(time.Hour)); code != http.StatusForbidden {
+		t.Fatalf("path extension on allowlisted host = %d, want 403", code)
+	}
+}
+
+// TestDeadlineClamped: an attacker-supplied far-future X-Burn-Deadline is
+// clamped to the configured cap, so the relay can't be turned into a permanent
+// retry loop.
+func TestDeadlineClamped(t *testing.T) {
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
+	r.SetQuotas(0, 0, time.Hour) // 1h cap for the test
+
+	body := "clamped"
+	far := time.Now().Add(365 * 24 * time.Hour)
+	if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", body, far); code != http.StatusAccepted {
+		t.Fatalf("push = %d, want 202", code)
+	}
+	// The stored expiry must be clamped to now+1h, not +365d. A reap two hours
+	// out drops a clamped body; a 365d body would survive it.
+	if n := r.Reap(time.Now().Add(2 * time.Hour)); n != 1 {
+		t.Fatalf("clamped body must expire within the cap: reaped %d, want 1", n)
+	}
+}
+
+// TestPendingQuota: pushes beyond the configured pending cap are refused.
+func TestPendingQuota(t *testing.T) {
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
+	r.SetQuotas(2, 0, 0)
+	for i := 0; i < 2; i++ {
+		if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", fmt.Sprintf("body-%d", i), time.Now().Add(time.Hour)); code != http.StatusAccepted {
+			t.Fatalf("push %d = %d, want 202", i, code)
+		}
+	}
+	if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", "body-over", time.Now().Add(time.Hour)); code != http.StatusTooManyRequests {
+		t.Fatalf("push over quota = %d, want 429", code)
+	}
+	if r.Len() != 2 {
+		t.Fatalf("relay Len = %d, want 2", r.Len())
+	}
+}
+
+// TestByteQuota: pushes beyond the total-bytes cap are refused.
+func TestByteQuota(t *testing.T) {
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
+	r.SetQuotas(0, int64(len("0123456789")), 0) // room for exactly one 10-byte body
+	if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", "0123456789", time.Now().Add(time.Hour)); code != http.StatusAccepted {
+		t.Fatalf("first push = %d, want 202", code)
+	}
+	if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", "0123456789", time.Now().Add(time.Hour)); code != http.StatusTooManyRequests {
+		t.Fatalf("push over byte quota = %d, want 429", code)
+	}
+}
+
+// TestPushRateLimit: more than the per-IP-per-minute allowance is refused 429.
+func TestPushRateLimit(t *testing.T) {
+	r, rsrv := newRelay(t, "", "http://127.0.0.1:1")
+	r.pushLimiter = newRateLimiter(3, time.Minute)
+	for i := 0; i < 3; i++ {
+		if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", fmt.Sprintf("rl-%d", i), time.Now().Add(time.Hour)); code != http.StatusAccepted {
+			t.Fatalf("push %d = %d, want 202", i, code)
+		}
+	}
+	if code := pushVia(t, rsrv.URL, "http://127.0.0.1:1", "rl-over", time.Now().Add(time.Hour)); code != http.StatusTooManyRequests {
+		t.Fatalf("push over rate limit = %d, want 429", code)
+	}
+}
+
+// TestNormalizeDest: the allowlist key can't be fooled by URL tricks.
+func TestNormalizeDest(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"https://Mail.Example.COM/", "https://mail.example.com", true},
+		{"http://mail.example.com", "http://mail.example.com", true},
+		{"https://mail.example.com/base", "https://mail.example.com/base", true},
+		{"https://mail.example.com/base/", "https://mail.example.com/base", true},
+		{"ftp://mail.example.com", "", false},
+		{"not a url", "", false},
+		{"http://", "", false},
+		{"javascript:alert(1)", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := normalizeDest(tc.raw)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("normalizeDest(%q) = (%q, %v), want (%q, %v)", tc.raw, got, ok, tc.want, tc.ok)
+		}
+	}
 }

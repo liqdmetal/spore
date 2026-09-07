@@ -30,6 +30,7 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/mailbox"
 	"github.com/liqdmetal/spore/internal/peer"
+	"github.com/liqdmetal/spore/internal/safehttp"
 	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/store"
 	"github.com/liqdmetal/spore/internal/whisper"
@@ -98,13 +99,14 @@ func mailboxCodec(fs *flag.FlagSet, m *mailbox.Mailbox) whisper.Codec {
 func mailboxRun(args []string) {
 	fs := flag.NewFlagSet("mailbox run", flag.ExitOnError)
 	dir := fs.String("dir", "", "data dir (persists key, bodies, and messages)")
-	listen := fs.String("listen", ":19292", "mailbox HTTP listen (push + serve + list/get)")
+	listen := fs.String("listen", "127.0.0.1:19292", "mailbox HTTP listen (push + serve + list/get; default loopback-only)")
 	interval := fs.Duration("interval", 3*time.Second, "chain poll interval")
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval")
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	peerAddr := fs.String("peer-addr", "", "reachable sender peer (host:port) to pull bodies not pushed here")
 	peerBin := fs.String("peer-bin", "spore-peer", "path to the spore-peer binary")
 	privacy := fs.Bool("privacy", false, "hosted/privacy mode: don't record the sender in the message log")
+	logTTL := fs.Duration("log-ttl", mailbox.DefaultLogTTL, "decrypted-message log retention (rot); 0 disables trimming")
 	cert := fs.String("cert", "", "TLS cert PEM path (serve HTTPS when set with -key)")
 	key := fs.String("key", "", "TLS key PEM path (serve HTTPS when set with -cert)")
 	token := fs.String("token", "", "shared secret; require `Authorization: Bearer <token>` on every HTTP route")
@@ -116,12 +118,24 @@ func mailboxRun(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
+	// Exposure policy (audit C2): /list serves every DECRYPTED message — a
+	// non-loopback bind without a token is a plaintext archive open to the
+	// network, so it is refused outright.
+	if err := safehttp.CheckBind(*listen, *token, "mailbox run"); err != nil {
+		fmt.Fprintln(os.Stderr, "mailbox run:", err)
+		os.Exit(2)
+	}
+	if *cert == "" && !safehttp.HostIsLoopback(*listen) {
+		log.Printf("mailbox: WARNING — serving decrypted messages over plain HTTP on a non-loopback bind; set -cert/-key for TLS")
+	}
 	m, err := mailbox.Open(*dir, nil)
 	check(err)
+	m.SetLogTTL(*logTTL)
 	if *privacy {
 		m.SetNoSenderLog(true)
 		log.Printf("mailbox: privacy mode — sender not recorded in the message log")
 	}
+	log.Printf("mailbox: message log is ENCRYPTED; retention %s", *logTTL)
 
 	c := msgBackend(fs) // build the named chain.Chain backend
 	codec := mailboxCodec(fs, m)
@@ -153,22 +167,27 @@ func mailboxRun(args []string) {
 		if err := serve(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
-	}()
-	// Reap expired (burned) bodies in the background.
-	go func() {
-		t := time.NewTicker(*reap)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				if n := m.Reap(time.Now()); n > 0 {
-					log.Printf("mailbox: reaped %d burned body(ies)", n)
+	}()		// Reap expired (burned) bodies and trim the message log (rot) in the
+		// background.
+		go func() {
+			t := time.NewTicker(*reap)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					if n := m.Reap(time.Now()); n > 0 {
+						log.Printf("mailbox: reaped %d burned body(ies)", n)
+					}
+					if kept, err := m.TrimLog(time.Now()); err != nil {
+						log.Printf("mailbox: log trim: %v", err)
+					} else if c := m.CorruptLogLines(); c > 0 {
+						log.Printf("mailbox: log trim kept %d, skipped %d corrupt line(s)", kept, c)
+					}
+				case <-ctx.Done():
+					return
 				}
-			case <-ctx.Done():
-				return
 			}
-		}
-	}()
+		}()
 
 	log.Printf("mailbox: pubkey %s", hex.EncodeToString(m.PublicKey()))
 	log.Printf("mailbox: senders encrypt bodies to that pub; push the body to %s://<this-host>%s/put/<cid>", scheme, *listen)

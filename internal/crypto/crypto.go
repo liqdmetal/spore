@@ -2,9 +2,12 @@
 // messages: X25519 one-time ECDH, HKDF-SHA256 key derivation, and
 // XChaCha20-Poly1305 authenticated encryption.
 //
-// Both the AEAD key and the nonce are DERIVED from the shared secret, never
-// transmitted. This is safe because the shared secret is unique per message
-// (a fresh ephemeral key each time), so no (key, nonce) pair is ever reused.
+// KEY DERIVATION: the AEAD key is always derived from the shared secret. For
+// the real envelope path (internal/secure) the NONCE is a fresh random value
+// transmitted in-band — safe under any key reuse. The session/longmsg paths
+// derive the nonce via DeriveNonceBound, which is safe because each message
+// uses a fresh ephemeral key (unique secret per message). Prefer DeriveKeyBound
+// everywhere: it binds BOTH public keys into the HKDF info.
 package crypto
 
 import (
@@ -84,6 +87,10 @@ func SharedSecret(priv, peerPub []byte) ([]byte, error) {
 }
 
 // DeriveKey expands the shared secret into a 32-byte AEAD key.
+//
+// Prefer DeriveKeyBound: it additionally binds BOTH public keys of the
+// exchange into the HKDF info, which prevents unknown-key-share attacks and
+// cryptographically separates keys per peer pair.
 func DeriveKey(secret []byte) ([]byte, error) {
 	return derive(secret, "compost/v1/key", KeySize)
 }
@@ -91,6 +98,33 @@ func DeriveKey(secret []byte) ([]byte, error) {
 // DeriveNonce expands the shared secret into a 24-byte XChaCha20 nonce.
 func DeriveNonce(secret []byte) ([]byte, error) {
 	return derive(secret, "compost/v1/nonce", NonceSize)
+}
+
+// DeriveKeyBound is DeriveKey with both public keys of the exchange bound into
+// the HKDF info (sender pub, recipient pub). Same shared secret with a
+// different peer pair now yields an unrelated key (UKS resistance).
+func DeriveKeyBound(secret, senderPub, recipientPub []byte) ([]byte, error) {
+	if len(senderPub) != 32 || len(recipientPub) != 32 {
+		return nil, errors.New("crypto: bound derive needs 32-byte pubkeys")
+	}
+	info := make([]byte, 0, len("spore/e2e/v1/key")+64)
+	info = append(info, "spore/e2e/v1/key"...)
+	info = append(info, senderPub...)
+	info = append(info, recipientPub...)
+	return derive(secret, string(info), KeySize)
+}
+
+// DeriveNonceBound is DeriveNonce with both public keys bound (must match the
+// DeriveKeyBound call so key and nonce derive from the same transcript).
+func DeriveNonceBound(secret, senderPub, recipientPub []byte) ([]byte, error) {
+	if len(senderPub) != 32 || len(recipientPub) != 32 {
+		return nil, errors.New("crypto: bound derive needs 32-byte pubkeys")
+	}
+	info := make([]byte, 0, len("spore/e2e/v1/nonce")+64)
+	info = append(info, "spore/e2e/v1/nonce"...)
+	info = append(info, senderPub...)
+	info = append(info, recipientPub...)
+	return derive(secret, string(info), NonceSize)
 }
 
 func derive(secret []byte, info string, n int) ([]byte, error) {

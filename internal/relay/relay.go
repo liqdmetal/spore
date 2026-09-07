@@ -15,6 +15,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -39,6 +40,59 @@ var maxBodyBytes = 64 << 20
 // then drops it rather than hoarding ciphertext indefinitely.
 const defaultRetention = 24 * time.Hour
 
+// Hardening defaults (audit C3): the relay used to be an open SSRF engine —
+// attacker-chosen destination, attacker-chosen (unbounded) retention, no auth,
+// no quotas. The defaults below close each vector; operators can relax the
+// quotas via the Set* methods.
+const (
+	// DefaultMaxPending bounds concurrent held bodies. A push beyond this is
+	// refused (429) instead of silently filling the disk.
+	DefaultMaxPending = 1024
+	// DefaultMaxTotalBytes bounds total ciphertext held across all bodies.
+	DefaultMaxTotalBytes = 256 << 20 // 256 MiB
+	// DefaultMaxDeadline caps an attacker-supplied X-Burn-Deadline: anything
+	// further out than this is clamped, so no permanent retry loop.
+	DefaultMaxDeadline = 7 * 24 * time.Hour
+	// DefaultPushRatePerMin bounds pushes per client IP per minute.
+	DefaultPushRatePerMin = 30
+)
+
+// ipWindow is a fixed-window per-IP push counter.
+type ipWindow struct {
+	start int64 // unix sec of window start
+	count int
+}
+
+// rateLimiter is a minimal fixed-window per-IP limiter (bounded memory: stale
+// windows are evicted lazily).
+type rateLimiter struct {
+	mu   sync.Mutex
+	max  int
+	win  time.Duration
+	hits map[string]*ipWindow
+}
+
+func newRateLimiter(max int, win time.Duration) *rateLimiter {
+	return &rateLimiter{max: max, win: win, hits: map[string]*ipWindow{}}
+}
+
+// allow reports whether one more push from ip is permitted in this window.
+func (r *rateLimiter) allow(ip string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.hits) > 65536 { // hard memory bound; hostile IP diversity
+		r.hits = map[string]*ipWindow{}
+	}
+	w, ok := r.hits[ip]
+	sec := now.Unix()
+	if !ok || sec-w.start >= int64(r.win/time.Second) {
+		r.hits[ip] = &ipWindow{start: sec, count: 1}
+		return true
+	}
+	w.count++
+	return w.count <= r.max
+}
+
 // pending is the forwarding index the relay keeps alongside the body store:
 // which destination each held cid is bound for and by when it must be gone.
 // The store.Store interface is content-addressed and exposes no key iteration,
@@ -46,6 +100,7 @@ const defaultRetention = 24 * time.Hour
 type pending struct {
 	dest     string
 	deadline time.Time
+	bodyLen  int64 // for the total-bytes quota
 }
 
 // Relay is a store-and-forward hop over a content-addressed, TTL-bound body
@@ -57,16 +112,93 @@ type Relay struct {
 	client  *http.Client
 	mu      sync.Mutex
 	pending map[[32]byte]*pending
+
+	// allowedDests is the SSRF allowlist (audit C3): forwarding destinations
+	// NOT on this list are refused at push time (403) and skipped at forward
+	// time. Default is EMPTY = deny all forwarding — an operator must name the
+	// mailboxes this relay serves (relaycmd -allow-dest). That kills the
+	// "relay PUTs attacker-chosen bytes at attacker-chosen URLs" primitive.
+	allowed map[string]bool
+	// quotas.
+	maxPending     int
+	maxTotalBytes  int64
+	maxDeadline    time.Duration
+	pushLimiter    *rateLimiter
+	heldBytes      int64
 }
 
 // New wraps an underlying store with a relay node. Pass store.NewMemStore() for
 // an ephemeral node or store.NewDiskStore(dir) for durability across restarts.
+// Forwarding destinations are DENIED until SetAllowedDests names them.
 func New(st store.Store) *Relay {
 	return &Relay{
-		st:      st,
-		client:  &http.Client{Timeout: 30 * time.Second},
-		pending: make(map[[32]byte]*pending),
+		st:            st,
+		client:        &http.Client{Timeout: 30 * time.Second},
+		pending:       make(map[[32]byte]*pending),
+		allowed:       map[string]bool{},
+		maxPending:    DefaultMaxPending,
+		maxTotalBytes: DefaultMaxTotalBytes,
+		maxDeadline:   DefaultMaxDeadline,
+		pushLimiter:   newRateLimiter(DefaultPushRatePerMin, time.Minute),
 	}
+}
+
+// SetAllowedDests configures the forwarding allowlist. Each entry is a base
+// URL (e.g. "https://mail.example.com"); it is normalized (scheme://host,
+// trailing slash dropped) before storage. Calling this REPLACES the list.
+func (r *Relay) SetAllowedDests(urls []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.allowed = map[string]bool{}
+	for _, u := range urls {
+		if key, ok := normalizeDest(u); ok {
+			r.allowed[key] = true
+		}
+	}
+}
+
+// SetQuotas overrides the hardening defaults (0 keeps the default; a negative
+// value means unlimited for bytes/pending and no cap for deadline).
+func (r *Relay) SetQuotas(maxPending int, maxTotalBytes int64, maxDeadline time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if maxPending > 0 {
+		r.maxPending = maxPending
+	} else if maxPending < 0 {
+		r.maxPending = 0 // 0 = unlimited (checked as <= 0 skip)
+	}
+	if maxTotalBytes != 0 {
+		r.maxTotalBytes = maxTotalBytes
+	}
+	if maxDeadline != 0 {
+		r.maxDeadline = maxDeadline
+	}
+}
+
+// normalizeDest reduces a dest URL to scheme://host[:port][/path] so trivial
+// variations (trailing slash, case of scheme/host) cannot smuggle past the
+// allowlist.
+func normalizeDest(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", false
+	}
+	key := strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	if p := strings.TrimSuffix(u.Path, "/"); p != "" && p != "." {
+		key += p
+	}
+	return key, true
+}
+
+// destAllowed reports whether the normalized dest is on the allowlist.
+func (r *Relay) destAllowed(dest string) bool {
+	key, ok := normalizeDest(dest)
+	if !ok {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.allowed[key]
 }
 
 // Handler returns the HTTP surface for a relay node:
@@ -156,6 +288,21 @@ func (r *Relay) handlePush(w http.ResponseWriter, req *http.Request, cid [32]byt
 		http.Error(w, "bad X-Relay-Dest URL", http.StatusBadRequest)
 		return
 	}
+	// SSRF allowlist (audit C3): only operator-named destinations are
+	// forwardable. Deny-by-default — an unconfigured relay forwards nothing.
+	if !r.destAllowed(dest) {
+		http.Error(w, "relay: destination not allowed (operator must allow this mailbox via -allow-dest)", http.StatusForbidden)
+		return
+	}
+	// Per-IP push rate limit.
+	ip, _, err2 := net.SplitHostPort(req.RemoteAddr)
+	if err2 != nil {
+		ip = req.RemoteAddr
+	}
+	if !r.pushLimiter.allow(ip, time.Now()) {
+		http.Error(w, "relay: push rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
 	body, err := io.ReadAll(&io.LimitedReader{R: req.Body, N: int64(maxBodyBytes) + 1})
 	if err != nil {
 		http.Error(w, "read", http.StatusBadRequest)
@@ -175,12 +322,31 @@ func (r *Relay) handlePush(w http.ResponseWriter, req *http.Request, cid [32]byt
 			deadline = time.Unix(sec, 0)
 		}
 	}
+	// Deadline cap (audit C3): a pusher can no longer set a years-out deadline
+	// that turns the relay into a permanent retry loop.
+	if cap := time.Now().Add(r.maxDeadline); deadline.After(cap) {
+		deadline = cap
+	}
+	// Quotas (audit C3): bounded held-body count and total held bytes.
+	r.mu.Lock()
+	if r.maxPending > 0 && len(r.pending) >= r.maxPending {
+		r.mu.Unlock()
+		http.Error(w, "relay: hold quota exceeded (too many pending bodies)", http.StatusTooManyRequests)
+		return
+	}
+	if r.maxTotalBytes > 0 && r.heldBytes+int64(len(body)) > r.maxTotalBytes {
+		r.mu.Unlock()
+		http.Error(w, "relay: byte quota exceeded", http.StatusTooManyRequests)
+		return
+	}
+	r.mu.Unlock()
 	if err := r.st.Put(cid, body, deadline); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	r.mu.Lock()
-	r.pending[cid] = &pending{dest: dest, deadline: deadline}
+	r.pending[cid] = &pending{dest: dest, deadline: deadline, bodyLen: int64(len(body))}
+	r.heldBytes += int64(len(body))
 	r.mu.Unlock()
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -206,7 +372,13 @@ func (r *Relay) handleDrop(w http.ResponseWriter, cid [32]byte) {
 func (r *Relay) drop(cid [32]byte) {
 	_ = r.st.Delete(cid)
 	r.mu.Lock()
-	delete(r.pending, cid)
+	if p, ok := r.pending[cid]; ok {
+		r.heldBytes -= p.bodyLen
+		if r.heldBytes < 0 {
+			r.heldBytes = 0
+		}
+		delete(r.pending, cid)
+	}
 	r.mu.Unlock()
 }
 
@@ -245,6 +417,11 @@ func (r *Relay) ForwardOnce(ctx context.Context) (forwarded, dropped int) {
 // /put/{cid} route. Any 2xx counts as success. store.ErrNotFound / ErrExpired
 // mean the body is already gone, which the caller treats as a drop.
 func (r *Relay) forwardOne(ctx context.Context, cid [32]byte, p *pending) bool {
+	// Defense in depth: re-check the allowlist at forward time too, so a body
+	// accepted under one policy can never be forwarded under a stricter one.
+	if !r.destAllowed(p.dest) {
+		return true // treat as dropped: never forward to a non-allowed dest
+	}
 	body, err := r.st.Get(cid)
 	if err != nil {
 		return err == store.ErrNotFound || err == store.ErrExpired

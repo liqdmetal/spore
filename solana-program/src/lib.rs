@@ -18,6 +18,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
+    declare_id,
     entrypoint,
     entrypoint::ProgramResult,
     msg,
@@ -28,6 +29,8 @@ use solana_program::{
     system_instruction,
     sysvar::Sysvar,
 };
+
+declare_id!("4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa");
 
 /// One stored message: sender + opaque envelope + sequence.
 #[derive(BorshSerialize, BorshDeserialize, Default, Clone)]
@@ -95,6 +98,15 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
         msg!("inbox PDA mismatch");
         return Err(ProgramError::InvalidAccountData);
     }
+    // Defense in depth: an EXISTING inbox account must be owned by THIS
+    // program. The PDA address check above already implies it, but an explicit
+    // owner check costs nothing and catches account confusion bugs. (Skip for
+    // the not-yet-created account: its owner is the system program until the
+    // create_account below runs.)
+    if inbox.lamports() > 0 && inbox.owner != program_id {
+        msg!("inbox not owned by program");
+        return Err(ProgramError::InvalidAccountData);
+    }
 
     // Load existing inbox (or start empty).
     let mut loaded = if inbox.lamports() > 0 && !inbox.data_is_empty() {
@@ -113,45 +125,79 @@ fn deliver(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Progra
         seq,
     });
 
-    let serialized = loaded
-        .try_to_vec()
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-    let space_needed = serialized.len();
-
     // If the account doesn't exist yet, create it sized + rent-funded for this
     // message in one shot (realloc cannot add rent, so init at full size).
     if inbox.lamports() == 0 {
+        let serialized = loaded
+            .try_to_vec()
+            .map_err(|_| ProgramError::InvalidAccountData)?;
         let rent = Rent::get()?;
-        let min_bal = rent.minimum_balance(space_needed);
+        let min_bal = rent.minimum_balance(serialized.len());
         invoke_signed(
             &system_instruction::create_account(
                 payer.key,
                 inbox.key,
                 min_bal,
-                space_needed as u64,
+                serialized.len() as u64,
                 program_id,
             ),
             &[payer.clone(), inbox.clone(), system_program.clone()],
             &[&[b"mycelium", recipient.key.as_ref(), &[bump]]],
         )?;
-    } else if inbox.data_len() < space_needed {
-        // Existing account too small (only grows across messages). Realloc with
-        // rent top-up from the payer.
-        let rent = Rent::get()?;
-        let new_rent = rent.minimum_balance(space_needed);
-        let lamports_diff = new_rent.saturating_sub(inbox.lamports());
-        if lamports_diff > 0 {
-            invoke_signed(
-                &system_instruction::transfer(payer.key, inbox.key, lamports_diff),
-                &[payer.clone(), inbox.clone(), system_program.clone()],
-                &[],
-            )?;
+        inbox.try_borrow_mut_data()?.copy_from_slice(&serialized);
+    } else {
+        // Existing account: resize (grow OR shrink) then write. Shrink support
+        // is what makes burn() possible — the old code only ever grew, so a
+        // burn (which shrinks the serialized inbox) panicked in
+        // copy_from_slice and the instruction was bricked.
+        commit(inbox, &loaded, Some(payer), Some(system_program))?;
+    }
+
+    msg!("delivered msg {} to {} from {}", seq, recipient.key, sender.key);
+    Ok(())
+}
+
+/// Resize `inbox` to fit `loaded`'s serialization (growing with a rent top-up
+/// from `payer` when needed, shrinking freely — realloc down never refunds
+/// lamports, which is fine: a surplus above rent-exempt minimum is allowed),
+/// then write the bytes. The write is always exact-length after the resize, so
+/// copy_from_slice can never mismatch.
+fn commit<'a>(
+    inbox: &AccountInfo<'a>,
+    loaded: &Inbox,
+    payer: Option<&AccountInfo<'a>>,
+    system_program: Option<&AccountInfo<'a>>,
+) -> ProgramResult {
+    let serialized = loaded
+        .try_to_vec()
+        .map_err(|_| ProgramError::InvalidAccountData)?;
+    let space_needed = serialized.len();
+    if inbox.data_len() != space_needed {
+        if space_needed > inbox.data_len() {
+            // Growing requires a rent top-up from a payer account.
+            let (payer, system_program) = match (payer, system_program) {
+                (Some(p), Some(s)) => (p, s),
+                _ => {
+                    msg!("grow commit needs payer + system_program");
+                    return Err(ProgramError::InvalidArgument);
+                }
+            };
+            let rent = Rent::get()?;
+            let new_rent = rent.minimum_balance(space_needed);
+            let lamports_diff = new_rent.saturating_sub(inbox.lamports());
+            if lamports_diff > 0 {
+                invoke_signed(
+                    &system_instruction::transfer(payer.key, inbox.key, lamports_diff),
+                    &[payer.clone(), inbox.clone(), system_program.clone()],
+                    &[],
+                )?;
+            }
         }
+        // Shrink (or exact resize): no lamport movement needed — a surplus
+        // above the rent-exempt minimum is legal, and realloc down is free.
         inbox.realloc(space_needed, false)?;
     }
     inbox.try_borrow_mut_data()?.copy_from_slice(&serialized);
-
-    msg!("delivered msg {} to {} from {}", seq, recipient.key, sender.key);
     Ok(())
 }
 
@@ -171,16 +217,27 @@ fn burn(program_id: &Pubkey, accounts: &[AccountInfo], rest: &[u8]) -> ProgramRe
     if inbox.key != &expected {
         return Err(ProgramError::InvalidAccountData);
     }
+    if inbox.owner != program_id {
+        msg!("inbox not owned by program");
+        return Err(ProgramError::InvalidAccountData);
+    }
 
     let mut loaded = Inbox::try_from_slice(&inbox.data.borrow())
         .map_err(|_| ProgramError::InvalidAccountData)?;
-    if (idx as usize) < loaded.messages.len() {
-        loaded.messages[idx as usize].data = Vec::new(); // empty = composted
+    if (idx as usize) >= loaded.messages.len() {
+        msg!("burn: index {} out of range ({} messages)", idx, loaded.messages.len());
+        return Err(ProgramError::InvalidArgument);
     }
-    let serialized = loaded
-        .try_to_vec()
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-    inbox.try_borrow_mut_data()?.copy_from_slice(&serialized);
+    loaded.messages[idx as usize].data = Vec::new(); // empty = composted
+
+    // Shrinking commit. The OLD code serialized (now shorter) and did
+    // copy_from_slice against the UNCHANGED account data length -> length
+    // mismatch panic -> burn always failed once any message with data existed
+    // (audit H3). commit() resizes the account DOWN to the new length first,
+    // so the write is always exact. Realloc down never needs a lamport top-up
+    // (a surplus above the rent-exempt minimum is legal), so no payer account
+    // is required here.
+    commit(inbox, &loaded, None, None)?;
     msg!("burnt msg {} for {}", idx, recipient.key);
     Ok(())
 }

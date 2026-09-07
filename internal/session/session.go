@@ -101,13 +101,13 @@ func (e *Endpoint) Send(peerPub, plaintext []byte, ttl time.Duration, requestAck
 	}
 	defer crypto.Zero(secret)
 
-	key, err := crypto.DeriveKey(secret)
+	key, err := crypto.DeriveKeyBound(secret, eph.Pub, peerPub)
 	if err != nil {
 		return nil, err
 	}
 	defer crypto.Zero(key)
 
-	nonce, err := crypto.DeriveNonce(secret)
+	nonce, err := crypto.DeriveNonceBound(secret, eph.Pub, peerPub)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +162,12 @@ func (e *Endpoint) decrypt(a *anchor.Anchor, ct []byte) ([]byte, error) {
 		if err != nil {
 			continue
 		}
-		key, err := crypto.DeriveKey(secret)
+		key, err := crypto.DeriveKeyBound(secret, a.EphemeralPub[:], k.Pub)
 		if err != nil {
 			crypto.Zero(secret)
 			continue
 		}
-		nonce, err := crypto.DeriveNonce(secret)
+		nonce, err := crypto.DeriveNonceBound(secret, a.EphemeralPub[:], k.Pub)
 		if err != nil {
 			crypto.Zero(secret)
 			crypto.Zero(key)

@@ -119,12 +119,12 @@ func (e *Endpoint) SendBody(recipientPub, plaintext []byte, ttl time.Duration) (
 		return nil, err
 	}
 	defer crypto.Zero(secret)
-	key, err := crypto.DeriveKey(secret)
+	key, err := crypto.DeriveKeyBound(secret, eph.Pub, recipientPub)
 	if err != nil {
 		return nil, err
 	}
 	defer crypto.Zero(key)
-	nonce, err := crypto.DeriveNonce(secret)
+	nonce, err := crypto.DeriveNonceBound(secret, eph.Pub, recipientPub)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +162,12 @@ func (e *Endpoint) ReceiveBody(p *Pointer, fetch func(cid [32]byte) ([]byte, err
 		return nil, err
 	}
 	defer crypto.Zero(secret)
-	key, err := crypto.DeriveKey(secret)
+	key, err := crypto.DeriveKeyBound(secret, p.EphemeralPub[:], e.key.Pub)
 	if err != nil {
 		return nil, err
 	}
 	defer crypto.Zero(key)
-	nonce, err := crypto.DeriveNonce(secret)
+	nonce, err := crypto.DeriveNonceBound(secret, p.EphemeralPub[:], e.key.Pub)
 	if err != nil {
 		return nil, err
 	}

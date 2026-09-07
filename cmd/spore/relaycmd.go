@@ -18,10 +18,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/relay"
+	"github.com/liqdmetal/spore/internal/safehttp"
 	"github.com/liqdmetal/spore/internal/store"
 )
 
@@ -48,21 +50,32 @@ func relayUsage() {
   spore relay -h, --help
 
 flags:
-  -listen    relay HTTP listen address (default :19300)
-  -dir       disk dir to durably hold bodies; empty = in-memory
-  -token     shared secret; require Authorization: Bearer *** on every route
-  -interval  forwarder retry interval (default 10s)
-  -reap      expired-body reaper interval (default 30s)`)
+  -listen       relay HTTP listen address (default 127.0.0.1:19300)
+  -dir          disk dir to durably hold bodies; empty = in-memory
+  -token        shared secret; require Authorization: Bearer *** on every route
+                (REQUIRED for non-loopback binds)
+  -allow-dest   comma-separated forwarding-destination allowlist (base URLs);
+                DEFAULT DENIES ALL forwarding (SSRF hardening)
+  -interval     forwarder retry interval (default 10s)
+  -reap         expired-body reaper interval (default 30s)`)
 }
 
 func relayRun(args []string) {
 	fs := flag.NewFlagSet("relay run", flag.ExitOnError)
-	listen := fs.String("listen", ":19300", "relay HTTP listen address")
+	listen := fs.String("listen", "127.0.0.1:19300", "relay HTTP listen address (default loopback-only)")
 	dir := fs.String("dir", "", "disk dir to durably hold bodies (empty = in-memory)")
 	token := fs.String("token", "", "shared secret; require `Authorization: Bearer *** on every route")
 	interval := fs.Duration("interval", 10*time.Second, "forwarder retry interval")
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval")
+	allowDest := fs.String("allow-dest", "", "comma-separated allowlist of forwarding destinations (base URLs); DEFAULT DENIES ALL forwarding — pushes to unlisted destinations are refused (SSRF hardening)")
 	_ = fs.Parse(args)
+
+	// Exposure policy (audit C3): the relay accepts pushes from anyone; a
+	// non-loopback bind without a token makes it a public write target.
+	if err := safehttp.CheckBind(*listen, *token, "relay run"); err != nil {
+		fmt.Fprintln(os.Stderr, "relay run:", err)
+		os.Exit(2)
+	}
 
 	var st store.Store
 	dirNote := "(in-memory)"
@@ -77,6 +90,12 @@ func relayRun(args []string) {
 		st = store.NewMemStore()
 	}
 	r := relay.New(st)
+	if dests := strings.Split(strings.TrimSpace(*allowDest), ","); len(dests) > 0 && dests[0] != "" {
+		r.SetAllowedDests(dests)
+		log.Printf("relay: forwarding allowlist: %d destination(s); all others refused", len(dests))
+	} else {
+		log.Printf("relay: WARNING — no -allow-dest configured: ALL forwarding is denied (pushes are refused with 403)")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
