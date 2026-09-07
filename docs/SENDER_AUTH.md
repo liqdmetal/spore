@@ -83,7 +83,8 @@ that Signal's safety numbers require); the chain delivers bytes unmodified
 ## 5. Residual risks (honest list)
 
 - **No forward secrecy** — a compromised current device key decrypts
-  everything encrypted to it that still exists (P2: X3DH + double ratchet).
+  everything encrypted to it that still exists. Designed fix:
+  [`RATCHET.md`](RATCHET.md) (X3DH + double ratchet, status: design).
 - **First-contact trust** — the first `sig` key exchange is trust-on-first-use
   unless done out-of-band; key-change transparency (surfacing rotations
   loudly) is a UX task, not crypto.
