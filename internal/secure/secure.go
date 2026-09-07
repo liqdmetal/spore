@@ -304,3 +304,12 @@ func PrependKind(env []byte) []byte {
 	out = append(out, env...)
 	return out
 }
+
+// SigKeypairOf returns the full Ed25519 signing key derived from the identity
+// X25519 scalar. Exported for the ratchet package, which signs prekey bundles
+// with the SAME identity-derived key that signs envelopes (one identity, one
+// sig key — see SENDER_AUTH.md §3). Do not use outside key-management code.
+func SigKeypairOf(identityPriv []byte) (ed25519.PrivateKey, error) {
+	k, _, err := sigKeypair(identityPriv)
+	return k, err
+}

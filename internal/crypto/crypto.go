@@ -177,3 +177,29 @@ func Zero(buf []byte) {
 		buf[i] = 0
 	}
 }
+
+// SealAAD is Seal with additional authenticated data. The AAD is not
+// encrypted but is covered by the Poly1305 tag — any tamper fails OpenAAD.
+// The double ratchet authenticates its 40-byte wire header this way.
+func SealAAD(plaintext, key, nonce, aad []byte) ([]byte, error) {
+	if len(nonce) != NonceSize {
+		return nil, errors.New("crypto: nonce must be 24 bytes")
+	}
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Seal(nil, nonce, plaintext, aad), nil
+}
+
+// OpenAAD is Open with additional authenticated data (see SealAAD).
+func OpenAAD(ciphertext, key, nonce, aad []byte) ([]byte, error) {
+	if len(nonce) != NonceSize {
+		return nil, errors.New("crypto: nonce must be 24 bytes")
+	}
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Open(nil, nonce, ciphertext, aad)
+}
