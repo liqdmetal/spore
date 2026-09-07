@@ -36,6 +36,12 @@ type ChainConfig struct {
 	Mailbox string
 	// Name overrides the chain identifier (defaults to Type).
 	Name string
+	// AllowUnverified gates backends that are built but NOT live-verified
+	// (today: XMR — mock-verified only, and the 8-byte payment-id seam is
+	// deprecated/rejected by modern monerod on standard addresses). The
+	// honest-or-off rule: such a backend must be explicitly opted into per
+	// command (CLI -xmr-unverified) or it refuses to build.
+	AllowUnverified bool
 }
 
 // Build constructs the chain.Chain named by cfg.Type. Returns an error for an
@@ -65,6 +71,9 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 		}
 		return b, nil
 	case "xmr":
+		if !cfg.AllowUnverified {
+			return nil, fmt.Errorf("xmr backend is NOT live-verified (mock-verified only; the 8-byte payment-id seam is deprecated by modern monerod) — pass -xmr-unverified to use it anyway and treat every result as experimental")
+		}
 		if cfg.RPC == "" {
 			return nil, fmt.Errorf("xmr backend needs -rpc (monero wallet RPC)")
 		}

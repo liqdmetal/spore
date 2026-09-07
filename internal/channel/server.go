@@ -35,7 +35,11 @@ func BoxRoutes(b *Box) http.Handler {
 			http.Error(w, "channel and sender required", http.StatusBadRequest)
 			return
 		}
-		ln := b.Post(req.Channel, req.Sender, req.Private, req.Data)
+		ln, err := b.Post(req.Channel, req.Sender, req.Private, req.Data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
 		writeJSON(w, ln)
 	})
 

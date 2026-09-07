@@ -46,6 +46,7 @@ func addChainFlags(fs *flag.FlagSet) {
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
+	fs.Bool("xmr-unverified", false, "allow the NOT live-verified XMR backend (experimental; results unreliable)")
 }
 
 func mailboxcmd(args []string) {

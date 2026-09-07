@@ -90,6 +90,8 @@ func main() {
 		relaycmd(os.Args[2:])
 	case "status":
 		statuscmd(os.Args[2:])
+	case "doctor":
+		doctorcmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -113,7 +115,8 @@ func usage() {
   spore donate [chain] | --all                          (per-chain donation rail)
   spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
   spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
-  spore status [-chain ...] [-mailbox-http URL]      (connection health HUD)
+  spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
+  spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
   spore msg keygen [-out FILE]           (identity keypair for E2E encryption)
   spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
@@ -881,6 +884,9 @@ func msgBackend(fs *flag.FlagSet) chain.Chain {
 		KeyFile:   fs.Lookup("keyfile").Value.String(),
 		ProgramID: fs.Lookup("program").Value.String(),
 	}
+	if f := fs.Lookup("xmr-unverified"); f != nil && f.Value.String() == "true" {
+		cfg.AllowUnverified = true
+	}
 	if f := fs.Lookup("mailbox"); f != nil {
 		cfg.Mailbox = f.Value.String()
 	}
@@ -894,6 +900,7 @@ func msgSend(args []string) {
 	to := fs.String("to", "", "recipient address on that chain")
 	msg := fs.String("msg", "", "message text")
 	fs.String("chain", "dero", "chain backend: dero|evm|xmr|solana")
+	fs.Bool("xmr-unverified", false, "allow the NOT live-verified XMR backend (experimental)")
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")
@@ -921,6 +928,7 @@ func msgRecv(args []string) {
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	minHeight := fs.Uint64("min-height", 0, "scan from height")
 	fs.String("chain", "dero", "chain backend: dero|evm|xmr|solana")
+	fs.Bool("xmr-unverified", false, "allow the NOT live-verified XMR backend (experimental)")
 	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
 	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
 	fs.String("from", "", "our address (evm)")

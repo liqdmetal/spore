@@ -3,6 +3,8 @@ package channel
 import (
 	"context"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -97,7 +99,7 @@ func TestPresenceHeartbeatAndStale(t *testing.T) {
 	}
 	// Manually age the heartbeat past TTL and reap.
 	b.mu.Lock()
-	r := b.room("#room")
+	r, _ := b.room("#room")
 	r.presence["alice"] = time.Now().Add(-time.Minute).UnixMilli()
 	b.mu.Unlock()
 	b.Reap(time.Now())
@@ -112,7 +114,7 @@ func TestLineTTLReap(t *testing.T) {
 	c.PublicPost(context.Background(), "#room", []byte("hi"))
 	// Age past TTL and reap.
 	b.mu.Lock()
-	r := b.room("#room")
+	r, _ := b.room("#room")
 	for i := range r.lines {
 		r.lines[i].TS = time.Now().Add(-time.Hour).UnixMilli()
 	}
@@ -137,4 +139,87 @@ func TestBoxRingCap(t *testing.T) {
 		t.Fatalf("oldest kept seq = %d, want 4", lines[0].Seq)
 	}
 	b.Stop()
+}
+
+// ---- DoS caps (audit M3 / roadmap P0) ----
+
+func TestBoxRoomCap(t *testing.T) {
+	b := NewBox(BoxConfig{MaxRooms: 2})
+	if _, err := b.Post("#a", "x", false, []byte("m")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Post("#b", "x", false, []byte("m")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Post("#c", "x", false, []byte("m")); err == nil {
+		t.Fatal("room cap did not refuse a new room")
+	}
+	// Existing rooms still accept posts after the cap is hit.
+	if _, err := b.Post("#a", "x", false, []byte("m2")); err != nil {
+		t.Fatalf("capped box refused post to existing room: %v", err)
+	}
+	// Polling an unknown channel must not create one (no budget consumption).
+	b.Poll("#never", 0)
+	if _, err := b.Post("#c", "x", false, []byte("m")); err == nil {
+		t.Fatal("poll consumed room budget")
+	}
+	b.Stop()
+}
+
+func TestBoxDataAndSenderCaps(t *testing.T) {
+	b := NewBox(BoxConfig{MaxDataLen: 8, MaxSenderLen: 4})
+	if _, err := b.Post("#r", "x", false, make([]byte, 9)); err == nil {
+		t.Fatal("oversized data accepted")
+	}
+	if _, err := b.Post("#r", "too-long-sender", false, []byte("m")); err == nil {
+		t.Fatal("oversized sender accepted")
+	}
+	if _, err := b.Post("#r", "al", false, []byte("m")); err != nil {
+		t.Fatalf("in-bounds post rejected: %v", err)
+	}
+	b.Stop()
+}
+
+func TestBoxPresenceCap(t *testing.T) {
+	b := NewBox(BoxConfig{MaxPresence: 2})
+	b.Heartbeat("#r", "a")
+	b.Heartbeat("#r", "b")
+	b.Heartbeat("#r", "c") // must be refused, not grow
+	if on := b.Online("#r"); len(on) != 2 {
+		t.Fatalf("presence cap: got %d online, want 2", len(on))
+	}
+	// Known member can refresh (cap applies to NEW addrs only).
+	b.Heartbeat("#r", "a")
+	if on := b.Online("#r"); len(on) != 2 {
+		t.Fatalf("heartbeat refresh broke presence: %v", on)
+	}
+	b.Stop()
+}
+
+func TestBoxSaveAmplificationGuard(t *testing.T) {
+	dir := t.TempDir()
+	b, err := NewPersistentBox(BoxConfig{MaxSaveEvery: time.Hour}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	// First post saves once; rapid subsequent posts must not re-save.
+	if _, err := b.Post("#r", "x", false, []byte("m1")); err != nil {
+		t.Fatal(err)
+	}
+	fi1, err := os.Stat(filepath.Join(dir, "channels.json"))
+	if err != nil {
+		t.Fatalf("first post should save: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	for i := 0; i < 20; i++ {
+		b.Post("#r", "x", false, []byte("spam"))
+	}
+	fi2, err := os.Stat(filepath.Join(dir, "channels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi1.ModTime().Equal(fi2.ModTime()) {
+		t.Fatal("state file rewritten within MaxSaveEvery — I/O amplification guard broken")
+	}
 }

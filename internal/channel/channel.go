@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -53,12 +54,19 @@ type Presence struct {
 	TS      int64  `json:"ts"` // unix ms
 }
 
-// LineTTL / PresenceTTL bound how long the box keeps a line / marks someone on.
+// BoxConfig bounds how long the box keeps lines / presence AND how big the
+// box may grow (audit M3: unbounded rooms/presence/data = memory + I/O DoS).
 type BoxConfig struct {
 	LineTTL     time.Duration // how long lines survive
 	PresenceTTL time.Duration // how long a member is "online" without heartbeat
 	ReapEvery   time.Duration // reaper cadence
 	MaxLines    int           // per-channel ring cap (0 = unbounded)
+	// DoS caps (0 = default, negative = unlimited):
+	MaxRooms      int   // total number of channels the box will create
+	MaxPresence   int   // presence entries per channel
+	MaxDataLen    int   // bytes per line payload
+	MaxSenderLen  int   // bytes per sender string
+	MaxSaveEvery  time.Duration // min interval between full-state saves (I/O amplification guard)
 }
 
 // Box is a channel relay server. Thread-safe.
@@ -67,7 +75,9 @@ type Box struct {
 	cfg      BoxConfig
 	channels map[string]*room
 	done     chan struct{}
+	stopOnce sync.Once
 	dir      string // optional persistence dir; empty = in-memory only
+	lastSave time.Time // last full-state save (I/O amplification guard)
 }
 
 type room struct {
@@ -76,6 +86,15 @@ type room struct {
 	presence   map[string]int64 // addr -> last heartbeat unix ms
 	lastPruned time.Time
 }
+
+// Defaults for the DoS caps (audit M3).
+const (
+	DefaultMaxRooms     = 256
+	DefaultMaxPresence  = 512
+	DefaultMaxDataLen   = 4096
+	DefaultMaxSenderLen = 128
+	DefaultMaxSaveEvery = 5 * time.Second
+)
 
 // NewBox builds an empty channel box. Reaper starts in the background.
 func NewBox(cfg BoxConfig) *Box {
@@ -90,6 +109,22 @@ func NewBox(cfg BoxConfig) *Box {
 	}
 	if cfg.MaxLines <= 0 {
 		cfg.MaxLines = 2000
+	}
+	// DoS cap defaults (0 = use default; negative = unlimited).
+	if cfg.MaxRooms == 0 {
+		cfg.MaxRooms = DefaultMaxRooms
+	}
+	if cfg.MaxPresence == 0 {
+		cfg.MaxPresence = DefaultMaxPresence
+	}
+	if cfg.MaxDataLen == 0 {
+		cfg.MaxDataLen = DefaultMaxDataLen
+	}
+	if cfg.MaxSenderLen == 0 {
+		cfg.MaxSenderLen = DefaultMaxSenderLen
+	}
+	if cfg.MaxSaveEvery == 0 {
+		cfg.MaxSaveEvery = DefaultMaxSaveEvery
 	}
 	b := &Box{cfg: cfg, channels: map[string]*room{}, done: make(chan struct{})}
 	go b.reaperLoop()
@@ -125,25 +160,53 @@ func (b *Box) reaperLoop() {
 	}
 }
 
-// Stop halts the reaper.
-func (b *Box) Stop() { close(b.done) }
-
-func (b *Box) room(name string) *room {
-	r, ok := b.channels[name]
-	if !ok {
-		r = &room{nextSeq: 1, presence: map[string]int64{}}
-		b.channels[name] = r
+// Stop halts the reaper and, for a persistent box, flushes any state not yet
+// written (the MaxSaveEvery throttle may have deferred it). A graceful
+// shutdown therefore never drops lines that were accepted; only a hard crash
+// within MaxSaveEvery of the last save can lose the trailing window — that is
+// the accepted trade of the I/O-amplification guard (audit M3). Idempotent.
+func (b *Box) Stop() {
+	b.mu.Lock()
+	if b.dir != "" {
+		_ = b.saveLocked() // best-effort final flush
 	}
-	return r
+	b.mu.Unlock()
+	b.stopOnce.Do(func() { close(b.done) })
+}
+
+func (b *Box) room(name string) (*room, error) {
+	r, ok := b.channels[name]
+	if ok {
+		return r, nil
+	}
+	if b.cfg.MaxRooms > 0 && len(b.channels) >= b.cfg.MaxRooms {
+		return nil, fmt.Errorf("channel: room limit (%d) exceeded — no new rooms", b.cfg.MaxRooms)
+	}
+	r = &room{nextSeq: 1, presence: map[string]int64{}}
+	b.channels[name] = r
+	return r, nil
+}
+
+func (b *Box) existingRoom(name string) *room {
+	return b.channels[name]
 }
 
 // Post appends a line (pre-sealed by the sender if private) and returns it
-// with its assigned seq/ts.
-func (b *Box) Post(ch string, sender string, private bool, data []byte) Line {
+// with its assigned seq/ts. Sender and data are bounded (DoS caps).
+func (b *Box) Post(ch string, sender string, private bool, data []byte) (Line, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.cfg.MaxSenderLen > 0 && len(sender) > b.cfg.MaxSenderLen {
+		return Line{}, fmt.Errorf("channel: sender too long (%d > %d)", len(sender), b.cfg.MaxSenderLen)
+	}
+	if b.cfg.MaxDataLen > 0 && len(data) > b.cfg.MaxDataLen {
+		return Line{}, fmt.Errorf("channel: data too long (%d > %d)", len(data), b.cfg.MaxDataLen)
+	}
+	r, err := b.room(ch)
+	if err != nil {
+		return Line{}, err
+	}
 	now := time.Now()
-	r := b.room(ch)
 	r.pruneLocked(now, b.cfg)
 	ln := Line{Channel: ch, Seq: r.nextSeq, TS: now.UnixMilli(), Sender: sender, Private: private, Data: append([]byte(nil), data...)}
 	r.nextSeq++
@@ -152,18 +215,29 @@ func (b *Box) Post(ch string, sender string, private bool, data []byte) Line {
 		drop := len(r.lines) - b.cfg.MaxLines
 		r.lines = append([]Line(nil), r.lines[drop:]...)
 	}
-	b.saveLocked() // persist on every post (best-effort)
-	return ln
+	// Persist at most once per MaxSaveEvery (audit M3: the old code rewrote
+	// the whole state file on EVERY post — an I/O amplification lever).
+	if b.dir != "" && (b.lastSave.IsZero() || now.Sub(b.lastSave) >= b.cfg.MaxSaveEvery) {
+		b.saveLocked() // best-effort
+		b.lastSave = now
+	}
+	return ln, nil
 }
 
 // Poll returns live lines in ch with seq > after. Expired lines are dropped.
+// Unknown channels are NOT created by polling (polling must not consume the
+// room budget).
 func (b *Box) Poll(ch string, after uint64) []Line {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var out []Line
+	r := b.existingRoom(ch)
+	if r == nil {
+		return out
+	}
 	now := time.Now()
-	r := b.room(ch)
 	r.pruneLocked(now, b.cfg)
-	out := make([]Line, 0, 16)
+	out = make([]Line, 0, 16)
 	for _, ln := range r.lines {
 		if ln.Seq > after {
 			out = append(out, ln)
@@ -172,18 +246,34 @@ func (b *Box) Poll(ch string, after uint64) []Line {
 	return out
 }
 
-// Heartbeat marks addr present in ch.
+// Heartbeat marks addr present in ch (bounded presence; no room creation).
 func (b *Box) Heartbeat(ch, addr string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.room(ch).presence[addr] = time.Now().UnixMilli()
+	r := b.existingRoom(ch)
+	if r == nil {
+		if b.cfg.MaxRooms > 0 && len(b.channels) >= b.cfg.MaxRooms {
+			return // refuse to grow
+		}
+		r = &room{nextSeq: 1, presence: map[string]int64{}}
+		b.channels[ch] = r
+	}
+	if b.cfg.MaxPresence > 0 {
+		if _, known := r.presence[addr]; !known && len(r.presence) >= b.cfg.MaxPresence {
+			return // presence full; do not grow
+		}
+	}
+	r.presence[addr] = time.Now().UnixMilli()
 }
 
 // Online returns the live members of ch (heartbeat within PresenceTTL).
 func (b *Box) Online(ch string) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	r := b.room(ch)
+	r := b.existingRoom(ch)
+	if r == nil {
+		return nil
+	}
 	cut := time.Now().Add(-b.cfg.PresenceTTL).UnixMilli()
 	out := make([]string, 0, len(r.presence))
 	for addr, ts := range r.presence {
@@ -193,7 +283,6 @@ func (b *Box) Online(ch string) []string {
 	}
 	return out
 }
-
 // Reap evicts expired lines and stale presence across all rooms.
 func (b *Box) Reap(now time.Time) int {
 	b.mu.Lock()

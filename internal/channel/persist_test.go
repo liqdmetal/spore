@@ -15,10 +15,11 @@ func TestPersistentBoxSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.Post("#dao", "alice", false, []byte("motion 1: raise treasury"))
-	b.Post("#dao", "bob", false, []byte("seconded"))
+	_, _ = b.Post("#dao", "alice", false, []byte("motion 1: raise treasury"))
+	_, _ = b.Post("#dao", "bob", false, []byte("seconded"))
 
-	// restart from same dir
+	// restart from same dir (graceful shutdown flushes deferred state)
+	b.Stop()
 	b2, err := NewPersistentBox(cfg, dir)
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +32,7 @@ func TestPersistentBoxSurvivesRestart(t *testing.T) {
 		t.Fatalf("lines out of order: %+v", lines)
 	}
 	// nextSeq must continue (post again -> seq 3)
-	ln := b2.Post("#dao", "carol", false, []byte("third"))
+	ln, err := b2.Post("#dao", "carol", false, []byte("third"))
 	if ln.Seq != 3 {
 		t.Fatalf("nextSeq not preserved: got %d, want 3", ln.Seq)
 	}
@@ -44,9 +45,11 @@ func TestPersistentBoxSeparateRooms(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BoxConfig{LineTTL: time.Hour, ReapEvery: time.Hour}
 	b, _ := NewPersistentBox(cfg, dir)
-	b.Post("#a", "x", false, []byte("in a"))
-	b.Post("#b", "y", false, []byte("in b"))
+	_, _ = b.Post("#a", "x", false, []byte("in a"))
+	_, _ = b.Post("#b", "y", false, []byte("in b"))
 
+	// graceful shutdown, then reload
+	b.Stop()
 	b2, _ := NewPersistentBox(cfg, dir)
 	if got := b2.Poll("#a", 0); len(got) != 1 || got[0].Data[0] != 'i' {
 		t.Fatalf("#a not isolated: %+v", got)
@@ -62,7 +65,7 @@ func TestPersistentBoxRotAfterReload(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BoxConfig{LineTTL: time.Minute, ReapEvery: time.Hour}
 	b, _ := NewPersistentBox(cfg, dir)
-	b.Post("#r", "x", false, []byte("fresh"))
+	_, _ = b.Post("#r", "x", false, []byte("fresh"))
 
 	b2, _ := NewPersistentBox(cfg, dir)
 	// age the stored lines past TTL then reap
