@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,8 +26,11 @@ import (
 
 // msgE2 is deliberately separate from legacy msg: it has no one-shot
 // fallback and never accepts plaintext as a command-line flag (argv is
-// visible to shell history, `ps`, and crash/monitoring reports). Bundles are
-// supplied explicitly; discovery is not implied.
+// visible to shell history, `ps`, and crash/monitoring reports). Bundles can
+// be supplied explicitly (-bundle) or fetched from a mailbox's /prekey
+// endpoint (-bundle-url); either way, EstablishInitiator still verifies the
+// bundle's SPK_sig against -pinned-sig, so discovery is a transport
+// convenience only and never substitutes for out-of-band trust.
 func msgE2(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: spore msg send-e2|recv-e2 [flags]")
@@ -112,6 +116,43 @@ func readBundle(path string) (*ratchet.SPKBundle, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// fetchBundle discovers a recipient's public prekey bundle from a mailbox's
+// GET /prekey endpoint. This is a transport convenience over -bundle FILE.json
+// only: EstablishInitiator still verifies SPK_sig against the caller-supplied
+// -pinned-sig, so a compromised or malicious mailbox can at worst withhold or
+// serve a stale bundle (causing send-e2 to fail) — it cannot forge a bundle
+// that passes signature pinning, and it never sees plaintext, ciphertext, or
+// any private key material (this is a GET with no body).
+func fetchBundle(ctx context.Context, url, token string) (*ratchet.SPKBundle, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bundle discovery: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errors.New("bundle discovery: recipient has not published a prekey bundle")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bundle discovery: unexpected status %s", resp.Status)
+	}
+	var wire struct {
+		Bundle ratchet.SPKBundle `json:"bundle"`
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&wire); err != nil {
+		return nil, fmt.Errorf("bundle discovery: malformed response: %w", err)
+	}
+	return &wire.Bundle, nil
 }
 
 // readPlaintext resolves the message body without ever putting it on the
@@ -224,14 +265,19 @@ func msgSendE2(args []string) {
 	fs := flag.NewFlagSet("msg send-e2", flag.ExitOnError)
 	to := fs.String("to", "", "recipient chain address")
 	identity := fs.String("identity", "", "file containing sender identity private key hex")
-	bundle := fs.String("bundle", "", "recipient SPK bundle JSON (explicit; no discovery)")
+	bundle := fs.String("bundle", "", "recipient SPK bundle JSON file (mutually exclusive with -bundle-url)")
+	bundleURL := fs.String("bundle-url", "", "fetch recipient SPK bundle from a mailbox GET /prekey URL (mutually exclusive with -bundle; discovery is a transport convenience only — -pinned-sig is still required and still verified)")
+	bundleToken := fs.String("bundle-token", "", "bearer token for -bundle-url, if the mailbox requires auth")
 	pinned := fs.String("pinned-sig", "", "recipient signing public key hex")
 	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin; never pass plaintext as an argv flag — argv is visible to shell history, ps, and crash reports)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
-	if *to == "" || *identity == "" || *bundle == "" || *pinned == "" {
-		check(errors.New("send-e2 requires -to -identity -bundle -pinned-sig (plaintext via -msg-file or stdin)"))
+	if *to == "" || *identity == "" || *pinned == "" {
+		check(errors.New("send-e2 requires -to -identity -pinned-sig, and exactly one of -bundle or -bundle-url (plaintext via -msg-file or stdin)"))
+	}
+	if (*bundle == "") == (*bundleURL == "") {
+		check(errors.New("send-e2 requires exactly one of -bundle or -bundle-url, not both and not neither"))
 	}
 	plaintext, err := readPlaintext(*msgFile)
 	check(err)
@@ -242,8 +288,14 @@ func msgSendE2(args []string) {
 	check(err)
 	id, err := readHexFile(*identity, 32)
 	check(err)
-	b, err := readBundle(*bundle)
-	check(err)
+	var b *ratchet.SPKBundle
+	if *bundle != "" {
+		b, err = readBundle(*bundle)
+		check(err)
+	} else {
+		b, err = fetchBundle(context.Background(), *bundleURL, *bundleToken)
+		check(err)
+	}
 	sig, err := hex.DecodeString(*pinned)
 	check(err)
 	if len(sig) != 32 {

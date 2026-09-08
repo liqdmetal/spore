@@ -49,3 +49,22 @@ one-shot message.
 Cosmos and TON are deliberately profiles/seams rather than invented universal
 backends. Each supported profile must document its exact transaction endpoint,
 message field, indexer query, fee behavior, and whether delivery is final.
+
+## Prekey bundle discovery
+
+`spore msg send-e2` accepts a recipient's public X3DH bundle two ways:
+
+- `-bundle FILE.json` — a bundle saved to disk out-of-band (e.g. shared over
+  a separate secure channel).
+- `-bundle-url URL [-bundle-token TOKEN]` — fetched live via `GET /prekey`
+  from the recipient's mailbox (`internal/mailbox`'s `PUT/GET /prekey`
+  route), optionally through a bearer-token-gated `HandlerToken` mailbox.
+
+These are mutually exclusive; the CLI refuses both or neither. Discovery is
+a transport convenience only, never a trust boundary substitute:
+`EstablishInitiator` still verifies the fetched bundle's `SPK_sig` against
+the caller-supplied `-pinned-sig`, so a compromised or malicious mailbox can
+at worst withhold or serve a stale bundle (causing `send-e2` to fail loudly)
+— it cannot forge a bundle that passes signature pinning, and the discovery
+request is a bodyless GET that never carries plaintext, ciphertext, or any
+private key material.
