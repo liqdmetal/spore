@@ -41,6 +41,44 @@ func (s *DiskStore) expPath(cid [32]byte) string {
 }
 
 func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
+	// Write the deadline BEFORE the body, both via temp+rename so each half
+	// is atomic on its own. This ordering matters: expired() treats a
+	// missing .exp file as "never expires" (see below), so if a crash lands
+	// between the two writes, the dangerous outcome is a .body with no .exp
+	// (ciphertext that can never be reaped — a permanent-retention failure
+	// that breaks the entire compost guarantee this store exists to
+	// provide). Writing .exp first means a crash mid-sequence can only leave
+	// a dangling .exp with no .body, which is harmless: Get still returns
+	// ErrNotFound, and Reap silently removes the orphaned .exp file.
+	var exp string
+	if deadline.IsZero() {
+		exp = "0"
+	} else {
+		exp = strconv.FormatInt(deadline.Unix(), 10)
+	}
+	expTmp, err := os.CreateTemp(s.dir, "putexp-*")
+	if err != nil {
+		return err
+	}
+	expTmpName := expTmp.Name()
+	if _, err := expTmp.Write([]byte(exp)); err != nil {
+		expTmp.Close()
+		os.Remove(expTmpName)
+		return err
+	}
+	if err := expTmp.Close(); err != nil {
+		os.Remove(expTmpName)
+		return err
+	}
+	if err := os.Chmod(expTmpName, 0o600); err != nil {
+		os.Remove(expTmpName)
+		return err
+	}
+	if err := os.Rename(expTmpName, s.expPath(cid)); err != nil {
+		os.Remove(expTmpName)
+		return err
+	}
+
 	// Write body to a temp file then rename, so a crash never leaves a
 	// half-written body under the final name.
 	tmp, err := os.CreateTemp(s.dir, "put-*")
@@ -61,14 +99,7 @@ func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 		os.Remove(tmpName)
 		return err
 	}
-
-	var exp string
-	if deadline.IsZero() {
-		exp = "0"
-	} else {
-		exp = strconv.FormatInt(deadline.Unix(), 10)
-	}
-	return os.WriteFile(s.expPath(cid), []byte(exp), 0o600)
+	return nil
 }
 
 func (s *DiskStore) Get(cid [32]byte) ([]byte, error) {
