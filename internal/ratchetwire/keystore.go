@@ -45,6 +45,37 @@ func hexID(id [8]byte) string {
 	return string(out)
 }
 
+// parseHexID decodes a 16-character lowercase hex string into an 8-byte ID.
+// ok is false on any malformed input; it is a real boolean, not a sentinel
+// byte value, so a legitimately decoded 0xff byte is never mistaken for a
+// parse failure (that bug once caused ~3% of session IDs — any ID with a
+// 0xff byte — to be silently dropped from IDs() and never restored).
+func parseHexID(s string) (id [8]byte, ok bool) {
+	if len(s) != 16 {
+		return id, false
+	}
+	for i := 0; i < 8; i++ {
+		hi, ok1 := hexNibble(s[i*2])
+		lo, ok2 := hexNibble(s[i*2+1])
+		if !ok1 || !ok2 {
+			return id, false
+		}
+		id[i] = hi<<4 | lo
+	}
+	return id, true
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	default:
+		return 0, false
+	}
+}
+
 func (s *FileStateStore) Save(id [8]byte, state []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,27 +141,11 @@ func (s *FileStateStore) IDs() ([][8]byte, error) {
 		if len(name) != len("session-")+16+len(".state") || entry.IsDir() || name[:8] != "session-" || name[len(name)-6:] != ".state" {
 			continue
 		}
-		var id [8]byte
-		for i := range id {
-			var v byte
-			for _, c := range []byte(name[8+i*2 : 10+i*2]) {
-				v <<= 4
-				if c >= '0' && c <= '9' {
-					v += c - '0'
-				} else if c >= 'a' && c <= 'f' {
-					v += c - 'a' + 10
-				} else {
-					v = 0xff
-					break
-				}
-			}
-			if v == 0xff {
-				goto skip
-			}
-			id[i] = v
+		id, ok := parseHexID(name[8:24])
+		if !ok {
+			continue
 		}
 		ids = append(ids, id)
-	skip:
 	}
 	return ids, nil
 }
