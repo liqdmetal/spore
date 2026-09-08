@@ -239,11 +239,19 @@ func TestAdversarialE2RejectsExpiredAndTamperedFramesWithoutAdvancing(t *testing
 	if string(before) != string(after) {
 		t.Fatal("tampered frame advanced ratchet state")
 	}
-	expired, _, err := alice.SendNext(f.SessionID, []byte("expires"), now.Add(time.Second))
+	// Deadline margin must survive slow environments (race detector,
+	// disk-pressured CI, packages running concurrently): the earlier
+	// 1-second margin could expire before SendNext/ReceiveNext even ran,
+	// producing a spurious "deadline must be in the future" failure
+	// instead of exercising real expiry behavior. A minute of headroom
+	// for "not yet expired" and expiring the check 90s later is generous
+	// enough to never flake under normal CI load while still proving
+	// ReceiveNext enforces the deadline.
+	expired, _, err := alice.SendNext(f.SessionID, []byte("expires"), now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = bob.ReceiveNext(expired, now.Add(2*time.Second)); !errors.Is(err, ErrExpired) {
+	if _, err = bob.ReceiveNext(expired, now.Add(90*time.Second)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expired frame error = %v", err)
 	}
 }
