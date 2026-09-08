@@ -9,10 +9,14 @@ import (
 
 	"github.com/gagliardetto/solana-go"
 
+	"github.com/liqdmetal/spore/internal/bitcoin"
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/cosmos"
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/evm"
+	"github.com/liqdmetal/spore/internal/nostr"
 	solanaBackend "github.com/liqdmetal/spore/internal/solana"
+	"github.com/liqdmetal/spore/internal/ton"
 	"github.com/liqdmetal/spore/internal/xmr"
 )
 
@@ -36,12 +40,20 @@ type ChainConfig struct {
 	Mailbox string
 	// Name overrides the chain identifier (defaults to Type).
 	Name string
-	// AllowUnverified gates backends that are built but NOT live-verified
-	// (today: XMR — mock-verified only, and the 8-byte payment-id seam is
-	// deprecated/rejected by modern monerod on standard addresses). The
-	// honest-or-off rule: such a backend must be explicitly opted into per
-	// command (CLI -xmr-unverified) or it refuses to build.
-	AllowUnverified bool
+	// AllowUnverified gates backends that are built but NOT live-verified.
+	AllowUnverified                bool
+	Network, BaseURL               string
+	PostPath, ListPath, HeightPath string
+	Address                        string
+	Relays                         []string
+	PrivateKey                     string
+	DeliveryGuaranteed             bool
+	FeeRate                        uint64
+	MessageField, RecipientField   string
+	Signer                         bitcoin.SignerBroadcaster
+	Relay                          nostr.Relay
+	Sender                         ton.Sender
+	ChainID                        string
 }
 
 // Build constructs the chain.Chain named by cfg.Type. Returns an error for an
@@ -78,6 +90,22 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 			return nil, fmt.Errorf("xmr backend needs -rpc (monero wallet RPC)")
 		}
 		return xmr.NewBackend(cfg.RPC, cfg.Login), nil
+	case "nostr":
+		return nostr.New(nostr.Config{PrivateKey: cfg.PrivateKey, Relays: cfg.Relays, Network: cfg.Network, Relay: cfg.Relay})
+	case "bitcoin":
+		if cfg.BaseURL == "" || cfg.Address == "" || cfg.Signer == nil {
+			return nil, fmt.Errorf("bitcoin backend needs -base-url, -address, and signer")
+		}
+		return &bitcoin.Backend{Client: bitcoin.Client{BaseURL: cfg.BaseURL}, Signer: cfg.Signer, AddressValue: cfg.Address, FeeRate: cfg.FeeRate, Network: bitcoin.Network(cfg.Network)}, nil
+	case "cosmos":
+		b := cosmos.New(cosmos.Config{ChainID: cfg.Name, BaseURL: cfg.BaseURL, PostPath: cfg.PostPath, ListPath: cfg.ListPath, HeightPath: cfg.HeightPath, MessageField: cfg.MessageField, RecipientField: cfg.RecipientField, AddressValue: cfg.Address, DeliveryGuaranteed: cfg.DeliveryGuaranteed})
+		if err := b.Validate(); err != nil {
+			return nil, err
+		}
+		return b, nil
+	case "ton":
+		b := ton.New(ton.Config{Address: cfg.Address, Network: cfg.Network, BaseURL: cfg.BaseURL, PostPath: cfg.PostPath, ListPath: cfg.ListPath, HeightPath: cfg.HeightPath, Sender: cfg.Sender, DeliveryGuaranteed: cfg.DeliveryGuaranteed})
+		return b, nil
 	case "solana":
 		if cfg.KeyFile == "" {
 			return nil, fmt.Errorf("solana backend needs -keyfile (solana signer keypair JSON)")
@@ -101,4 +129,6 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 }
 
 // Supported lists the backend type names.
-func Supported() []string { return []string{"dero", "evm", "xmr", "solana"} }
+func Supported() []string {
+	return []string{"dero", "evm", "xmr", "solana", "nostr", "bitcoin", "cosmos", "ton"}
+}

@@ -51,7 +51,29 @@ func e2Store(url, token string) (ratchetwire.BodyStore, error) {
 	return store.NewHTTPStoreWithToken(url, token)
 }
 func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
-	cfg := backend.ChainConfig{Type: fs.Lookup("chain").Value.String(), RPC: fs.Lookup("rpc").Value.String(), Login: fs.Lookup("rpc-login").Value.String(), From: fs.Lookup("from").Value.String(), KeyFile: fs.Lookup("keyfile").Value.String(), ProgramID: fs.Lookup("program").Value.String()}
+	value := func(name string) string {
+		if f := fs.Lookup(name); f != nil {
+			return f.Value.String()
+		}
+		return ""
+	}
+	privateKey := value("private-key")
+	if path := value("private-key-file"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return ratchetwire.ChainCarrier{}, err
+		}
+		privateKey = strings.TrimSpace(string(b))
+	}
+	var relays []string
+	if raw := value("relays"); raw != "" {
+		for _, r := range strings.Split(raw, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				relays = append(relays, r)
+			}
+		}
+	}
+	cfg := backend.ChainConfig{Type: value("chain"), RPC: value("rpc"), Login: value("rpc-login"), From: value("from"), KeyFile: value("keyfile"), ProgramID: value("program"), PrivateKey: privateKey, Network: value("network"), BaseURL: value("base-url"), Address: value("address"), Name: value("chain-id"), PostPath: value("post-path"), ListPath: value("list-path"), HeightPath: value("height-path"), MessageField: value("message-field"), RecipientField: value("recipient-field"), DeliveryGuaranteed: value("delivery-guaranteed") == "true", Relays: relays}
 	c, err := backend.Build(context.Background(), cfg)
 	if err != nil {
 		return ratchetwire.ChainCarrier{}, err
@@ -62,6 +84,8 @@ func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
 		codec = ratchetwire.DeroChainCodec{}
 	case "evm", "solana":
 		codec = ratchetwire.JSONCodec{}
+	case "nostr", "bitcoin", "cosmos", "ton":
+		codec = ratchetwire.CanonicalChainCodec{}
 	default:
 		return ratchetwire.ChainCarrier{}, fmt.Errorf("E2 pointer carrier unsupported on %s; refusing downgrade", c.Name())
 	}
@@ -130,6 +154,19 @@ func e2Common(fs *flag.FlagSet) {
 	fs.String("from", "", "sender chain address")
 	fs.String("keyfile", "", "Solana signer JSON")
 	fs.String("program", "", "Solana program ID")
+	fs.String("private-key", "", "Nostr private key (prefer -private-key-file)")
+	fs.String("private-key-file", "", "file containing Nostr private key")
+	fs.String("relays", "", "comma-separated Nostr relay URLs")
+	fs.String("network", "", "carrier network")
+	fs.String("base-url", "", "carrier API base URL")
+	fs.String("address", "", "carrier wallet/address")
+	fs.String("chain-id", "", "Cosmos chain ID")
+	fs.String("post-path", "", "carrier post path")
+	fs.String("list-path", "", "carrier list path")
+	fs.String("height-path", "", "carrier height path")
+	fs.String("message-field", "", "Cosmos message field")
+	fs.String("recipient-field", "", "Cosmos recipient field")
+	fs.Bool("delivery-guaranteed", false, "assert carrier preserves exact pointer delivery")
 	fs.String("store", "", "HTTP off-chain frame store URL")
 	fs.String("store-token", "", "bearer token for the HTTP off-chain frame store")
 	fs.String("state-dir", "", "encrypted endpoint session state directory (required)")
