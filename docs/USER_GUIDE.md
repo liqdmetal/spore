@@ -219,6 +219,10 @@ directly and needs no daemon. Name resolution is a convenience over your node
 
 ## 7. What "rot" means, and the honest limits
 
+> **Security status correction:** the current direct DERO whisper, 0xE1 public-chain envelope, and one-shot long-body paths are encrypted but not forward-secret. A later compromise of the recipient's long-term key can retro-decrypt recorded ciphertext. The X3DH + Double Ratchet session in `internal/ratchet` is implemented at the crypto layer but its 0xE2 wire adapter is not shipped yet. Treat forward secrecy as unavailable until that integration and its end-to-end tests land.
+
+
+
 **Rot = content that becomes unrecoverable on purpose.** On DERO, content in a
 block can never be deleted, so compostability is done two ways: **(a)** keys
 are ephemeral and erased after use, turning any lingering ciphertext into

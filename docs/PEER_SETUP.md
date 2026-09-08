@@ -78,8 +78,14 @@ but the two of you.
   reads it.
 - **No body sits on-chain.** Long messages ride a peer-to-peer body store and
   rot after a TTL; the on-chain anchor holds only a hash and a burn deadline.
-- **Keys are ephemeral** and erased after read. Content is compostable by
-  design — it does not persist forever.
+- **Current path limitation:** one-shot body encryption is confidential but not
+  forward-secret; a later compromise of the recipient's long-term key can
+  decrypt a copied ciphertext before it expires. The X3DH + Double Ratchet
+  session is implemented in `internal/ratchet`, but its 0xE2 wire integration
+  is not shipped yet.
+- **Target behavior:** ratcheted per-message keys are erased after use, so
+  copied historical ciphertext becomes undecryptable after key compromise.
+  Do not claim that target for the current direct path.
 
 ## What's NOT live yet (honest)
 

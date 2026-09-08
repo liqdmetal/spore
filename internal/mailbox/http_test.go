@@ -120,6 +120,58 @@ func TestHTTPPushWithDeadline(t *testing.T) {
 	}
 }
 
+// TestHTTPBodyPutThenGetHonorsTTL verifies the HTTPStore-compatible /body PUT
+// alias stores a body that can be read from /body and honors its burn deadline.
+func TestHTTPBodyPutThenGetHonorsTTL(t *testing.T) {
+	m := openMailbox(t)
+	srv := httptest.NewServer(m.Handler())
+	defer srv.Close()
+
+	ptr, ct := seedPush(t, m, "body alias")
+	cidHex := hex.EncodeToString(ptr.CID[:])
+	put := func(deadline time.Time) *http.Response {
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/body/"+cidHex, bytes.NewReader(ct))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Burn-Deadline", strconv.FormatInt(deadline.Unix(), 10))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	resp := put(time.Now().Add(2 * time.Minute))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("body PUT status = %d, want 200", resp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/body/" + cidHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || readErr != nil || !bytes.Equal(got, ct) {
+		t.Fatalf("body GET status=%d err=%v match=%v", resp.StatusCode, readErr, bytes.Equal(got, ct))
+	}
+
+	resp = put(time.Now().Add(-time.Minute))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expired body PUT status = %d, want 200", resp.StatusCode)
+	}
+	resp, err = http.Get(srv.URL + "/body/" + cidHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("expired body GET status = %d, want 410", resp.StatusCode)
+	}
+}
+
 // TestHTTPListGetAndRestart verifies the read API (list/get) survives a mailbox
 // restart: decrypted messages are durable in the plaintext log.
 func TestHTTPListGetAndRestart(t *testing.T) {

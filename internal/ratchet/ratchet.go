@@ -105,7 +105,8 @@ func (m Message) MarshalBinary() []byte {
 
 // UnmarshalMessage parses the wire form.
 func UnmarshalMessage(b []byte) (Message, error) {
-	if len(b) < headerLen+nonceLen {
+	const minCiphertext = 16 // XChaCha20-Poly1305 authentication tag.
+	if len(b) < headerLen+nonceLen+minCiphertext {
 		return Message{}, fmt.Errorf("ratchet: message truncated (%d bytes)", len(b))
 	}
 	h, err := unmarshalHeader(b[:headerLen])
@@ -192,21 +193,25 @@ type skippedKey struct {
 // live in the protected store (§7) and (b) the compromise-simulation test
 // can steal a snapshot. Treat the bytes as the device key itself.
 type ExportedState struct {
-	RK       [32]byte                      `json:"rk"`
-	DHPriv   [32]byte                      `json:"dh_priv"`
-	DHPub    [32]byte                      `json:"dh_pub"`
-	DHRemote [32]byte                      `json:"dh_remote"`
-	HasRemote bool                         `json:"has_remote"`
-	CKs      []byte                        `json:"cks,omitempty"`
-	CKr      []byte                        `json:"ckr,omitempty"`
-	Ns       uint32                        `json:"ns"`
-	Cr       uint32                        `json:"cr"`
-	PN       uint32                        `json:"pn"`
-	SID      [8]byte                       `json:"sid"`
-	Skipped  map[string]skippedKey         `json:"skipped"`
-	PerChain map[string]int                `json:"per_chain"`
-	MaxSkipPerChain   int                  `json:"max_skip_chain"`
-	MaxSkipPerSession int                  `json:"max_skip_session"`
+	// Created and LastActivity are endpoint-local lifecycle metadata. They are
+	// intentionally exported so durable stores preserve expiry state.
+	Created           time.Time             `json:"created,omitempty"`
+	LastActivity      time.Time             `json:"last_activity,omitempty"`
+	RK                [32]byte              `json:"rk"`
+	DHPriv            [32]byte              `json:"dh_priv"`
+	DHPub             [32]byte              `json:"dh_pub"`
+	DHRemote          [32]byte              `json:"dh_remote"`
+	HasRemote         bool                  `json:"has_remote"`
+	CKs               []byte                `json:"cks,omitempty"`
+	CKr               []byte                `json:"ckr,omitempty"`
+	Ns                uint32                `json:"ns"`
+	Cr                uint32                `json:"cr"`
+	PN                uint32                `json:"pn"`
+	SID               [8]byte               `json:"sid"`
+	Skipped           map[string]skippedKey `json:"skipped"`
+	PerChain          map[string]int        `json:"per_chain"`
+	MaxSkipPerChain   int                   `json:"max_skip_chain"`
+	MaxSkipPerSession int                   `json:"max_skip_session"`
 }
 
 // Export serializes the full session state (private material included).
@@ -216,6 +221,7 @@ func (s *Session) Export() ([]byte, error) {
 
 func (s *Session) state() ExportedState {
 	e := ExportedState{
+		Created: s.created, LastActivity: s.lastActivity,
 		RK: s.rk, DHPriv: s.dhPriv, DHPub: s.dhPub, DHRemote: s.dhRemote,
 		HasRemote: s.hasRemote, Ns: s.ns, Cr: s.cr, PN: s.pn, SID: s.sid,
 		Skipped: s.skipped, PerChain: s.skippedPerChain,
@@ -238,6 +244,13 @@ func ImportState(b []byte) (*Session, error) {
 		return nil, fmt.Errorf("ratchet: import: %w", err)
 	}
 	s := newSession(e.RK, sidBytes(e.SID), nil)
+	s.created, s.lastActivity = e.Created, e.LastActivity
+	if s.created.IsZero() {
+		s.created = time.Now()
+	}
+	if s.lastActivity.IsZero() {
+		s.lastActivity = s.created
+	}
 	s.dhPriv, s.dhPub, s.dhRemote = e.DHPriv, e.DHPub, e.DHRemote
 	s.hasRemote = e.HasRemote
 	s.cks, s.ckr = e.CKs, e.CKr
@@ -267,19 +280,21 @@ var ErrDecrypt = errors.New("ratchet: cannot decrypt message")
 // Session is one double-ratchet session (one per device-pair, §8). It is NOT
 // thread-safe: the caller serializes (one conversation, one owner).
 type Session struct {
-	rk       [32]byte
-	dhPriv   [32]byte // our current ratchet scalar (zero until we have one)
-	dhPub    [32]byte
-	dhRemote [32]byte
-	hasRemote bool
-	cks      []byte // our sending chain key (nil until established)
-	ckr      []byte // our receiving chain key (nil until established)
-	ns       uint32 // next send index in current chain
-	cr       uint32 // next expected receive index in current chain
-	pn       uint32 // length of the chain before the current receiving chain
-	sid      [8]byte
+	created      time.Time
+	lastActivity time.Time
+	rk           [32]byte
+	dhPriv       [32]byte // our current ratchet scalar (zero until we have one)
+	dhPub        [32]byte
+	dhRemote     [32]byte
+	hasRemote    bool
+	cks          []byte // our sending chain key (nil until established)
+	ckr          []byte // our receiving chain key (nil until established)
+	ns           uint32 // next send index in current chain
+	cr           uint32 // next expected receive index in current chain
+	pn           uint32 // length of the chain before the current receiving chain
+	sid          [8]byte
 
-	skipped map[string]skippedKey // "dhpubhex:n" → key
+	skipped         map[string]skippedKey // "dhpubhex:n" → key
 	skippedPerChain map[string]int
 
 	// Bounds (docs/RATCHET.md §5) — exceeded = fail closed.
@@ -298,7 +313,9 @@ const (
 )
 
 func newSession(sk, sid [32]byte, dhGen func() (priv [32]byte, err error)) *Session {
+	now := time.Now()
 	s := &Session{
+		created: now, lastActivity: now,
 		skipped:           map[string]skippedKey{},
 		skippedPerChain:   map[string]int{},
 		MaxSkipPerChain:   DefaultMaxSkipPerChain,
@@ -318,6 +335,15 @@ func newSession(sk, sid [32]byte, dhGen func() (priv [32]byte, err error)) *Sess
 		}
 	}
 	return s
+}
+
+// Lifecycle returns endpoint-local timestamps used for durable expiry.
+func (s *Session) Lifecycle() (created, lastActivity time.Time) { return s.created, s.lastActivity }
+
+// InactiveBefore reports whether the session has had no successful ratchet
+// activity since cutoff. A zero cutoff never expires a session.
+func (s *Session) InactiveBefore(cutoff time.Time) bool {
+	return !cutoff.IsZero() && s.lastActivity.Before(cutoff)
 }
 
 // ID returns the 8-byte session id (SHA256 of the X3DH transcript) — bound
@@ -398,6 +424,7 @@ func (s *Session) Encrypt(pt []byte) (Message, error) {
 		return m, err
 	}
 	m = Message{Header: h, Nonce: nonce, Ciphertext: ct}
+	s.lastActivity = time.Now()
 	return m, nil
 }
 
@@ -419,6 +446,18 @@ func (s *Session) DecryptWithDeadline(m Message, deadline time.Time) ([]byte, er
 }
 
 func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
+	// Ratchet transitions are speculative until AEAD authentication succeeds.
+	// Snapshot the complete state so malformed/tampered messages cannot burn
+	// chain keys, skipped keys, or DH-ratchet state.
+	snapshot, err := s.Export()
+	if err != nil {
+		return nil, err
+	}
+	rollback := func() {
+		if restored, restoreErr := ImportState(snapshot); restoreErr == nil {
+			*s = *restored
+		}
+	}
 	hb := m.Header.marshal()
 	// New remote ratchet key → DH ratchet step (§5: on EVERY direction
 	// change; this is what heals a compromised session, G2).
@@ -426,6 +465,7 @@ func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
 		if s.ckr != nil {
 			// Skipped keys on the OLD chain up to the sender's PN.
 			if err := s.skipTo(s.dhRemote, s.cr, m.Header.PN, deadline); err != nil {
+				rollback()
 				return nil, err
 			}
 		}
@@ -433,6 +473,7 @@ func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
 		s.hasRemote = true
 		ck, err := s.dhStep()
 		if err != nil {
+			rollback()
 			return nil, err
 		}
 		ckb := ck
@@ -478,9 +519,11 @@ func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
 			break
 		}
 		if m.Header.N < s.cr {
+			rollback()
 			return nil, fmt.Errorf("ratchet: replayed message (n=%d < cursor=%d, no stored key)", m.Header.N, s.cr)
 		}
 		if err := s.skipTo(m.Header.DHPub, s.cr, m.Header.N, deadline); err != nil {
+			rollback()
 			return nil, err
 		}
 		consume()
@@ -491,8 +534,10 @@ func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
 	}
 	pt, err := crypto.OpenAAD(m.Ciphertext, key[:], m.Nonce[:], aad(s.sid[:], hb))
 	if err != nil {
+		rollback()
 		return nil, ErrDecrypt
 	}
+	s.lastActivity = time.Now()
 	return pt, nil
 }
 

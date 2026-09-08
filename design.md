@@ -1,8 +1,14 @@
-# Spore — a compostable multi-chain messenger
+# Spore — a forward-private, compostable multi-chain messenger
 
-Messages that rot. The body never enters a block; the key never survives the
-exchange. What stays on-chain is a hash and dead public keys — permanently
-inert no matter what breaks later.
+The target invariant is stronger than "encrypted on-chain": per-message keys
+must rotate and die so a later device-key compromise cannot unlock old
+conversation history. Bulk bodies stay off-chain and expire; chains carry only
+opaque delivery records.
+
+Current direct whispers and 0xE1 envelopes are encrypted, but are not yet
+forward-secret. `internal/ratchet` is the mitigation being wired into the
+conversation path. Do not claim the target invariant for a path until its
+ratchet wire integration and adversarial tests pass.
 
 Spore is chain-agnostic by design. The **seam** (`internal/chain`: the
 `Chain` interface + `Watch` poller) is what any chain plugs into; `internal/whisper`

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPORE — How a message reaches you</title>
+</head>
+<body style="margin:0;background:#0B1220;">
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1580" viewBox="0 0 1900 1580" font-family="Segoe UI, Arial, sans-serif">
+<defs>
+ <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+   <stop offset="0" stop-color="#0B1220"/><stop offset="1" stop-color="#101A2E"/>
+ </linearGradient>
+ <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+   <stop offset="0" stop-color="#38BDF8"/><stop offset="0.5" stop-color="#A78BFA"/><stop offset="1" stop-color="#34D399"/>
+ </linearGradient>
+ <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#000000" flood-opacity="0.55"/></filter>
+ <marker id="ar-brand" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38BDF8"/></marker>
+ <marker id="ar-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34D399"/></marker>
+ <marker id="ar-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A78BFA"/></marker>
+ <marker id="ar-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2DD4BF"/></marker>
+</defs>
+<rect x="0" y="0" width="1900" height="1580" fill="url(#bgGrad)"/>
+
+<!-- ===================== TITLE ===================== -->
+<text x="950" y="54" text-anchor="middle" font-size="40" font-weight="800" fill="url(#titleGrad)" style="letter-spacing:1px">SPORE MESSENGER — HOW ONE MESSAGE REACHES YOU</text>
+<text x="950" y="86" text-anchor="middle" font-size="14" fill="#8FA3BF">your home node is the pager base station · your phone is the pager · the chain is the airwaves · spore-peer carries the long bodies off-chain</text>
+
+<!-- ===================== ZONE: SENDER ===================== -->
+<!-- zone A -->
+<rect x="40" y="116" width="620" height="470" rx="16" fill="#141E36" stroke="#38BDF8" stroke-opacity="0.55" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="40" y="116" width="620" height="6" rx="3" fill="#38BDF8" fill-opacity="0.9"/>
+<circle cx="78" cy="152" r="20" fill="#38BDF8" stroke="#0B1220" stroke-width="2"/>
+<text x="78" y="159" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">A</text>
+<text x="110" y="158" font-size="17" font-weight="700" fill="#38BDF8">ALICE — SENDER'S WORLD</text>
+<text x="110" y="180" font-size="11" fill="#8FA3BF">self-hosted home node (the privacy default) + her devices</text>
+
+<!-- alice device chip -->
+<rect x="70" y="200" width="560" height="120" rx="12" fill="#18233D" stroke="#38BDF8" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="350" y="226" text-anchor="middle" font-size="12.5" font-weight="700" fill="#38BDF8">📱 ALICE'S PHONE / LAPTOP — THE KEYS</text>
+<text x="350" y="252" text-anchor="middle" font-size="10.5" fill="#8FA3BF">holds the long-term key · signs &amp; decrypts LOCALLY, never uploads it</text>
+<text x="350" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore msg send / send-long · whisper send`  →  E2E envelope (X25519+HKDF+XChaCha20)</text>
+<text x="350" y="288" text-anchor="middle" font-size="10.5" fill="#8FA3BF">Dials home over TLS+token for chain access + receive when she sleeps</text>
+<text x="350" y="308" text-anchor="middle" font-size="10" fill="#5B6B7A">short text rides the chain · long bodies never touch a block</text>
+
+<!-- arrow A phone -> home node -->
+<path d="M 350 320 L 350 342" fill="none" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<!-- alice home node chip -->
+<rect x="70" y="344" width="560" height="128" rx="12" fill="#18233D" stroke="#34D399" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="350" y="370" text-anchor="middle" font-size="12.5" font-weight="700" fill="#34D399">🖥 ALICE'S HOME NODE — ALWAYS-ON BASE</text>
+<text x="350" y="396" text-anchor="middle" font-size="10.5" fill="#8FA3BF">chain node + `spore mailbox run` (serve + scan + decrypt long bodies)</text>
+<text x="350" y="414" text-anchor="middle" font-size="10.5" fill="#8FA3BF">+ optional `spore relay run` (store-and-forward for the wider fabric)</text>
+<text x="350" y="434" text-anchor="middle" font-size="10.5" fill="#8FA3BF">TLS (`-cert/-key`) · bearer token (`-token`) · no sender logging (`-privacy`)</text>
+<text x="350" y="456" text-anchor="middle" font-size="10" fill="#5B6B7A">blind courier — it serves/relays ciphertext, never sees content or the key</text>
+
+<!-- ===================== ZONE: CHAINS (middle) ===================== -->
+<rect x="700" y="116" width="500" height="470" rx="16" fill="#141E36" stroke="#A78BFA" stroke-opacity="0.55" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="700" y="116" width="500" height="6" rx="3" fill="#A78BFA" fill-opacity="0.9"/>
+<circle cx="738" cy="152" r="20" fill="#A78BFA" stroke="#0B1220" stroke-width="2"/>
+<text x="738" y="159" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">B</text>
+<text x="770" y="158" font-size="17" font-weight="700" fill="#A78BFA">THE CHAIN — THE AIRWAVES</text>
+<text x="770" y="180" font-size="11" fill="#8FA3BF">what actually carries a whisper / a pointer (chain-agnostic seam)</text>
+
+<!-- chain chips column -->
+<rect x="725" y="202" width="450" height="58" rx="12" fill="#18233D" stroke="#A78BFA" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="950" y="228" text-anchor="middle" font-size="12" font-weight="700" fill="#A78BFA">DERO — native end-to-end encryption</text>
+<text x="950" y="248" text-anchor="middle" font-size="10" fill="#8FA3BF">short msg in the tx payload (PAYLOAD0 ~95 chars) · ~1 block confirm · live mainnet</text>
+
+<rect x="725" y="272" width="450" height="58" rx="12" fill="#18233D" stroke="#F472B6" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="950" y="298" text-anchor="middle" font-size="12" font-weight="700" fill="#F472B6">SOLANA · EVM — public, so the E2E envelope rides them</text>
+<text x="950" y="318" text-anchor="middle" font-size="10" fill="#8FA3BF">kind-0xE1 signed E2E envelope on calldata / inbox PDA · Solana v3 live mainnet · EVM anvil+contract</text>
+
+<rect x="725" y="342" width="450" height="58" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="950" y="368" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">MONERO — identity only, off-chain</text>
+<text x="950" y="388" text-anchor="middle" font-size="10" fill="#8FA3BF">XMR can't carry pointers on-chain → contributes identity; DERO delivers the pointer</text>
+
+<rect x="725" y="412" width="450" height="58" rx="12" fill="#18233D" stroke="#2DD4BF" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="950" y="438" text-anchor="middle" font-size="12" font-weight="700" fill="#2DD4BF">Every chain = a tree the mycelium grows through</text>
+<text x="950" y="458" text-anchor="middle" font-size="10" fill="#8FA3BF">same canonical codec + envelope everywhere (internal/whisper, internal/secure)</text>
+
+<!-- ===================== ZONE: RECEIVER ===================== -->
+<rect x="1240" y="116" width="620" height="470" rx="16" fill="#141E36" stroke="#34D399" stroke-opacity="0.55" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="1240" y="116" width="620" height="6" rx="3" fill="#34D399" fill-opacity="0.9"/>
+<circle cx="1278" cy="152" r="20" fill="#34D399" stroke="#0B1220" stroke-width="2"/>
+<text x="1278" y="159" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">C</text>
+<text x="1310" y="158" font-size="17" font-weight="700" fill="#34D399">BOB — RECEIVER'S WORLD</text>
+<text x="1310" y="180" font-size="11" fill="#8FA3BF">his always-on mailbox + his devices</text>
+
+<!-- bob home node chip -->
+<rect x="1270" y="200" width="560" height="128" rx="12" fill="#18233D" stroke="#34D399" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="1550" y="226" text-anchor="middle" font-size="12.5" font-weight="700" fill="#34D399">🖥 BOB'S HOME NODE / MAILBOX</text>
+<text x="1550" y="252" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore mailbox run` — serves `/put`, `/body`; scans the chain for pointer-whispers</text>
+<text x="1550" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">polls Bob's mempool/node (~1–2s, pre-mine) &amp; fetches+decrypts long bodies headless</text>
+<text x="1550" y="288" text-anchor="middle" font-size="10.5" fill="#8FA3BF">holds Bob's long-term key so messages find him while his phone sleeps</text>
+<text x="1550" y="308" text-anchor="middle" font-size="10" fill="#5B6B7A">Bob's node is the SAME blind-courier pattern — decrypts only for Bob's key</text>
+
+<!-- arrow home node -> bob device -->
+<path d="M 1550 328 L 1550 352" fill="none" stroke="#34D399" stroke-width="2.5" marker-end="url(#ar-green)"/>
+
+<!-- bob device chip -->
+<rect x="1270" y="354" width="560" height="120" rx="12" fill="#18233D" stroke="#38BDF8" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="1550" y="380" text-anchor="middle" font-size="12.5" font-weight="700" fill="#38BDF8">📱 BOB'S PHONE / LAPTOP</text>
+<text x="1550" y="406" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore msg recv · whisper recv · mailbox list/get`</text>
+<text x="1550" y="424" text-anchor="middle" font-size="10.5" fill="#8FA3BF">polls home over TLS; decrypts only if it (or its node) holds the key</text>
+<text x="1550" y="442" text-anchor="middle" font-size="10.5" fill="#8FA3BF">read a message → keys rotate + body erased (they rot)</text>
+<text x="1550" y="462" text-anchor="middle" font-size="10" fill="#5B6B7A">sees plaintext — content stays between Alice &amp; Bob, never in a block</text>
+
+<!-- ===================== CROSS-LANE FLOW: SHORT (whisper) ===================== -->
+<!-- zone for paths -->
+<rect x="40" y="616" width="1820" height="396" rx="16" fill="#141E36" stroke="#FBBF24" stroke-opacity="0.5" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="40" y="616" width="1820" height="6" rx="3" fill="#FBBF24" fill-opacity="0.9"/>
+<circle cx="80" cy="652" r="20" fill="#FBBF24" stroke="#0B1220" stroke-width="2"/>
+<text x="80" y="659" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">1</text>
+<text x="114" y="658" font-size="17" font-weight="700" fill="#FBBF24">THE FLOW — TWO KINDS OF MESSAGE</text>
+<text x="114" y="680" font-size="11" fill="#8FA3BF">Short whispers ride the chain (kind 0x01 text / 0x02 pointer). Long bodies go off-chain over spore-peer — the chain only carries a pointer.</text>
+
+<!-- Sub-header row -->
+<text x="70" y="712" font-size="12.5" font-weight="700" fill="#FBBF24">① SHORT — the pager tap (whisper, on-chain)</text>
+<text x="70" y="730" font-size="10.5" fill="#8FA3BF">"meet at the garden gate" — one sentence, rides the payload, no box / no relay / no exposed IP</text>
+
+<!-- numbered short-flow chips row -->
+<rect x="70" y="744" width="248" height="100" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.6" stroke-width="1.2"/>
+<text x="194" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">1 · Alice composes</text>
+<text x="194" y="792" text-anchor="middle" font-size="10" fill="#8FA3BF">`spore msg send -chain dero`</text>
+<text x="194" y="810" text-anchor="middle" font-size="10" fill="#8FA3BF">or EVM/Solana: sealed in the</text>
+<text x="194" y="826" text-anchor="middle" font-size="10" fill="#8FA3BF">0xE1 signed E2E envelope</text>
+
+<path d="M 318 794 L 362 794" stroke="#FBBF24" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<rect x="364" y="744" width="256" height="100" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.6" stroke-width="1.2"/>
+<text x="492" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">2 · Encrypt + sign</text>
+<text x="492" y="792" text-anchor="middle" font-size="10" fill="#8FA3BF">DERO native E2E, or</text>
+<text x="492" y="810" text-anchor="middle" font-size="10" fill="#8FA3BF">X25519 ECDH + HKDF +</text>
+<text x="492" y="826" text-anchor="middle" font-size="10" fill="#8FA3BF">XChaCha20-Poly1305 to Bob</text>
+
+<path d="M 620 794 L 664 794" stroke="#FBBF24" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<rect x="666" y="744" width="272" height="100" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.6" stroke-width="1.2"/>
+<text x="802" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">3 · Ride the chain</text>
+<text x="802" y="792" text-anchor="middle" font-size="10" fill="#8FA3BF">tx propagates P2P → Bob's node</text>
+<text x="802" y="810" text-anchor="middle" font-size="10" fill="#8FA3BF">sees it in the mempool ~1–2s</text>
+<text x="802" y="826" text-anchor="middle" font-size="10" fill="#8FA3BF">before it even mines (~18s block)</text>
+
+<path d="M 938 794 L 982 794" stroke="#FBBF24" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<rect x="984" y="744" width="258" height="100" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.6" stroke-width="1.2"/>
+<text x="1113" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">4 · Bob's node sees it</text>
+<text x="1113" y="792" text-anchor="middle" font-size="10" fill="#8FA3BF">mailbox / recv polls + parses</text>
+<text x="1113" y="810" text-anchor="middle" font-size="10" fill="#8FA3BF">payload args (kind 0x01 / 0x02)</text>
+<text x="1113" y="826" text-anchor="middle" font-size="10" fill="#8FA3BF">verifies sig → ECDH decrypt</text>
+
+<path d="M 1242 794 L 1286 794" stroke="#FBBF24" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<rect x="1288" y="744" width="270" height="100" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.6" stroke-width="1.2"/>
+<text x="1423" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">5 · Bob reads it</text>
+<text x="1423" y="792" text-anchor="middle" font-size="10" fill="#8FA3BF">phone / mailbox shows plaintext</text>
+<text x="1423" y="810" text-anchor="middle" font-size="10" fill="#8FA3BF">content is garbage on-chain —</text>
+<text x="1423" y="826" text-anchor="middle" font-size="10" fill="#8FA3BF">the key is what makes it readable</text>
+
+<!-- plain words -->
+<rect x="1580" y="744" width="262" height="100" rx="12" fill="#1F2937" stroke="#94A3B8" stroke-opacity="0.6" stroke-width="1"/>
+<text x="1711" y="770" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">💡 IN PLAIN WORDS</text>
+<text x="1711" y="796" text-anchor="middle" font-size="10.5" fill="#E8EEF7">A text whisper is just a tiny</text>
+<text x="1711" y="812" text-anchor="middle" font-size="10.5" fill="#E8EEF7">encrypted tx. Nobody relays it,</text>
+<text x="1711" y="828" text-anchor="middle" font-size="10.5" fill="#E8EEF7">nobody sees your IP — Alice talks</text>
+<text x="1711" y="844" text-anchor="middle" font-size="10.5" fill="#E8EEF7">only to her own wallet + node.</text>
+
+<!-- ===================== LONG-BODY PATH (spore-peer) ===================== -->
+<text x="70" y="874" font-size="12.5" font-weight="700" fill="#2DD4BF">② LONG — the parcel (spore-peer, off-chain · nobody but sender &amp; receiver)</text>
+<text x="70" y="892" font-size="10.5" fill="#8FA3BF">bulk never rides a block. Alice encrypts the body, holds it on HER node, posts only a pointer on-chain; Bob fetches the body P2P when both are online.</text>
+
+<!-- long flow chips -->
+<rect x="70" y="904" width="258" height="88" rx="12" fill="#18233D" stroke="#2DD4BF" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="199" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2DD4BF">1 · Encrypt the body</text>
+<text x="199" y="951" text-anchor="middle" font-size="10" fill="#8FA3BF">to Bob's long-term pub under a fresh</text>
+<text x="199" y="967" text-anchor="middle" font-size="10" fill="#8FA3BF">ephemeral · store in her outbox (compost)</text>
+
+<path d="M 328 948 L 376 948" stroke="#2DD4BF" stroke-width="2.5" marker-end="url(#ar-teal)"/>
+
+<rect x="378" y="904" width="258" height="88" rx="12" fill="#18233D" stroke="#2DD4BF" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="507" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2DD4BF">2 · Serve it (Alice's node)</text>
+<text x="507" y="951" text-anchor="middle" font-size="10" fill="#8FA3BF">`spore-peer serve --dir outbox`</text>
+<text x="507" y="967" text-anchor="middle" font-size="10" fill="#8FA3BF">body keyed by CID = SHA-256(ct)</text>
+
+<path d="M 636 948 L 684 948" stroke="#2DD4BF" stroke-width="2.5" marker-end="url(#ar-teal)"/>
+
+<rect x="686" y="904" width="272" height="88" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="822" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#FBBF24">3 · Post a POINTER whisper</text>
+<text x="822" y="951" text-anchor="middle" font-size="10" fill="#8FA3BF">kind 0x02 · eph_pub(32) ‖ CID(32) rides</text>
+<text x="822" y="967" text-anchor="middle" font-size="10" fill="#8FA3BF">the chain — the body itself never does</text>
+
+<path d="M 958 948 L 1006 948" stroke="#FBBF24" stroke-width="2.5" marker-end="url(#ar-brand)"/>
+
+<rect x="1008" y="904" width="250" height="88" rx="12" fill="#18233D" stroke="#2DD4BF" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="1133" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2DD4BF">4 · Bob sees the pointer</text>
+<text x="1133" y="951" text-anchor="middle" font-size="10" fill="#8FA3BF">mailbox scans chain → parse eph_pub + CID</text>
+<text x="1133" y="967" text-anchor="middle" font-size="10" fill="#8FA3BF">both online now → fetch P2P</text>
+
+<path d="M 1258 948 L 1306 948" stroke="#2DD4BF" stroke-width="2.5" marker-end="url(#ar-teal)"/>
+
+<rect x="1308" y="904" width="262" height="88" rx="12" fill="#18233D" stroke="#2DD4BF" stroke-opacity="0.65" stroke-width="1.2"/>
+<text x="1439" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2DD4BF">5 · Fetch over spore-peer</text>
+<text x="1439" y="951" text-anchor="middle" font-size="10" fill="#8FA3BF">`spore-peer fetch --addr A:port --cid`</text>
+<text x="1439" y="967" text-anchor="middle" font-size="10" fill="#8FA3BF">sha256(ct)==CID enforced both directions</text>
+
+<path d="M 1570 948 L 1618 948" stroke="#2DD4BF" stroke-width="2.5" marker-end="url(#ar-teal)"/>
+
+<rect x="1620" y="904" width="222" height="88" rx="12" fill="#1F2937" stroke="#94A3B8" stroke-opacity="0.6" stroke-width="1"/>
+<text x="1731" y="930" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2DD4BF">6 · Decrypt + rot</text>
+<text x="1731" y="951" text-anchor="middle" font-size="10" fill="#E8EEF7">ECDH-decrypt · verify · read ·</text>
+<text x="1731" y="967" text-anchor="middle" font-size="10" fill="#E8EEF7">keys rotate, body erased (rot)</text>
+
+<!-- ===================== ZONE: DEPLOYMENT SHAPES ===================== -->
+<rect x="40" y="1042" width="1820" height="300" rx="16" fill="#141E36" stroke="#A78BFA" stroke-opacity="0.5" stroke-width="1.5" filter="url(#soft)"/>
+<rect x="40" y="1042" width="1820" height="6" rx="3" fill="#A78BFA" fill-opacity="0.9"/>
+<circle cx="80" cy="1078" r="20" fill="#A78BFA" stroke="#0B1220" stroke-width="2"/>
+<text x="80" y="1085" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">2</text>
+<text x="114" y="1084" font-size="17" font-weight="700" fill="#A78BFA">THREE WAYS TO RUN IT — SAME PROTOCOL</text>
+<text x="114" y="1106" font-size="11" fill="#8FA3BF">privacy = who runs the box. Your device keeps the keys in every shape; the box is always a blind courier of ciphertext.</text>
+
+<!-- three shape chips -->
+<rect x="70" y="1122" width="560" height="150" rx="12" fill="#18233D" stroke="#34D399" stroke-opacity="0.75" stroke-width="1.4"/>
+<text x="350" y="1150" text-anchor="middle" font-size="13" font-weight="700" fill="#34D399">🏠 SELF-HOSTED HOME NODE — ENCOURAGED</text>
+<text x="350" y="1176" text-anchor="middle" font-size="10.5" fill="#8FA3BF">you run your own always-on node + `spore mailbox run` on YOUR hardware</text>
+<text x="350" y="1194" text-anchor="middle" font-size="10.5" fill="#8FA3BF">your phone &amp; laptop dial YOUR box over TLS+token — no third party</text>
+<text x="350" y="1214" text-anchor="middle" font-size="10.5" fill="#8FA3BF">highest privacy: your data, your server, your key</text>
+<text x="350" y="1234" text-anchor="middle" font-size="10" fill="#5B6B7A">→ docs/HOME_NODE.md</text>
+<rect x="350" y="1244" width="0" height="0"/>
+
+<rect x="670" y="1122" width="560" height="150" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="950" y="1150" text-anchor="middle" font-size="13" font-weight="700" fill="#FBBF24">🔄 RELAY FABRIC HOP</text>
+<text x="950" y="1176" text-anchor="middle" font-size="10.5" fill="#8FA3BF">a community/anon relay `spore relay run` store-and-forwards opaque bodies</text>
+<text x="950" y="1194" text-anchor="middle" font-size="10.5" fill="#8FA3BF">handles bodies when the two nodes aren't both online at once</text>
+<text x="950" y="1214" text-anchor="middle" font-size="10.5" fill="#8FA3BF">relay sees ciphertext + destination — not you, not content</text>
+<text x="950" y="1234" text-anchor="middle" font-size="10" fill="#5B6B7A">→ `spore relay run` · the fabric becomes a paging mesh</text>
+
+<rect x="1270" y="1122" width="560" height="150" rx="12" fill="#18233D" stroke="#F472B6" stroke-opacity="0.7" stroke-width="1.2"/>
+<text x="1550" y="1150" text-anchor="middle" font-size="13" font-weight="700" fill="#F472B6">🏢 HOSTED SERVICE (MODEL B) — FALLBACK</text>
+<text x="1550" y="1176" text-anchor="middle" font-size="10.5" fill="#8FA3BF">for people with NO home node (a phone can't run a chain node)</text>
+<text x="1550" y="1194" text-anchor="middle" font-size="10.5" fill="#8FA3BF">the service runs the node + mailbox as a BLIND COURIER</text>
+<text x="1550" y="1214" text-anchor="middle" font-size="10.5" fill="#8FA3BF">you pay for reachability, not trust — it never sees content</text>
+<text x="1550" y="1234" text-anchor="middle" font-size="10" fill="#5B6B7A">→ docs/MODEL_B_SERVICE.md · keys never leave your device</text>
+
+<!-- ===================== KEYING PRINCIPLE STRIP ===================== -->
+<rect x="70" y="1290" width="1760" height="36" rx="10" fill="#1F2937" stroke="#38BDF8" stroke-opacity="0.5" stroke-width="1"/>
+<text x="950" y="1313" text-anchor="middle" font-size="11.5" font-weight="700" fill="#38BDF8">KEYING TRUTH · the body never enters a block · the key never survives the exchange · what stays on-chain is a hash + dead public keys — permanently inert no matter what breaks later</text>
+
+<!-- footer -->
+<text x="950" y="1550" text-anchor="middle" font-size="10" fill="#5B6B7A">spore (liqdmetal/spore) · spore-peer (liqdmetal/spore-peer, Rust, BSD-3) · drawn from code + docs/WIRE_SPEC, FULL_PICTURE, HOME_NODE, RATCHET</text>
+</svg>
+</body>
+</html>

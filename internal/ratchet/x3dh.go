@@ -44,13 +44,13 @@ var (
 // one-time prekey handed out ONCE by the mailbox; it is optional (nil when
 // the OPK pool is exhausted — degraded 2-DH mode, §10).
 type SPKBundle struct {
-	IKPub   [32]byte `json:"ik_pub"`    // identity X25519 public
-	SPKPub  [32]byte `json:"spk_pub"`   // signed prekey public
-	SPKID   uint32   `json:"spk_id"`    // monotonic SPK identifier
-	SPKSig  [64]byte `json:"spk_sig"`   // Ed25519(identity, spkTranscript)
-	OPKPub  *[32]byte `json:"opk_pub"`  // nil = degraded (no OPK available)
-	OPKID   uint32   `json:"opk_id"`
-	OPKHash [32]byte `json:"opk_hash"`  // sha256(OPK_pub), covered by SPKSig
+	IKPub   [32]byte  `json:"ik_pub"`  // identity X25519 public
+	SPKPub  [32]byte  `json:"spk_pub"` // signed prekey public
+	SPKID   uint32    `json:"spk_id"`  // monotonic SPK identifier
+	SPKSig  [64]byte  `json:"spk_sig"` // Ed25519(identity, spkTranscript)
+	OPKPub  *[32]byte `json:"opk_pub"` // nil = degraded (no OPK available)
+	OPKID   uint32    `json:"opk_id"`
+	OPKHash [32]byte  `json:"opk_hash"` // sha256(OPK_pub), covered by SPKSig
 }
 
 // spkTranscript is the exact bytes Ed25519 signs over: label || SPKPub ||
@@ -153,9 +153,11 @@ func (h *HandshakeMessage) MarshalBinary() []byte {
 	return append(out, d)
 }
 
+const handshakeLen = 32 + 32 + 4 + 4 + 8 + 1
+
 func UnmarshalHandshake(b []byte) (*HandshakeMessage, error) {
-	if len(b) < 32+32+4+4+8+1 {
-		return nil, fmt.Errorf("ratchet: handshake truncated (%d bytes)", len(b))
+	if len(b) != handshakeLen {
+		return nil, fmt.Errorf("ratchet: handshake length %d, want %d", len(b), handshakeLen)
 	}
 	h := &HandshakeMessage{}
 	copy(h.IKPub[:], b[:32])
@@ -163,7 +165,13 @@ func UnmarshalHandshake(b []byte) (*HandshakeMessage, error) {
 	h.SPKID = binary.LittleEndian.Uint32(b[64:])
 	h.OPKID = binary.LittleEndian.Uint32(b[68:])
 	copy(h.SessionID[:], b[72:80])
+	if b[80] > 1 {
+		return nil, fmt.Errorf("ratchet: invalid degraded flag %d", b[80])
+	}
 	h.Degraded = b[80] == 1
+	if h.Degraded != (h.OPKID == noOPK) {
+		return nil, fmt.Errorf("ratchet: degraded/opk mismatch")
+	}
 	return h, nil
 }
 

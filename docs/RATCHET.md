@@ -1,11 +1,13 @@
-# Spore Ratchet — X3DH + Double Ratchet Design
+# Spore Ratchet — X3DH + Double Ratchet
 
-*Status: DESIGN (not implemented). Closes the last big T1/T4 gap: forward
-secrecy. Today a stolen device key decrypts every message encrypted to it
-that still exists — the envelope v2 key is a function of the long-term
-X25519 scalar alone. This design makes compromise-of-key ≠ compromise-of-
-history. Companion docs: `SENDER_AUTH.md` (identity/authenticity, unchanged),
-`WIRE_SPEC.md` (envelope v2 — ratcheting layers on top, v3 proposed).*
+*Status: crypto/session implementation landed; wire integration is still
+pending. Closes the last big T1/T4 gap: forward secrecy. Today a stolen device
+key decrypts every message encrypted to it that still exists — the DERO native
+payload, the 0xE1 public-chain envelope, and the one-shot long-body path all
+need their ratcheted conversation adapter before they get the stronger claim.
+This design makes compromise-of-key ≠ compromise-of-history. Companion docs:
+`SENDER_AUTH.md` (identity/authenticity, unchanged), `WIRE_SPEC.md` (0xE1
+legacy envelope; 0xE2 ratchet envelope proposed).*
 
 ---
 
@@ -189,24 +191,29 @@ becomes genuinely blind, which was always the README's claim.
 - OPK exhaustion: fall back to DH1–DH3 (2-DH variant) — acceptable,
   signal the degraded mode in the header flags.
 
-## 11. Implementation plan & tests
+## 11. Implementation status and remaining wire work
 
-1. `internal/ratchet`: Session (Init/Resume), DoubleRatchet (RatchetEncrypt/
-   RatchetDecrypt with skipped-key store), prekey bundle build/consume,
-   store interface. ~600 LOC, no wire changes.
-2. Tests: symmetric round-trip; out-of-order within bounds; bounds exceeded
-   fails closed; compromise-simulation test (serialize state at step N,
-   delete keys ≤N, assert old messages undecryptable, new ones decrypt);
-   post-compromise healing (inject bad DH → next DH step restores); X3DH
-   with/without OPK; SPK_sig rejection; header-as-AAD tamper; vector-driven
-   (extend `interop-vectors.json` with ratchet vectors: fixed scalars →
-   deterministic ratchet steps — HKDF/HMAC are deterministic, only X25519
-   ephemerals need fixing, same technique as the envelope vectors).
-3. Wire: envelope kind 0xE2 + mailbox `/bundle` route; CLI `spore chat
-   -ratchet`. Feature-flagged behind `-x3dh` until the soak passes.
-4. Golden requirement: skipping a message key then receiving messages 2,3
-   then 1 must deliver 2,3,1 with 1's key from the skipped store, and the
-   store must shrink to zero after delivery + TTL.
+1. **Crypto/session layer landed:** `internal/ratchet` now contains X3DH,
+   Double Ratchet, bounded skipped-key storage, compromise simulation,
+   post-compromise healing, header-AAD authentication, export/import, and
+   deterministic vectors. This is not the messenger integration by itself.
+2. **Still required before the privacy claim is shipped:**
+   - a versioned 0xE2 envelope adapter carrying the ratchet handshake/message
+     bytes through `chain.Payload`;
+   - recipient prekey-bundle publication and one-time-prekey consumption;
+   - protected, TTL-bound session-state persistence on the endpoint, with no
+     ratchet private state in a blind mailbox or relay;
+   - chain-agnostic `SendRatchet`/`RecvRatchet` APIs and CLI selection;
+   - end-to-end tests through DERO, EVM, Solana, and XMR's off-chain signal/
+     rendezvous path, including restart, replay, out-of-order, tamper, and
+     later-device-key compromise.
+3. **Feature flag:** keep the current path as legacy only. Enable ratchet mode
+   explicitly until the complete matrix passes. A chain carrier MUST be
+   treated as an opaque record; it never gets a ratchet key.
+4. **Golden requirement:** skipping message keys then receiving 2,3,1 must
+   deliver 2,3,1 with 1's key from the skipped store; after delivery + TTL the
+   store must contain zero skipped keys. Repeat the invariant through every
+   carrier, not only an in-memory fake.
 
 ## 12. Open questions
 

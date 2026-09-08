@@ -27,10 +27,19 @@ That is the model here — Spore is the messenger of the Spore stack
 - **The common mycorrhizal network (m³)** is what emerges: trees on different
   chains, all connected through one underground fabric.
 
-**A compostable, no-relay private messenger.** Messages rot. The body never
-rides a block in a way that survives key rotation; what's permanent on-chain is
-a hash and dead keys. Private comms tacked onto the chain — no box, no shared
-store, no relay, no exposed IP. Each tree only ever talks to its own roots.
+**A forward-private, compostable no-relay messenger.** Spore's target is
+stronger than "encrypted on-chain": per-message keys must rotate and die, so
+a later device-key compromise cannot unlock old conversation history. Bulk
+bodies stay off-chain and expire; chains carry opaque delivery records.
+
+The current direct whisper/envelope paths are encrypted today but do **not**
+yet provide forward secrecy. The X3DH + Double Ratchet implementation in
+`internal/ratchet` is the mitigation being wired into the conversation path
+now. Until that wire integration lands, do not claim forward secrecy for short
+DERO whispers, 0xE1 public-chain envelopes, or the one-shot long-body path.
+
+Private comms tacked onto the chain — no box, no shared store, no relay, no
+exposed IP. Each tree only ever talks to its own roots.
 
 ## What it is
 

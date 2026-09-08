@@ -21,19 +21,33 @@ import (
 //	DELETE /body/{cid_hex}
 type HTTPStore struct {
 	base   string
+	token  string
 	client *http.Client
 }
 
 // NewHTTPStore builds a client for a body-store server at baseURL (e.g.
 // "http://host:8080"). Returns an error if baseURL is empty.
 func NewHTTPStore(baseURL string) (*HTTPStore, error) {
+	return NewHTTPStoreWithToken(baseURL, "")
+}
+
+// NewHTTPStoreWithToken builds a client for a body-store server, optionally
+// authenticating requests with a bearer token.
+func NewHTTPStoreWithToken(baseURL, bearerToken string) (*HTTPStore, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("store: empty base URL")
 	}
 	return &HTTPStore{
 		base:   baseURL,
+		token:  bearerToken,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+func (s *HTTPStore) authorize(req *http.Request) {
+	if s.token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.token)
+	}
 }
 
 func (s *HTTPStore) path(cid [32]byte) string {
@@ -46,6 +60,7 @@ func (s *HTTPStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
+	s.authorize(req)
 	req.Header.Set("X-Burn-Deadline", strconv.FormatInt(deadline.Unix(), 10))
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -61,7 +76,12 @@ func (s *HTTPStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 
 // Get fetches a body, translating 404/410 into ErrNotFound/ErrExpired.
 func (s *HTTPStore) Get(cid [32]byte) ([]byte, error) {
-	resp, err := s.client.Get(s.path(cid))
+	req, err := http.NewRequest(http.MethodGet, s.path(cid), nil)
+	if err != nil {
+		return nil, err
+	}
+	s.authorize(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +104,7 @@ func (s *HTTPStore) Delete(cid [32]byte) error {
 	if err != nil {
 		return err
 	}
+	s.authorize(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err

@@ -26,11 +26,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/crypto"
 	"github.com/liqdmetal/spore/internal/longmsg"
+	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/store"
 	"github.com/liqdmetal/spore/internal/whisper"
 )
@@ -44,10 +46,12 @@ const msgsFile = "messages.log"
 
 // Mailbox is one recipient's durable long-body receiver + body store.
 type Mailbox struct {
-	dir string
-	st  store.Store // durable ciphertext store (HTTP-pushed + local bodies)
-	ep  *longmsg.Endpoint
-	log *MessageLog
+	dir      string
+	prekeyMu sync.RWMutex
+	prekey   *ratchet.SPKBundle
+	st       store.Store // durable ciphertext store (HTTP-pushed + local bodies)
+	ep       *longmsg.Endpoint
+	log      *MessageLog
 	// logTTL bounds how long decrypted messages persist on disk (rot).
 	logTTL time.Duration
 	// noSenderLog, when set, blanks the Sender field before a message is
@@ -147,7 +151,11 @@ func Open(dir string, priv []byte) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL}, nil
+	prekey, err := loadPrekey(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL, prekey: prekey}, nil
 }
 
 // Dir returns the mailbox's data directory.

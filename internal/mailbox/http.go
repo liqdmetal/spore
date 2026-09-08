@@ -66,7 +66,13 @@ func (m *Mailbox) handler(secret string) http.Handler {
 			if !ok {
 				return
 			}
+			if r.Method == http.MethodPut {
+				m.handlePut(w, r, cid)
+				return
+			}
 			m.handleBody(w, r, cid)
+		case path == "/prekey":
+			m.handlePrekey(w, r)
 		case path == "/list":
 			m.handleList(w, r)
 		case strings.HasPrefix(path, "/get/"):
