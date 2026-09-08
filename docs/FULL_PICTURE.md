@@ -55,6 +55,12 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
 - **Home node**: `spore mailbox run` — always-on, cross-chain, `-privacy`
   (no sender in log), `-token` (auth), `-cert/-key` (TLS), body padding
 - **Relay fabric hop**: `spore relay run` — store-and-forward of opaque bodies
+- **Auto-compost**: `spore msg recv -chain evm|solana` erases each message
+  from the mailbox contract/account (`burn()`) the moment it's delivered —
+  `-auto-burn=false` to keep it instead. DERO's native message field and
+  off-chain long bodies were already ephemeral; this closes the same gap
+  for EVM/Solana mailbox storage. Live-verified against anvil: deliver →
+  receive → burn → re-query proves the on-chain slot is empty.
 - **`spore status`** — connection-health HUD
 - **Hardened**: E2E envelope random-nonce fix, adversarial tests, 19 pkgs green
 

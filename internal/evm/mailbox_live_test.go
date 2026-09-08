@@ -16,8 +16,9 @@ import (
 
 // TestMailboxLiveAnvil is an end-to-end round trip against a real anvil node:
 // deploy MyceliumMailbox, PostPayload via deliver(), then ListIncoming via
-// eth_getLogs + read(). It uses the whisper codec so the delivered message text
-// is verified end to end. Skips if no anvil/forge is reachable or installed.
+// eth_getLogs + read(), then AUTO-BURN it and prove the on-chain storage is
+// actually erased (read() returns empty) — the compostable half of "private
+// af, nothing saved but scrap". Skips if no anvil/forge is reachable.
 func TestMailboxLiveAnvil(t *testing.T) {
 	rpc := os.Getenv("MYCELIUM_TEST_ANVIL")
 	if rpc == "" {
@@ -44,19 +45,42 @@ func TestMailboxLiveAnvil(t *testing.T) {
 		t.Fatalf("send via deliver(): %v", err)
 	}
 
-	// Recipient recovers via eth_getLogs(Inbox to=us) + read().
+	// Recipient recovers via eth_getLogs(Inbox to=us) + read(), with
+	// AutoBurn on — the message must be erased from chain state right after.
 	recv := NewBackend(rpc, "evm", recipient)
 	recv.SetMailbox(mailbox)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	ch, _ := whisper.RecvChain(ctx, recv, codec, chain.WatchOpts{MinHeight: 0, Interval: 200 * time.Millisecond})
+	ch, _ := whisper.RecvChain(ctx, recv, codec, chain.WatchOpts{MinHeight: 0, Interval: 200 * time.Millisecond, AutoBurn: true})
+	got := false
 	for m := range ch {
 		if m.Text == "hello mailbox anvil" {
 			t.Logf("LIVE ROUND TRIP OK: recipient %s got text %q via mailbox logs", recipient, m.Text)
-			return
+			got = true
+			break
 		}
 	}
-	t.Fatal("did not receive the whisper through the mailbox contract (eth_getLogs+read)")
+	if !got {
+		t.Fatal("did not receive the whisper through the mailbox contract (eth_getLogs+read)")
+	}
+
+	// Give the burn tx a moment to land, then verify the contract's own
+	// state (not our cache) says the message is gone: a fresh ListIncoming
+	// from height 0 must NOT surface it again.
+	time.Sleep(1200 * time.Millisecond)
+	again, err := recv.ListIncoming(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("post-burn ListIncoming: %v", err)
+	}
+	for _, inc := range again {
+		if string(inc.Payload) != "" {
+			decoded, isText := codec.DecodeText(inc.Payload)
+			if isText && decoded == "hello mailbox anvil" {
+				t.Fatal("message still readable on-chain after AutoBurn — compost did not happen")
+			}
+		}
+	}
+	t.Log("COMPOST VERIFIED: on-chain mailbox slot is empty after auto-burn")
 }
 
 // probeMailbox deploys MyceliumMailbox via forge create if needed and returns

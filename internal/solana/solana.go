@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
@@ -163,6 +164,10 @@ func inboxToIncoming(loaded *Inbox) []chain.Incoming {
 			TopoHeight: 0,
 			Sender:     pubkeyBytesToBase58(m.From[:]),
 			Payload:    chain.Payload(m.Data),
+			// BurnKey is the message's inbox index; Burn() issues the
+			// program's burn(idx) instruction, which only the recipient
+			// (signer == inbox PDA owner) may call.
+			BurnKey: fmt.Sprintf("%d", m.Seq),
 		})
 	}
 	return out
@@ -198,6 +203,50 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 	}
 
 	return inboxToIncoming(loaded), nil
+}
+
+// Burn implements chain.Burner. It issues the program's burn(idx)
+// instruction against our own inbox PDA, emptying that message's stored
+// data (compost semantics — the slot exists but is scrap, not content).
+// Only the recipient (our signer) can burn its own inbox.
+func (b *Backend) Burn(ctx context.Context, burnKey string) error {
+	idx, err := strconv.ParseUint(burnKey, 10, 64)
+	if err != nil {
+		return fmt.Errorf("solana: bad burn key %q: %w", burnKey, err)
+	}
+	recipient := b.signer.PublicKey()
+	inbox, err := b.inboxPDA(recipient)
+	if err != nil {
+		return fmt.Errorf("solana: derive inbox PDA: %w", err)
+	}
+	accounts := solana.AccountMetaSlice{
+		solana.Meta(recipient).SIGNER(),
+		solana.Meta(inbox).WRITE(),
+	}
+	data := make([]byte, 9)
+	data[0] = 0x01 // burn tag
+	for i := 0; i < 8; i++ {
+		data[1+i] = byte(idx >> (8 * i))
+	}
+	instruction := solana.NewInstruction(b.programID, accounts, data)
+
+	blockhash, err := b.client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		return fmt.Errorf("solana: get latest blockhash: %w", err)
+	}
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{instruction},
+		blockhash.Value.Blockhash,
+		solana.TransactionPayer(recipient),
+	)
+	if err != nil {
+		return fmt.Errorf("solana: build burn transaction: %w", err)
+	}
+	if _, err := tx.Sign(b.signerFn()); err != nil {
+		return fmt.Errorf("solana: sign burn transaction: %w", err)
+	}
+	_, err = b.client.SendTransaction(ctx, tx)
+	return err
 }
 
 // pubkeyBytesToBase58 renders a 32-byte pubkey as base58 (or a placeholder if

@@ -16,8 +16,8 @@ package main
 
 import (
 	"context"
-	_ "embed"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -36,12 +36,12 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/channel"
 	"github.com/liqdmetal/spore/internal/crypto"
-	"github.com/liqdmetal/spore/internal/safehttp"
 	derodaemon "github.com/liqdmetal/spore/internal/daemon"
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/donate"
 	"github.com/liqdmetal/spore/internal/longmsg"
 	"github.com/liqdmetal/spore/internal/peer"
+	"github.com/liqdmetal/spore/internal/safehttp"
 	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/session"
 	"github.com/liqdmetal/spore/internal/store"
@@ -83,7 +83,11 @@ func main() {
 	case "donate":
 		donatecmd(os.Args[2:])
 	case "msg":
-		msgcmd(os.Args[2:])
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "prekeygen") {
+			msgE2(os.Args[2:])
+		} else {
+			msgcmd(os.Args[2:])
+		}
 	case "mailbox":
 		mailboxcmd(os.Args[2:])
 	case "relay":
@@ -853,13 +857,17 @@ func donatecmd(args []string) {
 // wire semantics hold across DERO, EVM, and XMR.
 func msgcmd(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-long|keygen [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-e2|recv-e2|send-long|keygen [flags]")
 		fmt.Fprintln(os.Stderr, "       (chain-agnostic; see -chain)")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "send":
 		msgSend(args[1:])
+	case "send-e2":
+		msgSendE2(args[1:])
+	case "recv-e2":
+		msgRecvE2(args[1:])
 	case "recv":
 		msgRecv(args[1:])
 	case "send-long":
@@ -867,7 +875,7 @@ func msgcmd(args []string) {
 	case "keygen":
 		msgKeygen(args[1:])
 	case "-h", "--help":
-		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-long|keygen [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg send|recv|send-e2|recv-e2|send-long|keygen [flags]")
 	default:
 		fmt.Fprintf(os.Stderr, "msg: unknown subcommand %q (want send|recv|send-long|keygen)\n", args[0])
 		os.Exit(2)
@@ -936,13 +944,14 @@ func msgRecv(args []string) {
 	fs.String("keyfile", "", "solana signer keypair JSON path")
 	fs.String("program", "", "solana mailbox program id (default mainnet)")
 	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
+	autoBurn := fs.Bool("auto-burn", true, "erase each message from on-chain mailbox state right after receiving it (evm/solana only; nothing persists but a spent tx)")
 	_ = fs.Parse(args)
 	c := msgBackend(fs)
 	codec := secureRecvCodec(fs, c.Name())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	log.Printf("msg recv on %s: listening for spore messages", c.Name())
-	ch, errc := whisper.RecvChain(ctx, c, codec, chain.WatchOpts{MinHeight: *minHeight, Interval: *interval})
+	ch, errc := whisper.RecvChain(ctx, c, codec, chain.WatchOpts{MinHeight: *minHeight, Interval: *interval, AutoBurn: *autoBurn})
 	for {
 		select {
 		case m, ok := <-ch:

@@ -171,3 +171,13 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 	// Backward-compatible path: block-scan for raw calldata txs to us.
 	return evmScanIncoming(ctx, b, minHeight)
 }
+
+// Burn implements chain.Burner. Only meaningful with a mailbox contract
+// configured — raw-calldata delivery has no persistent chain state to erase
+// (the tx itself is the only record, and pruning that is not our call).
+func (b *Backend) Burn(ctx context.Context, burnKey string) error {
+	if b.mailbox == "" {
+		return nil
+	}
+	return mailboxBurn(ctx, b, burnKey)
+}

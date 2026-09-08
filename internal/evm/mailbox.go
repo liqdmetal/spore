@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/liqdmetal/spore/internal/chain"
@@ -33,16 +34,19 @@ import (
 var (
 	mailboxDeliverSig = "deliver(address,bytes)"
 	mailboxReadSig    = "read(address,uint256)"
+	mailboxBurnSig    = "burn(address,uint256)"
 	mailboxInboxSig   = "Inbox(address,address,uint256,bytes32)"
 
 	deliverSelector [4]byte
 	readSelector    [4]byte
+	burnSelector    [4]byte
 	inboxTopic      [32]byte
 )
 
 func init() {
 	deliverSelector = sel4(mailboxDeliverSig)
 	readSelector = sel4(mailboxReadSig)
+	burnSelector = sel4(mailboxBurnSig)
 	inboxTopic = keccak32(mailboxInboxSig)
 }
 
@@ -240,7 +244,47 @@ func mailboxListIncoming(ctx context.Context, b *Backend, minHeight uint64) ([]c
 			TopoHeight: int64(block),
 			Sender:     sender,
 			Payload:    data,
+			// BurnKey is our own seq for this message; Burn() calls
+			// burn(us, seq) on the mailbox contract, matching read()'s
+			// "only recipient" rule.
+			BurnKey: strconv.FormatUint(seq, 10),
 		})
 	}
 	return out, nil
+}
+
+// encodeBurn builds the calldata for `burn(address to, uint256 seq)`.
+func encodeBurn(to string, seq uint64) (string, error) {
+	toWord, err := padAddr20(to)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]byte, 0, 4+64)
+	buf = append(buf, burnSelector[:]...)
+	buf = append(buf, toWord[:]...)
+	sq := uintWord(seq)
+	buf = append(buf, sq[:]...)
+	return "0x" + hex.EncodeToString(buf), nil
+}
+
+// mailboxBurn erases the stored message at seq for our own address by
+// calling the contract's burn(to, seq) — only the recipient may do this
+// (msg.sender == to), matching read()'s rule. Best-effort: the caller
+// (chain.Watch) never treats a burn failure as a delivery failure.
+func mailboxBurn(ctx context.Context, b *Backend, burnKey string) error {
+	seq, err := strconv.ParseUint(burnKey, 10, 64)
+	if err != nil {
+		return fmt.Errorf("evm mailbox: bad burn key %q: %w", burnKey, err)
+	}
+	calldata, err := encodeBurn(b.from, seq)
+	if err != nil {
+		return err
+	}
+	params := map[string]interface{}{
+		"from": b.from,
+		"to":   b.mailbox,
+		"data": calldata,
+	}
+	var txhash string
+	return b.call(ctx, "eth_sendTransaction", []interface{}{params}, &txhash)
 }

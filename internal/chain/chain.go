@@ -47,6 +47,23 @@ type Incoming struct {
 	// Payload is the raw message payload (whisper or pointer). The caller
 	// decodes it with the backend's ParsePayload.
 	Payload Payload
+	// BurnKey is an opaque, backend-specific handle a Burner can use to erase
+	// this exact stored message from chain state after it has been received
+	// (e.g. an EVM/Solana mailbox sequence number). Empty when the backend
+	// has nothing to burn (DERO's native message field is not a persistent
+	// contract slot the way an EVM/Solana mailbox account is).
+	BurnKey string
+}
+
+// Burner is implemented by chain backends that store delivered messages in
+// on-chain state (a mailbox contract/account) rather than the tx itself, and
+// so can also erase that state — the "compostable" half of delivery. Nothing
+// should live on a chain longer than it takes the recipient to read it.
+type Burner interface {
+	// Burn erases the stored message identified by burnKey (as set on the
+	// Incoming that delivered it). Best-effort: a failed burn never blocks
+	// or fails delivery — it just means chain state didn't rot on schedule.
+	Burn(ctx context.Context, burnKey string) error
 }
 
 // Chain is the per-chain backend seam.
@@ -69,6 +86,12 @@ type Chain interface {
 type WatchOpts struct {
 	MinHeight uint64
 	Interval  time.Duration
+	// AutoBurn, when true, erases each delivered message from on-chain
+	// mailbox state (via the Burner interface) immediately after it is
+	// emitted to the caller. Compost semantics: once read, it rots — nothing
+	// but a scrap trace (a spent tx / an empty mapping slot) is left behind.
+	// No-op on backends that don't implement Burner (e.g. DERO).
+	AutoBurn bool
 }
 
 // Watch polls ListIncoming and emits each new payload exactly once (deduped by
@@ -76,6 +99,7 @@ type WatchOpts struct {
 func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-chan error) {
 	out := make(chan Incoming)
 	errc := make(chan error, 1)
+	burner, canBurn := c.(Burner)
 	go func() {
 		defer close(out)
 		defer close(errc)
@@ -106,6 +130,12 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 					seen[inc.TxID] = true
 					select {
 					case out <- inc:
+						// Compost: erase the on-chain copy now that the
+						// caller has it. Best-effort — a burn failure never
+						// re-delivers or blocks; it just leaves the scrap.
+						if opts.AutoBurn && canBurn && inc.BurnKey != "" {
+							_ = burner.Burn(ctx, inc.BurnKey)
+						}
 					case <-ctx.Done():
 						return
 					}
