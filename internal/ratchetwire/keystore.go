@@ -1,6 +1,7 @@
 package ratchetwire
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,6 +34,64 @@ func NewFileStateStore(dir string, key []byte) (*FileStateStore, error) {
 
 func (s *FileStateStore) path(id [8]byte) string {
 	return filepath.Join(s.dir, "session-"+hexID(id)+".state")
+}
+
+// logPath is the append-only high-water-mark ledger for id. It is never
+// truncated or rewritten in place — only appended to — so that even if the
+// mutable head file at path(id) is later replaced with an older, otherwise
+// valid, authenticated snapshot (e.g. an attacker with filesystem write
+// access restoring a backup), Load can still detect that a higher sequence
+// was previously durable and refuse the rollback. This does not defend
+// against an attacker able to also truncate or rewrite the log file itself
+// (unrestricted read-write access to the whole state directory defeats any
+// purely local anti-rollback mechanism; closing that requires an external
+// anchor such as a monotonic hardware counter or a remote checkpoint, which
+// this package does not have). It raises the bar from "any restore trivially
+// succeeds" to "restore succeeds only if the log is also edited."
+func (s *FileStateStore) logPath(id [8]byte) string {
+	return filepath.Join(s.dir, "session-"+hexID(id)+".log")
+}
+
+const logRecordSize = 8 + 32 // sequence (LE uint64) + digest
+
+// appendLog durably records that seq/digest was written for id. Called while
+// s.mu is held.
+func (s *FileStateStore) appendLog(id [8]byte, seq uint64, digest [32]byte) error {
+	f, err := os.OpenFile(s.logPath(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var rec [logRecordSize]byte
+	binary.LittleEndian.PutUint64(rec[:8], seq)
+	copy(rec[8:], digest[:])
+	if _, err := f.Write(rec[:]); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// maxLoggedSequence returns the highest sequence ever durably recorded for
+// id, or 0 if the log does not exist or is empty. A log length that is not a
+// multiple of logRecordSize indicates a torn/partial append (e.g. a crash
+// mid-write); only complete records are trusted, and the truncated tail is
+// ignored rather than treated as an error, since a torn write is expected
+// crash behavior and must never itself become a denial-of-service vector.
+func (s *FileStateStore) maxLoggedSequence(id [8]byte) (uint64, error) {
+	data, err := os.ReadFile(s.logPath(id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var max uint64
+	for off := 0; off+logRecordSize <= len(data); off += logRecordSize {
+		if seq := binary.LittleEndian.Uint64(data[off : off+8]); seq > max {
+			max = seq
+		}
+	}
+	return max, nil
 }
 
 func hexID(id [8]byte) string {
@@ -94,6 +153,17 @@ func (s *FileStateStore) Save(id [8]byte, state []byte) error {
 			return err
 		}
 	}
+	// The append-only log is the durable high-water mark: it can only grow,
+	// so it survives a head-file swap that the in-memory counter above
+	// cannot detect on a fresh process. Take the max of both sources before
+	// incrementing.
+	logged, err := s.maxLoggedSequence(id)
+	if err != nil {
+		return err
+	}
+	if logged > seq {
+		seq = logged
+	}
 	seq++
 	record, err := ProtectSession(s.protector, id, seq, state)
 	if err != nil {
@@ -119,6 +189,16 @@ func (s *FileStateStore) Save(id [8]byte, state []byte) error {
 		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	// Append to the durable log BEFORE the rename that makes this the new
+	// head: if the process dies between the two, the log may record a
+	// sequence with no matching head file, which is safe (maxLoggedSequence
+	// only ever pushes future Saves' sequence higher); the reverse order
+	// would let a head file exist whose sequence was never logged, which is
+	// exactly the gap this mechanism exists to close.
+	if err := s.appendLog(id, seq, StateDigest(record)); err != nil {
 		_ = os.Remove(name)
 		return err
 	}
@@ -161,7 +241,20 @@ func (s *FileStateStore) Load(id [8]byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if prior := s.sequence[id]; prior != 0 && seq < prior {
+	// Check against BOTH the in-memory high-water mark (same-process reuse)
+	// and the durable append-only log (fresh-process restart). The log is
+	// the one that actually closes the gap: on a fresh process s.sequence
+	// is empty, so without this check a head file swapped for an older,
+	// still-validly-authenticated snapshot would be silently accepted.
+	logged, err := s.maxLoggedSequence(id)
+	if err != nil {
+		return nil, err
+	}
+	prior := s.sequence[id]
+	if logged > prior {
+		prior = logged
+	}
+	if prior != 0 && seq < prior {
 		return nil, errors.New("ratchetwire: state rollback detected")
 	}
 	s.sequence[id] = seq
