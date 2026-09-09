@@ -98,6 +98,8 @@ func main() {
 		publishcmd(os.Args[2:])
 	case "credit":
 		creditcmd(os.Args[2:])
+	case "sub":
+		subcmd(os.Args[2:])
 	case "init":
 		initcmd(os.Args[2:])
 	case "prekeybatch":
@@ -155,6 +157,10 @@ func usage() {
   spore publish cost -body-bytes N -subscribers N                           (sender-key vs pairwise byte cost)
   spore credit request -denom msg | finalize -credit F -secret F            (buyer: prepaid anonymous credits)
   spore credit issue -identity F -request F | redeem -credit F -issuer HEX -ledger L | revenue -ledger L   (operator: no per-user meter)
+  spore sub add -roster F -channel C -addr A -pinned-sig HEX [-issues N|-unlimited]   (publisher: subscriber roster, local file, no platform)
+  spore sub paid -roster F -channel C -addr A -pinned-sig HEX -credit F -issuer HEX -ledger L   (crypto-paid subscription, no account/invoice)
+  spore sub list|remove|send -roster F -channel C [-notice F] [-commit]     (who is entitled; print per-subscriber send commands)
+  spore sub follow -state F -channel C -publisher HEX | status -state F [-accept N]   (subscriber: pin publisher, track replay floor)
   spore init [-dir ~/.spore] [-opks 50] [-chain dero] [-store URL]   (one-shot onboarding: generates identity kit + config.json; afterwards ALL e2 commands pick up defaults automatically)
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)
