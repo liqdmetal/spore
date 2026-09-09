@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,11 +89,27 @@ func msgCompose(args []string) {
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
-	if *to == "" || *identity == "" || *pinned == "" {
-		check(errors.New("compose requires -to -identity -pinned-sig, and exactly one of -bundle or -bundle-url"))
+	if *to == "" || *identity == "" {
+		check(errors.New("compose requires -to (address, contact nickname, or DeroNS name) and -identity, plus exactly one of -bundle or -bundle-url"))
 	}
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("compose requires exactly one of -bundle or -bundle-url"))
+	}
+	// Resolve the destination NOW, at compose time, not at flush time. The
+	// resolved address + pinned sig are written into the spool entry and
+	// covered by its HMAC signature, so a later edit to the address book (or
+	// a DeroNS re-registration) cannot silently redirect an already-queued
+	// message or payment. Freezing the destination is the safe default for
+	// anything that may carry money.
+	resolvedTo, resolvedPinned, rerr := resolveTo(context.Background(), *to,
+		fs.Lookup("maildb").Value.String(), fs.Lookup("daemon").Value.String())
+	check(rerr)
+	*to = resolvedTo
+	if *pinned == "" {
+		*pinned = resolvedPinned
+	}
+	if *pinned == "" {
+		check(fmt.Errorf("%s resolved to an address but no pinned sig is known: pass -pinned-sig HEX, or save it once with `spore msg mail add -addr %s -nick NAME -pinned SIG`", *to, *to))
 	}
 	// Capture plaintext into the spool dir at compose time so stdin-composed
 	// messages survive until flush. The spool file itself holds only paths.

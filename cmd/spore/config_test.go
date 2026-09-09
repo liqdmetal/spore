@@ -55,7 +55,14 @@ func TestApplyConfigDefaultsRespectsExplicitFlags(t *testing.T) {
 
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	e2Common(fs)
-	maildbFlag := fs.String("maildb", "", "")
+	// -maildb is registered BY e2Common now (it is shared with the send paths
+	// for name resolution). Look it up rather than redeclaring it — a
+	// duplicate fs.String panics with "flag redefined" and takes down the
+	// whole test binary.
+	maildbFlag := fs.Lookup("maildb")
+	if maildbFlag == nil {
+		t.Fatal("e2Common no longer registers -maildb; this test assumed it does")
+	}
 	// User explicitly sets -store; config's store must NOT override it.
 	if err := fs.Parse([]string{"-store", "http://explicit-store:2"}); err != nil {
 		t.Fatal(err)
@@ -70,8 +77,8 @@ func TestApplyConfigDefaultsRespectsExplicitFlags(t *testing.T) {
 	if got := fs.Lookup("chain").Value.String(); got != "evm" {
 		t.Fatalf("config chain default not applied: %q", got)
 	}
-	if *maildbFlag != cfg.Maildb {
-		t.Fatalf("config maildb default not applied: %q", *maildbFlag)
+	if maildbFlag.Value.String() != cfg.Maildb {
+		t.Fatalf("config maildb default not applied: %q", maildbFlag.Value.String())
 	}
 }
 

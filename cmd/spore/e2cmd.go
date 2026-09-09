@@ -280,6 +280,10 @@ func e2Common(fs *flag.FlagSet) {
 	fs.String("state-dir", "", "encrypted endpoint session state directory (required)")
 	fs.String("state-key", "", "file containing 32-byte hex state encryption key (required)")
 	fs.Duration("session-ttl", 0, "inactivity TTL for durable E2 sessions (zero disables expiry)")
+	// Name resolution: -to accepts a nickname from the address book (which
+	// also supplies that contact's pinned sig) or a DeroNS name via -daemon.
+	fs.String("maildb", "", "local mail store (maildb JSON): supplies -to nickname -> address + pinned-sig, and indexes received messages")
+	fs.String("daemon", "", "DERO daemon RPC for DeroNS name resolution of -to (address only; pinned sig still needed out-of-band)")
 }
 
 func msgPrekeygen(args []string) {
@@ -347,8 +351,11 @@ func msgSendE2(args []string) {
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
-	if *to == "" || *identity == "" || *pinned == "" {
-		check(errors.New("send-e2 requires -to -identity -pinned-sig, and exactly one of -bundle or -bundle-url (plaintext via -msg-file or stdin)"))
+	// -pinned-sig is NOT required up front: a maildb contact nickname supplies
+	// it (see resolveTo in sendE2Core). Requiring it here would defeat the
+	// whole point of the address book.
+	if *to == "" || *identity == "" {
+		check(errors.New("send-e2 requires -to (address, contact nickname, or DeroNS name) and -identity, plus exactly one of -bundle or -bundle-url; plaintext via -msg-file or stdin"))
 	}
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("send-e2 requires exactly one of -bundle or -bundle-url, not both and not neither"))
@@ -364,6 +371,23 @@ func msgSendE2(args []string) {
 // amount is the optional pay-with-message value ("5.5dero"); empty = postage
 // only.
 func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile, amount string, ttl time.Duration) error {
+	// Name resolution: -to accepts a raw address, a maildb contact NICKNAME
+	// (which also supplies that contact's pinned sig, so -pinned-sig can be
+	// omitted), or a DeroNS name via -daemon. Resolved here so every send
+	// path (send-e2, forward-e2, compose/flush, invoice, pay) gets it once.
+	resolvedAddr, resolvedPinned, err := resolveTo(context.Background(), to,
+		fs.Lookup("maildb").Value.String(), fs.Lookup("daemon").Value.String())
+	if err != nil {
+		return err
+	}
+	to = resolvedAddr
+	if pinned == "" {
+		pinned = resolvedPinned
+	}
+	if pinned == "" {
+		return fmt.Errorf("%s resolved to %s but no pinned sig is known: pass -pinned-sig HEX, or save it once with `spore msg mail add -addr %s -nick NAME -pinned SIG`. The pinned sig is your out-of-band trust anchor — Spore will not guess it", to, to, to)
+	}
+
 	plaintext, err := readPlaintext(msgFile)
 	if err != nil {
 		return err
@@ -482,8 +506,10 @@ func msgForwardE2(args []string) {
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
-	if *to == "" || *identity == "" || *pinned == "" || *file == "" {
-		check(errors.New("forward-e2 requires -to -identity -pinned-sig -file, and exactly one of -bundle or -bundle-url"))
+	// -pinned-sig may be omitted: a maildb contact nickname supplies it via
+	// resolveTo inside sendE2Core.
+	if *to == "" || *identity == "" || *file == "" {
+		check(errors.New("forward-e2 requires -to (address, contact nickname, or DeroNS name), -identity, -file, and exactly one of -bundle or -bundle-url"))
 	}
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("forward-e2 requires exactly one of -bundle or -bundle-url"))
@@ -505,12 +531,15 @@ func msgRecvE2(args []string) {
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	outDir := fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
 	ntfy := fs.String("ntfy", "", "POST a 'new message' notification to this ntfy topic URL on each message (content never leaves the mailbox; metadata only)")
-	maildbPath := fs.String("maildb", "", "path to the local mail store (maildb JSON). When set, each decrypted message is recorded into its thread + search index, and blocked contacts are dropped")
+	// -maildb is registered by e2Common (shared with send paths for name
+	// resolution); read it after Parse rather than redeclaring it — a
+	// duplicate fs.String panics with "flag redefined".
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
+	maildbPath := fs.Lookup("maildb").Value.String()
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
 	}
@@ -551,8 +580,8 @@ func msgRecvE2(args []string) {
 	// file for every delivery is wasteful, and a per-message Open failure
 	// would be silently swallowed). Fail loudly up front instead.
 	var mdb *maildb.MailDB
-	if *maildbPath != "" {
-		mdb, err = maildb.Open(*maildbPath)
+	if maildbPath != "" {
+		mdb, err = maildb.Open(maildbPath)
 		check(err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
