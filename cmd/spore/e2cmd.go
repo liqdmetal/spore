@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,10 @@ func msgE2(args []string) {
 		msgSessions(args[1:])
 	case "prekeygen":
 		msgPrekeygen(args[1:])
+	case "compose":
+		msgCompose(args[1:])
+	case "flush":
+		msgFlush(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand")
 	}
@@ -283,50 +288,86 @@ func msgSendE2(args []string) {
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("send-e2 requires exactly one of -bundle or -bundle-url, not both and not neither"))
 	}
-	plaintext, err := readPlaintext(*msgFile)
-	check(err)
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *ttl); err != nil {
+		check(err)
+	}
+}
+
+// sendE2Core is the shared send path for send-e2 and the offline-compose
+// flush. fs must be a parsed e2Common FlagSet. Errors are returned (caller
+// decides fatal vs spool-retry) and the plaintext never touches argv.
+func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile string, ttl time.Duration) error {
+	plaintext, err := readPlaintext(msgFile)
+	if err != nil {
+		return err
+	}
 	if len(plaintext) == 0 {
-		check(errors.New("send-e2: empty plaintext"))
+		return errors.New("send-e2: empty plaintext")
 	}
 	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String())
-	check(err)
-	id, err := readHexFile(*identity, 32)
-	check(err)
-	var b *ratchet.SPKBundle
-	if *bundle != "" {
-		b, err = readBundle(*bundle)
-		check(err)
-	} else {
-		b, err = fetchBundle(context.Background(), *bundleURL, *bundleToken)
-		check(err)
+	if err != nil {
+		return err
 	}
-	sig, err := hex.DecodeString(*pinned)
-	check(err)
+	id, err := readHexFile(identity, 32)
+	if err != nil {
+		return err
+	}
+	var b *ratchet.SPKBundle
+	if bundle != "" {
+		b, err = readBundle(bundle)
+		if err != nil {
+			return err
+		}
+	} else {
+		b, err = fetchBundle(context.Background(), bundleURL, bundleToken)
+		if err != nil {
+			return err
+		}
+	}
+	sig, err := hex.DecodeString(pinned)
+	if err != nil {
+		return err
+	}
 	if len(sig) != 32 {
-		check(errors.New("-pinned-sig must be 32-byte hex"))
+		return errors.New("-pinned-sig must be 32-byte hex")
 	}
 	stateDir := fs.Lookup("state-dir").Value.String()
 	stateKeyFile := fs.Lookup("state-key").Value.String()
 	if stateDir == "" || stateKeyFile == "" {
-		check(errors.New("E2 requires -state-dir and -state-key"))
+		return errors.New("E2 requires -state-dir and -state-key")
 	}
 	stateKey, err := readHexFile(stateKeyFile, 32)
-	check(err)
+	if err != nil {
+		return err
+	}
 	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
-	check(err)
+	if err != nil {
+		return err
+	}
 	// Apply expiry before restoring any durable session so stale key material
 	// cannot process a frame during this invocation.
 	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
-	check(err)
+	if err != nil {
+		return err
+	}
 	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
-	check(err)
-	_, raw, err := ep.SendFirst(id, b, sig, plaintext, time.Now().Add(*ttl))
-	check(err)
+	if err != nil {
+		return err
+	}
+	_, raw, err := ep.SendFirst(id, b, sig, plaintext, time.Now().Add(ttl))
+	if err != nil {
+		return err
+	}
 	c, err := e2Carrier(fs)
-	check(err)
-	r, err := c.PostPointer(context.Background(), *to, raw, 1)
-	check(err)
+	if err != nil {
+		return err
+	}
+	r, err := c.PostPointer(context.Background(), to, raw, 1)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("sent-e2 txid %s pointer %x\n", r.TxID, raw)
+	return nil
 }
 
 func msgRecvE2(args []string) {
@@ -339,6 +380,8 @@ func msgRecvE2(args []string) {
 	min := fs.Uint64("min-height", 0, "scan height")
 	autoAck := fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
+	outDir := fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
+	ntfy := fs.String("ntfy", "", "POST a 'new message' notification to this ntfy topic URL on each message (content never leaves the mailbox; metadata only)")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if *identity == "" || *spk == "" {
@@ -421,7 +464,30 @@ func msgRecvE2(args []string) {
 				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), status, shortTx(inReplyTo))
 				continue
 			}
-			fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+			// Attachments / keep-a-copy mode: write the decrypted body to a
+			// file named by txid instead of printing it.
+			if *outDir != "" {
+				if err := os.WriteFile(filepath.Join(*outDir, shortTx(inc.TxID)+".msg"), plain, 0600); err != nil {
+					fmt.Fprintln(os.Stderr, "e2 out-dir:", err)
+					continue
+				}
+				fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
+			} else {
+				fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+			}
+			// ntfy hook: notify that a message arrived. The ntfy server
+			// sees only "you got a message" + a short txid — the body never
+			// leaves the mailbox. Topic URL secrecy is the access control.
+			if *ntfy != "" {
+				body := fmt.Sprintf("spore: new message %s", shortTx(inc.TxID))
+				req, nerr := http.NewRequestWithContext(ctx, http.MethodPost, *ntfy, strings.NewReader(body))
+				if nerr == nil {
+					req.Header.Set("Title", "Spore message")
+					if _, derr := http.DefaultClient.Do(req); derr != nil {
+						fmt.Fprintln(os.Stderr, "e2 ntfy:", derr)
+					}
+				}
+			}
 			if *autoAck && frame.SessionID != ([8]byte{}) {
 				// Reply "delivered" on the same session; the sender's recv
 				// side prints it as an ack line. Best-effort: a failed ack
