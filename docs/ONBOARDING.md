@@ -47,13 +47,19 @@ This creates your whole identity kit under `~/.spore/` (override with
 | `state.key` | encrypts your local ratchet session state — **never share** |
 | `opk-pool.json` | one-time-prekey **private** halves (consumed once each) |
 | `batch.json` | single-use **public** prekey bundles, ready to publish |
-| `bundle.json` | your public identity card (share out-of-band so contacts pin you) |
+| `identity-card.json` | your public identity card (share out-of-band so contacts pin you) |
+| `store.key` | **dedicated** signing key for the `nostr://` serverless body store |
 | `config.json` | defaults so every later command is short |
 
 It prints your **pinned-sig** (your public signing key). Share `pinned-sig` +
-`bundle.json` **out-of-band** (in person, a QR code, a separate channel) so
+`identity-card.json` **out-of-band** (in person, a QR code, a separate channel) so
 contacts can pin your identity. That out-of-band pin is the trust root —
 discovery below is transport convenience, never a trust substitute.
+
+> **Why not `bundle.json`?** The card is deliberately named differently:
+> `-bundle` expects a single pre-signed `SPKBundle` (one entry of `batch.json`),
+> so a card named `bundle.json` is an onboarding dead end — the flag rejects it.
+> `readBundle` now names that mistake explicitly and says what to do instead.
 
 After `init`, **every `*-e2` command reads `config.json` automatically** — you
 stop retyping `-identity`, `-spk`, `-state-dir`, `-state-key`, `-store`, etc.
@@ -115,9 +121,24 @@ from tying your storage activity to your messaging identity.
 **Serverless trade-offs — read before choosing it:**
 
 - **Prekey discovery is manual.** With no mailbox there is no `GET /prekey`, so
-  steps 2's `prekeybatch push` has nowhere to go. You and the contact exchange
-  `bundle.json` + `pinned-sig` out-of-band (Signal, QR, in person) and use
-  `send-e2 -bundle FILE`.
+  step 2's `prekeybatch push` has nowhere to go. Instead, each side hands the
+  other ONE pre-signed bundle out-of-band (Signal, QR, in person):
+
+  ```bash
+  # on the RECIPIENT's machine: carve a single bundle out of batch.json
+  # (batch.json is an ARRAY of bundles; -bundle takes exactly ONE)
+  jq '.bundles[0]' ~/.spore/batch.json > my-bundle.json
+  # then send my-bundle.json + your pinned-sig to the contact
+
+  # on the SENDER's machine, once you have THEIR bundle + pinned-sig:
+  echo "hello" | spore msg send-e2 -to THEIR_ADDR \
+    -bundle ./their-bundle.json -pinned-sig THEIR_PINNED_SIG \
+    -store nostr://relay.damus.io,nos.lol
+  ```
+
+  Note `-bundle` takes a single `SPKBundle`, **not** `batch.json` and **not**
+  `identity-card.json` — `readBundle` rejects both with an explanation. Each
+  bundle is single-use, so carve off a fresh one per new contact.
 - **256 KiB body cap** — relays reject large events. Attachments want the
   mailbox.
 - **Deletion is best-effort.** NIP-09 requests are advisory and relays may keep

@@ -12,6 +12,12 @@ bin/
 /spore-*
 /compost-linux-amd64
 
+# Cross-compiled / scratch test binaries (no extension on Linux targets, so
+# *.exe does not catch them). Named forms used for local verification:
+# sp_linux_amd64, sp_android_arm64, sp_ux.exe, sp_fix.exe, ...
+/sp_*
+/sp-*/
+
 # Solidity / Foundry build output (regenerable from contracts/*.sol)
 out/
 cache/
