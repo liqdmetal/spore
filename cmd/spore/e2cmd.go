@@ -494,8 +494,9 @@ func msgRecvE2(args []string) {
 			}
 			// Receipts are ratcheted messages like any other: detect the
 			// envelope and surface it as an ack line instead of a message.
-			if inReplyTo, status, isReceipt := parseReceipt(plain); isReceipt {
-				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), status, shortTx(inReplyTo))
+			receiptInReplyTo, receiptStatus, isReceipt := parseReceipt(plain)
+			if isReceipt {
+				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), receiptStatus, shortTx(receiptInReplyTo))
 				continue
 			}
 			// Attachments / keep-a-copy mode: write the decrypted body to a
@@ -522,8 +523,10 @@ func msgRecvE2(args []string) {
 			}
 			// ntfy hook: notify that a message arrived. The ntfy server
 			// sees only "you got a message" + a short txid — the body never
-			// leaves the mailbox. Topic URL secrecy is the access control.
-			if *ntfy != "" {
+			// leaves the mailbox. Receipts are skipped: a receipt already
+			// implies an active conversation and auto-ack would re-notify
+			// on every ack. Topic URL secrecy is the access control.
+			if *ntfy != "" && !isReceipt {
 				body := fmt.Sprintf("spore: new message %s", shortTx(inc.TxID))
 				req, nerr := http.NewRequestWithContext(ctx, http.MethodPost, *ntfy, strings.NewReader(body))
 				if nerr == nil {
