@@ -126,6 +126,30 @@ func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
 		case uint64:
 			ja.T = anchor.DataUint64
 			ja.V = strconv.FormatUint(v, 10)
+		case uint:
+			ja.T = anchor.DataUint64
+			ja.V = strconv.FormatUint(uint64(v), 10)
+		case uint32:
+			ja.T = anchor.DataUint64
+			ja.V = strconv.FormatUint(uint64(v), 10)
+		case int:
+			if v < 0 {
+				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
+			}
+			ja.T = anchor.DataUint64
+			ja.V = strconv.FormatUint(uint64(v), 10)
+		case int64:
+			if v < 0 {
+				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
+			}
+			ja.T = anchor.DataUint64
+			ja.V = strconv.FormatUint(uint64(v), 10)
+		case float64:
+			if v < 0 || v != float64(uint64(v)) {
+				return nil, fmt.Errorf("dero: invalid uint argument %s", a.Name)
+			}
+			ja.T = anchor.DataUint64
+			ja.V = strconv.FormatUint(uint64(v), 10)
 		case string:
 			ja.V = v
 		case []byte:

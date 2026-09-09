@@ -595,6 +595,15 @@ func msgRecvE2(args []string) {
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
+	// Validate and create the attachment output directory before starting the
+	// chain watcher. Receiving FrameInit consumes a one-time prekey and writes
+	// ratchet state; a bad output path must not consume crypto state and then
+	// force the operator to replay a frame that can no longer be opened.
+	if *outDir != "" {
+		if err := os.MkdirAll(*outDir, 0700); err != nil {
+			check(fmt.Errorf("recv-e2: create -out-dir: %w", err))
+		}
+	}
 	maildbPath := fs.Lookup("maildb").Value.String()
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
