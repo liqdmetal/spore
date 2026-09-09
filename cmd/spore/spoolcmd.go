@@ -54,6 +54,10 @@ type spoolEntry struct {
 	Relays          string `json:"relays,omitempty"`
 	Store           string `json:"store,omitempty"`
 	StoreToken      string `json:"store_token,omitempty"`
+	// StoreKey is the PATH to the dedicated nostr body-store signing key
+	// (a path, not the secret — same posture as StateKey). Needed so an
+	// offline-composed message can flush to a nostr:// store.
+	StoreKey        string `json:"store_key,omitempty"`
 	StateDir        string `json:"state_dir"`
 	StateKey        string `json:"state_key"`
 	SessionTTL      string `json:"session_ttl"`
@@ -120,7 +124,7 @@ func msgCompose(args []string) {
 		DeliveryGuarant: fs.Lookup("delivery-guaranteed").Value.String() == "true",
 		PrivateKey: fs.Lookup("private-key").Value.String(), PrivateKeyFile: fs.Lookup("private-key-file").Value.String(),
 		Relays: fs.Lookup("relays").Value.String(), Store: fs.Lookup("store").Value.String(),
-		StoreToken: fs.Lookup("store-token").Value.String(),
+		StoreToken: fs.Lookup("store-token").Value.String(), StoreKey: fs.Lookup("store-key").Value.String(),
 		StateDir: fs.Lookup("state-dir").Value.String(), StateKey: fs.Lookup("state-key").Value.String(),
 		SessionTTL: fs.Lookup("session-ttl").Value.String(),
 	}
@@ -283,7 +287,7 @@ func flushOne(e spoolEntry) error {
 		{"address", e.Address}, {"chain-id", e.ChainID}, {"post-path", e.PostPath}, {"list-path", e.ListPath},
 		{"height-path", e.HeightPath}, {"message-field", e.MessageField}, {"recipient-field", e.RecipientField},
 		{"private-key", e.PrivateKey}, {"private-key-file", e.PrivateKeyFile}, {"relays", e.Relays},
-		{"store", e.Store}, {"store-token", e.StoreToken}, {"state-dir", e.StateDir}, {"state-key", e.StateKey},
+		{"store", e.Store}, {"store-token", e.StoreToken}, {"store-key", e.StoreKey}, {"state-dir", e.StateDir}, {"state-key", e.StateKey},
 		{"session-ttl", e.SessionTTL},
 	} {
 		if err := set(kv[0], kv[1]); err != nil {

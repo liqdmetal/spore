@@ -79,6 +79,48 @@ exhaustion the mailbox falls back to the static `/prekey` bundle when one was
 published (degraded 3-DH mode, documented in `docs/RATCHET.md` §10), else 404.
 Restart never resurrects a popped bundle.
 
+## Off-chain body stores: mailbox vs. the serverless commons
+
+The body store is `-store`. Two schemes, one `store.Store` seam:
+
+| `-store` | Who runs it | Best for |
+|---|---|---|
+| `http://host:port` | your mailbox, or a paid Model-B operator | large attachments, guaranteed TTL reaping, a server you control |
+| `nostr://relay1,relay2` | **nobody — a public relay commons** | the no-servers endgame: zero infrastructure, any subset of relays serves a body by CID |
+
+`nostr://` publishes bodies as signed NIP-01 events (`kind 1977`, tags `cid` +
+`exp`, content = base64 ciphertext) and fetches by content address. It requires
+`-store-key`: a **dedicated** signing key, because publishing to a commons is
+linkable by pubkey — reusing the ratchet identity or a chain key would let a
+relay tie storage activity to messaging identity. `spore init` generates it at
+`store.key`, and `panic -home` wipes it.
+
+**Honest limits of the commons (read before relying on it):**
+
+1. **Bodies are public-by-CID.** Anyone holding the CID can fetch the
+   ciphertext from any relay. The CID is sha256(ciphertext), revealed only
+   inside the ratchet-encrypted pointer, so it is unguessable — same trust
+   model as the mailbox's content-addressed `/body/<cid>`, minus the operator.
+   The ciphertext is inert without the per-message ratchet key.
+2. **Deletion is best-effort.** NIP-09 deletion requests are advisory; a relay
+   MAY ignore them and relays you never published to may hold copies. The real
+   compost guarantee is the **ratchet**: consumed message keys are erased, so a
+   lingering ciphertext cannot be decrypted. `Delete`/`Reap` shrink the
+   footprint; they do not promise global erasure.
+3. **Size cap** (256 KiB): relays reject large events. Big attachments belong
+   on the HTTP mailbox.
+4. `Reap`/`Delete` only reach bodies **we** signed. A recipient can Get a body
+   it never Put but cannot delete it — correct, since deleting someone else's
+   body would be a censorship vector.
+5. `Len` reports locally-published bodies, not a global census: a commons has no
+   authoritative index.
+
+Hostile-relay defenses, all tested: served bytes must hash to the requested CID
+(`ErrCIDMismatch`), the publisher's signature must verify (unsigned/forged
+events are ignored), the `exp` tag is honoured, and **an all-relays-down
+outage is a distinct error — never masquerading as `ErrNotFound`**, so a network
+failure can't be mistaken for an expired body.
+
 ## Value carriage (pay-with-message)
 
 `chain.PostPayload` takes an `amountHint`: native transfer value rides the

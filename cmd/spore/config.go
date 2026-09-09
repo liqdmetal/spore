@@ -17,6 +17,7 @@ type Config struct {
 	Identity   string `json:"identity,omitempty"`
 	SPK        string `json:"spk,omitempty"`
 	OpkPool    string `json:"opk_pool,omitempty"`
+	StoreKey   string `json:"store_key,omitempty"`
 	Bundle     string `json:"bundle,omitempty"`
 	PinnedSig  string `json:"pinned_sig,omitempty"` // OUR public sig key others pin
 	StateDir   string `json:"state_dir,omitempty"`
@@ -91,6 +92,7 @@ func (c *Config) flagValues() map[string]string {
 		"identity":    c.Identity,
 		"spk":         c.SPK,
 		"opk-pool":    c.OpkPool,
+		"store-key":   c.StoreKey,
 		"bundle":      c.Bundle,
 		"state-dir":   c.StateDir,
 		"state-key":   c.StateKey,

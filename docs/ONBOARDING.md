@@ -88,9 +88,49 @@ spore prekeybatch gen -out ~/.spore/batch2.json -n 50   # auto-continues OPK ids
 spore prekeybatch push -in ~/.spore/batch2.json -mailbox http://127.0.0.1:8080
 ```
 
-> **No home server?** A hosted Model-B mailbox does steps 2 for you as a blind
-> courier (it never holds your keys). See [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
-> Self-hosting is the privacy default; hosting is optional convenience.
+### Choose where your off-chain bodies live (`-store`)
+
+The mailbox above is one option. `-store` picks the off-chain body store, and
+there are three postures:
+
+| Posture | `-store` | You run | Prekey discovery |
+|---|---|---|---|
+| **Home node** (default, encouraged) | `http://127.0.0.1:8080` | your mailbox (step 2 above) | your mailbox serves `GET /prekey` |
+| **Serverless** | `nostr://relay.damus.io,nos.lol` | **nothing** | manual bundle exchange only |
+| **Hosted** (Model B) | `https://operator.example` | nothing — you pay | the operator's mailbox |
+
+**Serverless = the no-servers endgame.** Bodies are published as signed events
+to a public Nostr relay commons; nobody operates a store for you, and any
+subset of relays can serve a body by content address:
+
+```bash
+# set it once in config.json (init already generated ~/.spore/store.key for this)
+spore msg recv-e2 -store nostr://relay.damus.io,nos.lol -store-key ~/.spore/store.key
+```
+
+`-store-key` must be a **dedicated** key (not your identity or chain key):
+publishing to a commons is linkable by pubkey, so a separate key stops a relay
+from tying your storage activity to your messaging identity.
+
+**Serverless trade-offs — read before choosing it:**
+
+- **Prekey discovery is manual.** With no mailbox there is no `GET /prekey`, so
+  steps 2's `prekeybatch push` has nowhere to go. You and the contact exchange
+  `bundle.json` + `pinned-sig` out-of-band (Signal, QR, in person) and use
+  `send-e2 -bundle FILE`.
+- **256 KiB body cap** — relays reject large events. Attachments want the
+  mailbox.
+- **Deletion is best-effort.** NIP-09 requests are advisory and relays may keep
+  copies. The real erasure is the ratchet: consumed message keys are destroyed,
+  so lingering ciphertext is undecryptable garbage.
+
+→ Full limits and hostile-relay defenses:
+[`CARRIER_MATRIX.md`](CARRIER_MATRIX.md#off-chain-body-stores-mailbox-vs-the-serverless-commons)
+
+> **No home server and want automatic prekeys?** A hosted Model-B mailbox does
+> step 2 for you as a blind courier (it never holds your keys). See
+> [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md). Self-hosting is the privacy
+> default; hosting is optional convenience.
 
 ---
 

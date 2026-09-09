@@ -12,9 +12,11 @@ import (
 
 // paniccmd — the verifiable local wipe.
 //
-//	spore panic -state-dir D [-maildb F] [-spool D] [-out-dir D] [-confirm]
+//	spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]
 //
 // Deletes every plaintext artifact Spore keeps on THIS machine:
+//   - the whole identity kit with -home (~/.spore): identity/spk/state/store
+//     keys, OPK pool, prekey batch, maildb, and the session-state dir
 //   - encrypted ratchet session state (state-dir): the keys themselves —
 //     after this, even the bodies an attacker already holds cannot be
 //     decrypted going forward, and past messages stay forward-secret.
@@ -38,10 +40,14 @@ func paniccmd(args []string) {
 	maildbPath := flg.String("maildb", "", "maildb JSON file")
 	spoolDir := flg.String("spool", "", "compose spool directory")
 	outDir := flg.String("out-dir", "", "recv -out-dir save directory")
+	homeDir := flg.String("home", "", "the whole spore home dir (~/.spore) — wipes identity/spk/state/store keys, opk pool, maildb, batch, and state dir in one shot")
 	confirm := flg.Bool("confirm", false, "actually delete (without this, dry-run listing only)")
 	_ = flg.Parse(args)
 
 	targets := []string{}
+	if *homeDir != "" {
+		targets = append(targets, *homeDir)
+	}
 	if *stateDir != "" {
 		targets = append(targets, *stateDir)
 	}
@@ -55,7 +61,7 @@ func paniccmd(args []string) {
 		targets = append(targets, *outDir)
 	}
 	if len(targets) == 0 {
-		check(errors.New("panic: nothing to wipe — pass at least one of -state-dir -maildb -spool -out-dir"))
+		check(errors.New("panic: nothing to wipe — pass at least one of -home -state-dir -maildb -spool -out-dir"))
 	}
 
 	// Refuse to wipe the user's home or a drive root: a typo like

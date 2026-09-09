@@ -117,8 +117,12 @@ spore mailbox run|list|get     # always-on receive + body store + prekey serving
 spore relay run                # store-and-forward hop (auth + backoff)
 spore status | doctor          # health HUD + preflight
 
+# Serverless (no home node): bodies live on a public Nostr relay commons.
+#   -store nostr://relay.damus.io,nos.lol  -store-key ~/.spore/store.key
+#   (any E2 command; dedicated key required — see docs/CARRIER_MATRIX.md)
+
 # Compostability as a user feature:
-spore panic [-confirm]         # verifiable local wipe of keys/state/maildb/spool
+spore panic [-home ~/.spore] [-confirm]   # verifiable local wipe of keys/state/maildb/spool
 ```
 
 Plaintext is **never** an argv flag (shell history, `ps`, and crash reports
@@ -143,13 +147,23 @@ read argv) — use `-msg-file` or stdin. Run `spore` with no args for full usage
 
 ## Self-host (the privacy default)
 
-**Run your own home node** — it *is* your server, and only yours:
+**Three deployment postures**, from zero infrastructure to fully self-hosted:
 
-| You run (encouraged) | Only if you have NO home node |
-|---|---|
-| An always-on **home node** (chain node + `spore mailbox run`, optionally `spore relay run`). | A paid **hosted service** (Model B) runs a node + mailbox for you. |
-| Your phone/laptop **dial your own node** over TLS + token — the phone holds the keys. | Your phone dials the **service's** node (blind courier, never keys). |
-| No third party in the middle. | The service sees traffic happened + timing; content stays E2E-private. |
+| | **Serverless** | **Home node** (encouraged) | **Hosted** (Model B) |
+|---|---|---|---|
+| You run | **nothing** | chain node + `spore mailbox run` (+ optional `spore relay run`) | nothing — you pay an operator |
+| Off-chain bodies | `nostr://` public relay commons (`-store nostr://relay1,relay2`) | your mailbox over TLS + token | the service's mailbox (blind courier) |
+| Prekey discovery | manual bundle exchange (`-bundle FILE`), or your own mailbox | your mailbox serves `GET /prekey` | the service's mailbox |
+| Who's in the middle | nobody you pay; relays see ciphertext-by-CID | nobody | the service sees traffic + timing, never content |
+| Trade-off | 256 KiB body cap, deletion is best-effort (the ratchet is the real erasure) | needs an always-on box | you trust the operator with metadata |
+
+The serverless posture is the no-servers endgame: point `-store` at
+`nostr://` relays, exchange bundles out-of-band, and no one operates anything
+for you. Bodies are content-addressed ciphertext on a public commons; deletion
+is best-effort, so the **ratchet's erased keys are what actually makes old
+messages unreadable** — see
+[`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md#off-chain-body-stores-mailbox-vs-the-serverless-commons)
+for the honest limits.
 
 → [`docs/HOME_NODE.md`](docs/HOME_NODE.md) (copy-paste) ·
 [`docs/MODEL_B_SERVICE.md`](docs/MODEL_B_SERVICE.md) ·

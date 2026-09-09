@@ -139,7 +139,7 @@ func usage() {
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
-  spore panic [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
+  spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
   spore init [-dir ~/.spore] [-opks 50] [-chain dero] [-store URL]   (one-shot onboarding: generates identity kit + config.json; afterwards ALL e2 commands pick up defaults automatically)
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)

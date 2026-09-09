@@ -64,6 +64,13 @@ func initcmd(args []string) {
 	ik := key("identity.key")
 	sk := key("spk.key")
 	key("state.key")
+	// Dedicated body-store signing key for the serverless nostr:// store.
+	// SEPARATE from identity/spk/state on purpose: publishing bodies to a
+	// public relay commons is linkable by pubkey, so reusing the ratchet
+	// identity or a chain key would let a relay tie your storage activity
+	// to your messaging identity. `panic` wipes it along with the rest.
+	storeKeyFile := filepath.Join(home, "store.key")
+	key("store.key")
 
 	// Pinned sig: the PUBLIC half others pin out-of-band to verify our
 	// bundles. Derived from the identity key (same identity, one sig key —
@@ -118,6 +125,7 @@ func initcmd(args []string) {
 		Identity:  identityFile,
 		SPK:       filepath.Join(home, "spk.key"),
 		OpkPool:   poolPath,
+		StoreKey:  storeKeyFile,
 		StateDir:  filepath.Join(home, "state"),
 		StateKey:  filepath.Join(home, "state.key"),
 		PinnedSig: hex.EncodeToString(sigPub),

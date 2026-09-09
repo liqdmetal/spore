@@ -145,7 +145,7 @@ func dueTime(d time.Duration) time.Time {
 func durableEndpointFromFlags(fs *flag.FlagSet) (*ratchetwire.DurableEndpoint, ratchetwire.BodyStore) {
 	var st ratchetwire.BodyStore
 	if storeURL := fs.Lookup("store").Value.String(); storeURL != "" {
-		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String())
+		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String())
 		check(err)
 		st = s
 	} else {
