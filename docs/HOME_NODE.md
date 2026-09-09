@@ -15,51 +15,52 @@ service is a blind courier. → [`docs/MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
 | Piece | What it is | Command |
 |---|---|---|
 | **Chain node + wallet RPC** | your chain/block visibility (e.g. `dero-wallet-cli --rpc-server`) | e.g. `dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 0.0.0.0:20209` |
-| **Mailbox** | your always-on receiver — serves + scans + decrypts long bodies | `spore mailbox run -dir ... -chain dero -rpc ... [-token SECRET] [-cert/-key]` |
+| **Mailbox** | your always-on ciphertext/prekey service; the phone runs `recv-e2` and decrypts locally | `spore mailbox host -users ... -chain dero -rpc ... [-tokens FILE]` |
 | **Relay (optional)** | store-and-forward hop so your home node can also relay for the wider fabric | `spore relay run -listen ... [-dir ...] [-token SECRET]` |
 
 ---
 
 ## 1. Run the mailbox on your home node
 
-This is the heart of it. It holds your long-term spore key, serves + scans +
-decrypts long bodies headless, and stays up while your phone sleeps. Gate its
-HTTP surface with a token and serve it over TLS so your phone's dial-home is
-encrypted.
+This is the heart of it. It serves ciphertext bodies and prekeys while the
+phone retains the E2 keys and runs `spore msg recv-e2` to decrypt locally. Gate
+its HTTP surface with per-user tokens and serve it over TLS so the phone's
+body/prekey traffic is encrypted.
 
 ```bash
-# your always-on mailbox — generate a key on first run, print the pubkey,
-# require `Authorization: Bearer <token>` on every route, serve HTTPS:
-spore mailbox run -dir /var/spore/home -chain dero \
+# hosted ciphertext/prekey service — one shared watcher, per-user tokens:
+spore mailbox host -users /var/spore/users -chain dero \
   -rpc http://127.0.0.1:10102/json_rpc \
-  -listen 0.0.0.0:19292 -token <your-secret> \
-  -cert /etc/letsencrypt/live/<home>/fullchain.pem \
-  -key  /etc/letsencrypt/live/<home>/privkey.pem &
+  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json -privacy &
+# Put TLS at Caddy/nginx and proxy the public hostname to 127.0.0.1:18443.
 ```
 
-- `-token <your-secret>` — every HTTP route requires `Authorization: Bearer
-  <token>` (so the box isn't open to the internet).
-- `-cert`/`-key` — serve over **HTTPS** (both must be set; get a cert via Let's
-  Encrypt/certbot). No plaintext bodies over the internet.
-- `-privacy` — add this to keep the sender out of the durable message log.
-- First run prints your mailbox pubkey — give it to people who send you long
-  bodies so they encrypt to you.
+- `-tokens /var/spore/tokens.json` — maps each username to its bearer token;
+  every hosted route requires `Authorization: Bearer <token>`.
+- Put Caddy/nginx or another TLS edge in front of the loopback listener. Do not
+  expose the raw mailbox or wallet RPC ports publicly.
+- `-privacy` — keeps sender identity out of the hosted durable log.
+- Publish each user's prekey batch to `/u/<user>/prekey-batch`; the phone keeps
+  its identity/SPK private keys and decrypts with `spore msg recv-e2`.
 
 ## 2. Point your phone at home
 
 The phone holds the keys; it just can't run a chain node. So it dials *home*
-for chain access and receive. **Replace `<home>`/`<port>` and the login.**
+for chain access and ciphertext/prekey delivery. It decrypts locally with
+`spore msg recv-e2`. **Replace `<home>`/`<port>` and the login.**
 
 ```bash
 # SEND — route the tx through your home node (TLS + basic auth):
 spore msg send -chain dero -rpc https://<home>:<port>/json_rpc \
   -rpc-login user:pass -to <friend-dero1...> -msg "hi"
 
-# RECEIVE — your phone's mailbox, pointed at home so it scans and sees
-# your incoming whispers; -token protects this mailbox's own HTTP surface:
-spore mailbox run -dir ~/mb -chain dero \
+# RECEIVE — the phone scans the chain and decrypts locally; the hosted/home
+# mailbox is only the ciphertext + prekey store:
+spore msg recv-e2 -chain dero \
   -rpc https://<home>:<port>/json_rpc -rpc-login user:pass \
-  -token <your-secret> -cert /path/home-cert.pem &
+  -store https://<home>/u/<user> -store-token <your-secret> \
+  -identity ~/mb/identity.key -spk ~/mb/spk.key -opk-pool ~/mb/opk-pool.json \
+  -state-dir ~/mb/state -state-key ~/mb/state.key
 ```
 
 `-rpc https://<home>:<port>/json_rpc` points the phone's chain access at *your*

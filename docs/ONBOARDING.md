@@ -69,21 +69,23 @@ Explicit flags always win.
 
 ## 2. Run your mailbox (your always-on node)
 
-Your mailbox holds your off-chain message bodies and **serves your single-use
+Your hosted mailbox stores ciphertext bodies and **serves your single-use
 prekeys** so others can start a conversation with you. It never touches your
-identity/SPK private keys.
+identity/SPK private keys; `spore msg recv-e2` decrypts on your device.
 
 ```bash
-spore mailbox run -dir ~/.spore/mailbox -listen 127.0.0.1:8080
-#   add -token SECRET to require a bearer token on every route (do this for
-#   any non-loopback / internet-reachable bind)
+mkdir -p ~/.spore/users/me
+# ~/.spore/tokens.json: {"me":"<your-secret>"}
+spore mailbox host -users ~/.spore/users -listen 127.0.0.1:8080 \
+  -tokens ~/.spore/tokens.json -privacy
 ```
 
-Then publish your prekey batch to it (one-time; refill later):
+Then publish your prekey batch to your user route (one-time; refill later):
 
 ```bash
-spore prekeybatch push -in ~/.spore/batch.json -mailbox http://127.0.0.1:8080
-spore prekeybatch status -mailbox http://127.0.0.1:8080   # is it serving? (consumes one bundle)
+spore prekeybatch push -in ~/.spore/batch.json \
+  -mailbox http://127.0.0.1:8080/u/me
+spore prekeybatch status -mailbox http://127.0.0.1:8080/u/me
 ```
 
 Each `GET /prekey` from a sender **pops one single-use bundle** — two senders
@@ -91,7 +93,8 @@ never get the same one-time key. When the batch runs low, refill:
 
 ```bash
 spore prekeybatch gen -out ~/.spore/batch2.json -n 50   # auto-continues OPK ids
-spore prekeybatch push -in ~/.spore/batch2.json -mailbox http://127.0.0.1:8080
+spore prekeybatch push -in ~/.spore/batch2.json \
+  -mailbox http://127.0.0.1:8080/u/me
 ```
 
 ### Choose where your off-chain bodies live (`-store`)

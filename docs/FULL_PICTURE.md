@@ -36,7 +36,7 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
    node's RPC, and runs `spore msg recv-e2` to decrypt locally. No third party.
 3. **A friend messages you** — E2E-encrypted, rides your chain (DERO native, or
    the envelope on Solana/EVM/XMR), the body is content-addressed and
-   compostable.
+   compostable; `recv-e2` decrypts it locally.
 4. **No home node?** A hosted Model-B service (blind courier) runs your node +
    mailbox. You pay for reachability, not trust — the service never sees
    content or (in privacy mode) who sent it.

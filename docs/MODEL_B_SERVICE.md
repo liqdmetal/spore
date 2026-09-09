@@ -65,7 +65,7 @@ phone (Termux/Android)
 2. Expose the wallet/node RPC to phone clients over **TLS + auth** (not plain),
    optionally behind a Tor hidden service.
 3. Run **one** `spore mailbox host -users DIR` for ALL paid users (see below).
-   Do NOT run `mailbox run` per user — that is one chain poller per user.
+   Do NOT run the legacy `mailbox run` per user — that is one chain poller per user; the production E2 path is the shared host plus client-side `recv-e2`.
 4. Do NOT log the phone's IP / connection metadata beyond what's needed.
 5. Fixed body padding + Sender-blank are already the code defaults for premium.
 

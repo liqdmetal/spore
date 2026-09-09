@@ -43,7 +43,7 @@
 <!-- alice home node chip -->
 <rect x="70" y="344" width="560" height="128" rx="12" fill="#18233D" stroke="#34D399" stroke-opacity="0.7" stroke-width="1.2"/>
 <text x="350" y="370" text-anchor="middle" font-size="12.5" font-weight="700" fill="#34D399">🖥 ALICE'S HOME NODE — ALWAYS-ON BASE</text>
-<text x="350" y="396" text-anchor="middle" font-size="10.5" fill="#8FA3BF">chain node + `spore mailbox run` (serve + scan + decrypt long bodies)</text>
+<text x="350" y="396" text-anchor="middle" font-size="10.5" fill="#8FA3BF">chain node + `spore mailbox host` (ciphertext + prekeys); phone runs `recv-e2`</text>
 <text x="350" y="414" text-anchor="middle" font-size="10.5" fill="#8FA3BF">+ optional `spore relay run` (store-and-forward for the wider fabric)</text>
 <text x="350" y="434" text-anchor="middle" font-size="10.5" fill="#8FA3BF">TLS (`-cert/-key`) · bearer token (`-token`) · no sender logging (`-privacy`)</text>
 <text x="350" y="456" text-anchor="middle" font-size="10" fill="#5B6B7A">blind courier — it serves/relays ciphertext, never sees content or the key</text>
@@ -85,7 +85,7 @@
 <rect x="1270" y="200" width="560" height="128" rx="12" fill="#18233D" stroke="#34D399" stroke-opacity="0.7" stroke-width="1.2"/>
 <text x="1550" y="226" text-anchor="middle" font-size="12.5" font-weight="700" fill="#34D399">🖥 BOB'S HOME NODE / MAILBOX</text>
 <text x="1550" y="252" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore mailbox run` — serves `/put`, `/body`; scans the chain for pointer-whispers</text>
-<text x="1550" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">polls Bob's mempool/node (~1–2s, pre-mine) &amp; fetches+decrypts long bodies headless</text>
+<text x="1550" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">polls Bob's chain; fetches ciphertext bodies; phone runs `recv-e2` decrypt locally</text>
 <text x="1550" y="288" text-anchor="middle" font-size="10.5" fill="#8FA3BF">holds Bob's long-term key so messages find him while his phone sleeps</text>
 <text x="1550" y="308" text-anchor="middle" font-size="10" fill="#5B6B7A">Bob's node is the SAME blind-courier pattern — decrypts only for Bob's key</text>
 

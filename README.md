@@ -113,7 +113,8 @@ spore msg mail add|list|block|threads|search|purge   # local contacts + search
 spore prekeybatch gen|push|status
 
 # Infra:
-spore mailbox run|list|get     # always-on receive + body store + prekey serving
+spore mailbox host|list|get    # hosted ciphertext/prekey service
+spore msg recv-e2               # client-side E2 receive/decrypt
 spore relay run                # store-and-forward hop (auth + backoff)
 spore status | doctor          # health HUD + preflight
 
@@ -151,7 +152,7 @@ read argv) — use `-msg-file` or stdin. Run `spore` with no args for full usage
 
 | | **Serverless** | **Home node** (encouraged) | **Hosted** (Model B) |
 |---|---|---|---|
-| You run | **nothing** | chain node + `spore mailbox run` (+ optional `spore relay run`) | nothing — you pay an operator |
+| You run | **nothing** | chain node + `spore mailbox host` (+ optional `spore relay run`) | nothing — you pay the operator |
 | Off-chain bodies | `nostr://` public relay commons (`-store nostr://relay1,relay2`) | your mailbox over TLS + token | the service's mailbox (blind courier) |
 | Prekey discovery | manual bundle exchange (`-bundle FILE`), or your own mailbox | your mailbox serves `GET /prekey` | the service's mailbox |
 | Who's in the middle | nobody you pay; relays see ciphertext-by-CID | nobody | the service sees traffic + timing, never content |

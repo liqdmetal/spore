@@ -23,21 +23,22 @@ spore msg recv-e2 -chain dero -rpc <your-rpc> -rpc-login <user:pass> \
 
 ## 1. Provision a user (operator side)
 ```bash
-# 1. user's mailbox dir + key (fresh, per user)
+# 1. create one subdirectory per user and a bearer-token map
 MBROOT=/var/spore/users
 mkdir -p "$MBROOT/$user"
-# 2. run their mailbox with TLS + token, bound to their own port
-spore mailbox run -dir "$MBROOT/$user" \
+# /var/spore/tokens.json: {"$user":"$TOKEN"}
+# 2. run ONE shared host for all users (Caddy terminates public TLS)
+spore mailbox host -users "$MBROOT" \
   -chain dero -rpc http://127.0.0.1:10102/json_rpc \
-  -listen 0.0.0.0:$PORT -privacy -token "$TOKEN" \
-  -cert /etc/letsencrypt/live/$HOST/fullchain.pem \
-  -key  /etc/letsencrypt/live/$HOST/privkey.pem &
-# 3. capture the mailbox pubkey (printed on first run) -> give to the phone
-#    user's senders so they encrypt bodies to it.
+  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json -privacy &
+# 3. publish the user's prekey batch to /u/$user/prekey-batch
+spore prekeybatch push -in "$MBROOT/$user/batch.json" \
+  -mailbox https://$HOST/u/$user
 ```
 
-Manage these as systemd units (one per user) so they survive reboot. The
-`-token` they pass must match what you set; `-privacy` blanks Sender in the log.
+Manage the single shared host as one systemd unit so it survives reboot. Caddy
+terminates public TLS and proxies to loopback; `-privacy` omits sender identity
+from the hosted log. The user's phone runs `msg recv-e2` and decrypts locally.
 
 ## 2. Expose the DERO/node RPC to the phone SECURELY
 Do NOT expose the raw wallet RPC port publicly. Front it with:
@@ -51,12 +52,14 @@ The operator sees the tx it sends (unavoidable) but never the message content
 (DERO encrypts natively; EVM/Solana/XMR ride the E2E envelope).
 
 ## 3. TLS for the mailbox
-Use `-cert`/`-key` (Let's Encrypt via certbot) so body pushes/receives are
-encrypted in transit. No plaintext bodies over the internet.
+Put Caddy/nginx or another TLS edge in front of the loopback listener. The
+public endpoint must be HTTPS; do not expose the mailbox or wallet RPC ports
+without authentication and rate limiting. The host stores ciphertext bodies;
+E2 ratchet decryption occurs in `spore msg recv-e2` on the phone.
 
 ## 4. Don't log metadata
-The mailbox's durable log only holds decrypted text + txid (no Sender in
-`-privacy` mode). Do not add IP/UA logging in front of it.
+`-privacy` omits sender identity from the hosted log. The service must not log
+message plaintext, identity/SPK private keys, or unnecessary IP/UA metadata.
 
 ## 5. Billing/packaging (later)
 Tier per the plan: free = shared node + small mailbox; premium = private
@@ -66,7 +69,9 @@ core spore code.
 
 ## Sanity checklist
 - [ ] `spore demo` runs (binary sane)
-- [ ] mailbox starts, prints pubkey, serves on its TLS port
-- [ ] `curl -k -H "Authorization: Bearer $TOKEN" https://host:PORT/list` returns 200/JSON
-- [ ] same without token returns 401
+- [ ] shared `mailbox host` starts on loopback and systemd keeps it alive
+- [ ] Caddy/nginx serves the public HTTPS hostname and proxies to the loopback host
+- [ ] authenticated `/u/<user>/list` returns 200/JSON
+- [ ] same route without or with a wrong token returns 401
 - [ ] phone can `msg send` through the remote RPC (test with a real message)
+- [ ] phone can `msg recv-e2` and decrypt a real message locally

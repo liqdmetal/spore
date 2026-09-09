@@ -32,8 +32,8 @@ keys. That's a stronger posture than Signal's servers (which hold your account
 and metadata) and a paid one (unlike free relays that can vanish).
 
 **Cost/effort to launch:** one systemd unit on the existing hardened Hetzner
-node + a token-auth `mailbox run` + `relay run` per customer, a pricing page,
-and a signup that hands out a relay token. The runbook already exists
+node + a token-auth shared `mailbox host` + `relay run`, a pricing page, and a
+signup that provisions a per-user mailbox token. The runbook already exists
 ([`MODEL_B_RUNBOOK.md`](MODEL_B_RUNBOOK.md)). No new protocol work.
 
 **Pricing shape (operator's call):** a small monthly per-mailbox fee. Anchor to
