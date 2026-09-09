@@ -33,35 +33,58 @@ func pointerFor(p Pointer) []byte {
 
 // SendFirst creates an X3DH init frame, stores it off-chain, and returns the
 // pointer plus its canonical chain encoding. The caller posts only the pointer.
+//
+// SendFirst is SendFirstSession with the session id discarded; callers that
+// must persist the session durably should use SendFirstSession.
 func (e *Endpoint) SendFirst(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, error) {
+	p, raw, _, err := e.SendFirstSession(identity, bundle, pinnedSig, plaintext, deadline)
+	return p, raw, err
+}
+
+// SendFirstSession is SendFirst plus the new session's id.
+//
+// The session id is returned DIRECTLY rather than being recovered by fetching
+// the just-stored frame back out of the body store. That recovery step was a
+// real bug: it had to synthesise a "now" just under the frame's burn deadline,
+// and the stored deadline is truncated to whole seconds while a caller-supplied
+// deadline is not. With nanoseconds present (any real `time.Now().Add(ttl)`),
+// the synthesised instant landed in the SAME second as the deadline, FetchFrame
+// rejected the frame as expired, and the send failed AFTER the body was already
+// stored. Tests missed it because they pass deadlines built from
+// `now.Truncate(time.Second)`, which has zero nanoseconds.
+//
+// Deriving the id from the map of live sessions is also wrong: an endpoint can
+// hold several sessions and map iteration order is undefined. Returning it from
+// the handshake is both correct and free.
+func (e *Endpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, [8]byte, error) {
 	if e == nil || e.Store == nil || e.Sessions == nil {
-		return Pointer{}, nil, errors.New("ratchetwire: incomplete endpoint")
+		return Pointer{}, nil, [8]byte{}, errors.New("ratchetwire: incomplete endpoint")
 	}
 	s, hs, err := ratchet.EstablishInitiator(identity, bundle, pinnedSig)
 	if err != nil {
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
 	msg, err := s.Encrypt(plaintext)
 	if err != nil {
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
 	frame, err := NewInitFrame(hs, msg, deadline)
 	if err != nil {
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
 	state, err := exportSession(s)
 	if err != nil {
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
 	if err := e.Sessions.Restore(hs.SessionID, state); err != nil {
-		return Pointer{}, nil, fmt.Errorf("ratchetwire: install initiator: %w", err)
+		return Pointer{}, nil, [8]byte{}, fmt.Errorf("ratchetwire: install initiator: %w", err)
 	}
 	ptr, err := PutFrame(e.Store, frame)
 	if err != nil {
 		e.Sessions.Erase(hs.SessionID)
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
-	return ptr, pointerFor(ptr), nil
+	return ptr, pointerFor(ptr), hs.SessionID, nil
 }
 
 // ReceiveFirst validates an off-chain init frame before installing endpoint

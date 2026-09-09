@@ -83,17 +83,14 @@ func (e *DurableEndpoint) expired(id [8]byte) {
 // SendFirst performs the existing X3DH send and durably saves the resulting
 // session only after the frame has been stored successfully.
 func (e *DurableEndpoint) SendFirst(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, error) {
-	p, raw, err := e.Endpoint.SendFirst(identity, bundle, pinnedSig, plaintext, deadline)
+	// The session id comes back from the handshake directly. It used to be
+	// recovered by re-fetching the just-stored frame with a synthesised "now"
+	// of deadline-1ns, which silently failed for any deadline carrying
+	// nanoseconds (i.e. every real CLI call) — see SendFirstSession.
+	p, raw, id, err := e.Endpoint.SendFirstSession(identity, bundle, pinnedSig, plaintext, deadline)
 	if err != nil {
 		return Pointer{}, nil, err
 	}
-	// Resolve the session from the stored frame, not from map iteration: an
-	// endpoint may already have multiple sessions and map order is undefined.
-	stored, fetchErr := FetchFrame(e.Store, p, deadline.Add(-time.Nanosecond))
-	if fetchErr != nil {
-		return Pointer{}, nil, fmt.Errorf("ratchetwire: resolve initial session: %w", fetchErr)
-	}
-	id := stored.SessionID
 	if id == ([8]byte{}) {
 		return Pointer{}, nil, errors.New("ratchetwire: initial session not installed")
 	}
