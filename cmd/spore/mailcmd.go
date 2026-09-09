@@ -66,7 +66,13 @@ func msgMail(args []string) {
 	olderThan := fs.Duration("older-than", 0, "purge: delete indexed messages older than this duration (e.g. 30d is not supported by Go durations — use 720h)")
 	_ = fs.Parse(rest)
 	if *dbPath == "" {
-		fmt.Fprintln(os.Stderr, "mail: -db PATH is required")
+		// Fall back to the config's maildb path (onboarding default).
+		if cfg, cerr := LoadConfig(configPath("")); cerr == nil && cfg != nil && cfg.Maildb != "" {
+			*dbPath = cfg.Maildb
+		}
+	}
+	if *dbPath == "" {
+		fmt.Fprintln(os.Stderr, "mail: -db PATH is required (or set maildb in ~/.spore/config.json via `spore init`)")
 		os.Exit(2)
 	}
 	db, err := maildb.Open(*dbPath)

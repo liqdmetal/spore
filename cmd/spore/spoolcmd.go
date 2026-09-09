@@ -81,6 +81,9 @@ func msgCompose(args []string) {
 	out := fs.String("out", "spool", "directory to hold the composed message")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *identity == "" || *pinned == "" {
 		check(errors.New("compose requires -to -identity -pinned-sig, and exactly one of -bundle or -bundle-url"))
 	}
@@ -213,6 +216,9 @@ func msgFlush(args []string) {
 	fs := flag.NewFlagSet("msg flush", flag.ExitOnError)
 	dir := fs.String("dir", "spool", "spool directory to drain")
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	entries, err := os.ReadDir(*dir)
 	check(err)
 	sent, failed := 0, 0

@@ -207,7 +207,8 @@ func trimTrailingNewline(b []byte) []byte {
 }
 
 func e2Common(fs *flag.FlagSet) {
-	fs.String("chain", "dero", "pointer carrier: dero|evm|solana (xmr unsupported)")
+	fs.String("config", "", "config file path (default ~/.spore/config.json or $SPORE_CONFIG)")
+	fs.String("chain", "dero", "pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton (xmr unsupported)")
 	fs.String("rpc", "", "chain RPC")
 	fs.String("rpc-login", "", "RPC user:pass")
 	fs.String("from", "", "sender chain address")
@@ -242,6 +243,9 @@ func msgPrekeygen(args []string) {
 	spkID := fs.Uint("spk-id", 1, "signed-prekey identifier")
 	opkID := fs.Uint("opk-id", 1, "one-time-prekey identifier")
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *identity == "" || *spk == "" || *bundle == "" {
 		check(errors.New("prekeygen requires -identity-out -spk-out -bundle-out"))
 	}
@@ -292,6 +296,9 @@ func msgSendE2(args []string) {
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *identity == "" || *pinned == "" {
 		check(errors.New("send-e2 requires -to -identity -pinned-sig, and exactly one of -bundle or -bundle-url (plaintext via -msg-file or stdin)"))
 	}
@@ -424,6 +431,9 @@ func msgForwardE2(args []string) {
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *identity == "" || *pinned == "" || *file == "" {
 		check(errors.New("forward-e2 requires -to -identity -pinned-sig -file, and exactly one of -bundle or -bundle-url"))
 	}
@@ -450,6 +460,9 @@ func msgRecvE2(args []string) {
 	maildbPath := fs.String("maildb", "", "path to the local mail store (maildb JSON). When set, each decrypted message is recorded into its thread + search index, and blocked contacts are dropped")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
 	}
@@ -631,6 +644,9 @@ func msgReplyE2(args []string) {
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *sessionHex == "" {
 		check(errors.New("reply-e2 requires -to and -session (plaintext via -msg-file or stdin)"))
 	}
@@ -677,6 +693,9 @@ func msgSessions(args []string) {
 	fs := flag.NewFlagSet("msg sessions", flag.ExitOnError)
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	// Listing sessions never touches the off-chain body store, so -store is
 	// optional here: fall back to an in-memory store when omitted.
 	var st ratchetwire.BodyStore

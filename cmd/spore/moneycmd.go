@@ -27,6 +27,9 @@ func msgInvoiceE2(args []string) {
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *sessionHex == "" || *amount == "" {
 		check(errors.New("invoice requires -to -session -amount (and usually -for)"))
 	}
@@ -67,6 +70,9 @@ func msgPayE2(args []string) {
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
+	if err := loadConfigForFlags(fs); err != nil {
+		check(err)
+	}
 	if *to == "" || *sessionHex == "" || *amount == "" {
 		check(errors.New("pay requires -to -session -amount (optionally -invoice ID)"))
 	}
