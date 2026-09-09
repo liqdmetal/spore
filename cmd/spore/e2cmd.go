@@ -44,6 +44,8 @@ func msgE2(args []string) {
 		msgRecvE2(args[1:])
 	case "reply-e2":
 		msgReplyE2(args[1:])
+	case "forward-e2":
+		msgForwardE2(args[1:])
 	case "sessions":
 		msgSessions(args[1:])
 	case "prekeygen":
@@ -368,6 +370,34 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	}
 	fmt.Printf("sent-e2 txid %s pointer %x\n", r.TxID, raw)
 	return nil
+}
+
+// msgForwardE2 re-sends an existing decrypted message (e.g. one saved by
+// recv-e2 -out-dir) to a NEW recipient. It starts a fresh X3DH session with
+// that recipient — forward is a new conversation, not a continuation — and
+// reuses the exact sendE2Core path send-e2 uses, so bundle discovery,
+// pinning, durable state, and the pointer post all behave identically.
+func msgForwardE2(args []string) {
+	fs := flag.NewFlagSet("msg forward-e2", flag.ExitOnError)
+	to := fs.String("to", "", "new recipient chain address")
+	identity := fs.String("identity", "", "file containing sender identity private key hex")
+	bundle := fs.String("bundle", "", "recipient SPK bundle JSON file (mutually exclusive with -bundle-url)")
+	bundleURL := fs.String("bundle-url", "", "fetch recipient SPK bundle from a mailbox GET /prekey URL (mutually exclusive with -bundle)")
+	bundleToken := fs.String("bundle-token", "", "bearer token for -bundle-url, if the mailbox requires auth")
+	pinned := fs.String("pinned-sig", "", "recipient signing public key hex")
+	file := fs.String("file", "", "the decrypted message file to forward (e.g. a <txid>.msg from recv-e2 -out-dir)")
+	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	e2Common(fs)
+	_ = fs.Parse(args)
+	if *to == "" || *identity == "" || *pinned == "" || *file == "" {
+		check(errors.New("forward-e2 requires -to -identity -pinned-sig -file, and exactly one of -bundle or -bundle-url"))
+	}
+	if (*bundle == "") == (*bundleURL == "") {
+		check(errors.New("forward-e2 requires exactly one of -bundle or -bundle-url"))
+	}
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *file, *ttl); err != nil {
+		check(err)
+	}
 }
 
 func msgRecvE2(args []string) {
