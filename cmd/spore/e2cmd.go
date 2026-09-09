@@ -178,9 +178,60 @@ func readBundle(path string) (*ratchet.SPKBundle, error) {
 	}
 	var out ratchet.SPKBundle
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, err
+		return nil, wrongBundleFileError(path, b, err)
+	}
+	if err := validateBundleStruct(&out); err != nil {
+		// A structurally-empty bundle is almost always the wrong FILE (an
+		// identity card, a batch, or unrelated JSON), so diagnose the file
+		// rather than only reporting the zero fields.
+		return nil, wrongBundleFileError(path, b, err)
 	}
 	return &out, nil
+}
+
+// validateBundleStruct is the shared structural gate for a decoded SPKBundle,
+// used by BOTH the file (-bundle) and discovery (-bundle-url) paths.
+//
+// json.Unmarshal ignores unknown fields, so `{}` or `{"bundle":{}}` parses
+// cleanly into an all-zero SPKBundle. Without this check a zero bundle would
+// reach the X3DH handshake and fail later as a confusing signature error
+// instead of "you pointed at the wrong file".
+func validateBundleStruct(b *ratchet.SPKBundle) error {
+	if b == nil {
+		return errors.New("nil bundle")
+	}
+	if b.IKPub == [32]byte{} || b.SPKPub == [32]byte{} || b.SPKSig == [64]byte{} {
+		return errors.New("bundle has no identity/signed-prekey material (all-zero fields)")
+	}
+	// OPKPub nil with a nonzero OPKID is inconsistent: degraded mode must
+	// carry OPKID 0. Mirrors the mailbox's own bundle validation.
+	if b.OPKPub != nil {
+		if *b.OPKPub == [32]byte{} {
+			return errors.New("bundle declares an OPK id but the OPK public key is zero")
+		}
+	} else if b.OPKID != 0 {
+		return fmt.Errorf("bundle declares OPK id %d with no OPK public key", b.OPKID)
+	}
+	return nil
+}
+
+// wrongBundleFileError diagnoses the common ways -bundle gets handed the wrong
+// file, naming the mistake and the fix rather than surfacing a raw Go type
+// error that tells the user nothing.
+func wrongBundleFileError(path string, b []byte, cause error) error {
+	var probe struct {
+		IKPub   string            `json:"ik_pub"`
+		Bundles []json.RawMessage `json:"bundles"`
+	}
+	if json.Unmarshal(b, &probe) == nil {
+		if len(probe.Bundles) > 0 {
+			return fmt.Errorf("%s is a prekey BATCH (push it with `spore prekeybatch push`); -bundle wants a single SPKBundle, or use -bundle-url to fetch one from the recipient's mailbox", path)
+		}
+		if probe.IKPub != "" {
+			return fmt.Errorf("%s is an identity CARD (ik_pub + pinned_sig), not a prekey bundle; -bundle wants a single SPKBundle. Share the card so your contact can pin you, and fetch THEIR bundle with -bundle-url http://THEIR-MAILBOX/prekey", path)
+		}
+	}
+	return fmt.Errorf("%s is not a valid SPKBundle: %w", path, cause)
 }
 
 // fetchBundle discovers a recipient's public prekey bundle from a mailbox's
@@ -216,6 +267,11 @@ func fetchBundle(ctx context.Context, url, token string) (*ratchet.SPKBundle, er
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&wire); err != nil {
 		return nil, fmt.Errorf("bundle discovery: malformed response: %w", err)
+	}
+	// Same structural gate as readBundle: a mailbox returning {"bundle":{}}
+	// (or a partial bundle) must not reach the X3DH handshake as a zero value.
+	if err := validateBundleStruct(&wire.Bundle); err != nil {
+		return nil, fmt.Errorf("bundle discovery from %s: %w", url, err)
 	}
 	return &wire.Bundle, nil
 }

@@ -108,15 +108,20 @@ func initcmd(args []string) {
 		check(err)
 	}
 
-	// Public identity card for out-of-band sharing (contacts pin this).
-	bundlePath := filepath.Join(home, "bundle.json")
+	// Public IDENTITY CARD for out-of-band sharing: what a contact pins.
+	// Deliberately NOT called bundle.json — `send-e2 -bundle` expects an
+	// ratchet.SPKBundle (a different shape), and a same-named file that the
+	// wrong flag rejects is a guaranteed onboarding dead end. The shareable
+	// prekey bundles live in batch.json (pushed to your mailbox) and are
+	// fetched by senders with -bundle-url.
+	cardPath := filepath.Join(home, "identity-card.json")
 	pub := map[string]string{
 		"ik_pub":     hex.EncodeToString(mustPub(ik)),
 		"pinned_sig": hex.EncodeToString(sigPub),
 	}
 	raw, err := json.MarshalIndent(pub, "", "  ")
 	check(err)
-	if err := os.WriteFile(bundlePath, append(raw, '\n'), 0644); err != nil {
+	if err := os.WriteFile(cardPath, append(raw, '\n'), 0644); err != nil {
 		check(err)
 	}
 
@@ -150,20 +155,28 @@ func initcmd(args []string) {
 	fmt.Printf("  state key  %s\n", filepath.Join(home, "state.key"))
 	fmt.Printf("  config     %s\n", cfgFile)
 	fmt.Println()
-	fmt.Printf("your public identity (share OUT-OF-BAND so contacts can pin you):\n")
+	fmt.Printf("your public identity card (share OUT-OF-BAND so contacts can pin you):\n")
 	fmt.Printf("  pinned-sig: %s\n", hex.EncodeToString(sigPub))
-	fmt.Printf("  bundle:     %s\n", bundlePath)
+	fmt.Printf("  card:       %s\n", cardPath)
 	fmt.Println()
 	fmt.Println("next steps:")
 	fmt.Println("  1. run your mailbox (serves bodies + prekey discovery):")
 	fmt.Printf("       spore mailbox run -dir %s -listen 127.0.0.1:8080\n", filepath.Join(home, "mailbox"))
 	fmt.Println("  2. publish your single-use prekey batch to it (one-time; refill later with prekeybatch gen):")
 	fmt.Printf("       spore prekeybatch push -in %s -mailbox http://127.0.0.1:8080\n", batchPath)
-	fmt.Println("  3. receive (foreground; Ctrl-C stops):")
+	fmt.Println("  3. add a contact from THEIR identity card, so you can message them by name:")
+	fmt.Println("       spore msg mail add -addr THEIR_ADDR -nick alice -pinned THEIR_PINNED_SIG")
+	fmt.Println("  4. receive (foreground; Ctrl-C stops):")
 	fmt.Println("       spore msg recv-e2")
-	fmt.Println("  4. send to someone whose bundle+pinned-sig you have:")
-	fmt.Println("       spore msg send-e2 -to ADDR -bundle-url http://THEIR-MAILBOX/prekey -pinned-sig THEIR_SIG")
-	fmt.Println("       (plaintext via -msg-file or stdin — never argv)")
+	fmt.Println("  5. send — by nickname (address + pinned sig come from your address book):")
+	fmt.Println("       spore msg send-e2 -to alice -bundle-url http://THEIR-MAILBOX/prekey")
+	fmt.Println("     or by raw address + their pinned sig:")
+	fmt.Println("       spore msg send-e2 -to ADDR -bundle-url URL -pinned-sig THEIR_SIG")
+	fmt.Println("     (plaintext via -msg-file or stdin — never argv)")
+	fmt.Println()
+	fmt.Println("no mailbox? use the serverless body store instead:")
+	fmt.Printf("       spore msg send-e2 -to alice -bundle FILE -store nostr://relay.damus.io,nos.lol\n")
+	fmt.Printf("       (uses the dedicated store key at %s)\n", storeKeyFile)
 }
 
 func writePrivate(path string, secret []byte) {

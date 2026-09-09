@@ -87,10 +87,16 @@ func TestInitCreatesUsableKit(t *testing.T) {
 	initcmd([]string{"-dir", home, "-opks", "3", "-store", "http://127.0.0.1:8080"})
 
 	// Every artifact exists.
-	for _, f := range []string{"identity.key", "spk.key", "state.key", "opk-pool.json", "bundle.json", "config.json", "state"} {
+	for _, f := range []string{"identity.key", "spk.key", "state.key", "store.key", "opk-pool.json", "batch.json", "identity-card.json", "config.json", "state"} {
 		if _, err := os.Stat(filepath.Join(home, f)); err != nil {
 			t.Fatalf("init did not create %s: %v", f, err)
 		}
+	}
+	// bundle.json must NOT exist: -bundle expects an ratchet.SPKBundle and an
+	// identity card under that name is an onboarding dead end (readBundle now
+	// rejects it with guidance). The card is identity-card.json.
+	if _, err := os.Stat(filepath.Join(home, "bundle.json")); err == nil {
+		t.Fatal("init wrote bundle.json again — that name collides with -bundle's expected SPKBundle shape")
 	}
 	// Config is loadable and internally consistent.
 	cfg, err := LoadConfig(filepath.Join(home, "config.json"))
@@ -103,8 +109,8 @@ func TestInitCreatesUsableKit(t *testing.T) {
 	if len(cfg.PinnedSig) != 64 {
 		t.Fatalf("pinned sig not 32-byte hex: %q", cfg.PinnedSig)
 	}
-	// bundle.json is valid JSON with public-only fields.
-	raw, err := os.ReadFile(filepath.Join(home, "bundle.json"))
+	// identity-card.json is valid JSON with public-only fields.
+	raw, err := os.ReadFile(filepath.Join(home, "identity-card.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,12 +119,17 @@ func TestInitCreatesUsableKit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if pub["ik_pub"] == "" || pub["pinned_sig"] == "" {
-		t.Fatalf("bundle.json incomplete: %v", pub)
+		t.Fatalf("identity-card.json incomplete: %v", pub)
 	}
 	for _, v := range pub {
 		if len(v) != 64 {
-			t.Fatalf("bundle field not 32-byte hex: %q", v)
+			t.Fatalf("card field not 32-byte hex: %q", v)
 		}
+	}
+	// store.key is a usable 32-byte hex key (the dedicated nostr body-store
+	// signing key).
+	if _, err := readHexFile(filepath.Join(home, "store.key"), 32); err != nil {
+		t.Fatalf("store.key: %v", err)
 	}
 	// identity.key holds 32-byte hex.
 	ik, err := readHexFile(filepath.Join(home, "identity.key"), 32)
