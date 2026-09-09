@@ -74,6 +74,8 @@ func main() {
 		send(os.Args[2:])
 	case "channel":
 		channelserve(os.Args[2:])
+	case "archive":
+		archivecmd(os.Args[2:])
 	case "chat":
 		chat(os.Args[2:])
 	case "web":
@@ -161,6 +163,7 @@ func usage() {
   spore sub paid -roster F -channel C -addr A -pinned-sig HEX -credit F -issuer HEX -ledger L   (crypto-paid subscription, no account/invoice)
   spore sub list|remove|send -roster F -channel C [-notice F] [-commit]     (who is entitled; print per-subscriber send commands)
   spore sub follow -state F -channel C -publisher HEX | status -state F [-accept N]   (subscriber: pin publisher, track replay floor)
+  spore archive put -file BODY [-dir D] [-ipfs URL] | get -cid HEX -out F | check -cid HEX | health   (mirror an issue archive across INDEPENDENT substrates; 2+ = durable)
   spore init [-dir ~/.spore] [-opks 50] [-chain dero] [-store URL]   (one-shot onboarding: generates identity kit + config.json; afterwards ALL e2 commands pick up defaults automatically)
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)

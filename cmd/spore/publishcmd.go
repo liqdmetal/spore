@@ -90,8 +90,14 @@ func publishIssue(args []string) {
 	ct, notice, err := broadcast.SealIssue(key, *channel, *seq, *title, body, cidOf)
 	check(err)
 
-	ctPath := fmt.Sprintf("%s/%s-%d.body", strings.TrimRight(*outDir, "/\\"), *channel, *seq)
-	ntPath := fmt.Sprintf("%s/%s-%d.notice.json", strings.TrimRight(*outDir, "/\\"), *channel, *seq)
+	// The body file MUST be named <cid>.body, matching what every spore body
+	// store uses (internal/store/diskstore.go) and what `spore-peer serve`
+	// looks up. Naming it <channel>-<seq>.body meant an operator had to rename
+	// or symlink before serving, which is exactly the kind of manual step that
+	// silently breaks a publish pipeline.
+	dir := strings.TrimRight(*outDir, "/\\")
+	ctPath := fmt.Sprintf("%s/%s.body", dir, notice.BodyCID)
+	ntPath := fmt.Sprintf("%s/%s-%d.notice.json", dir, *channel, *seq)
 	check(os.WriteFile(ctPath, ct, 0600))
 	blob, err := json.MarshalIndent(notice, "", "  ")
 	check(err)
