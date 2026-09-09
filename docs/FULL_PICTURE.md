@@ -30,10 +30,10 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
 ## How it works — one message, any device
 
 1. **You run a home node** (the encouraged default): your chain node +
-   `spore mailbox run -privacy -token <secret> -cert/-key` — always on, TLS +
-   auth, never logs who.
-2. **Your phone dials home** over TLS. It holds the keys; it sends through your
-   node's RPC and receives through your mailbox. No third party.
+   `spore mailbox host -privacy` — always on, TLS + auth, stores ciphertext and
+   prekeys, and never receives the E2 plaintext.
+2. **Your phone dials home** over TLS. It holds the keys, sends through your
+   node's RPC, and runs `spore msg recv-e2` to decrypt locally. No third party.
 3. **A friend messages you** — E2E-encrypted, rides your chain (DERO native, or
    the envelope on Solana/EVM/XMR), the body is content-addressed and
    compostable.
@@ -53,8 +53,9 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
 - **Multi-chain** `spore msg send/recv/send-long/keygen -chain dero|evm|xmr|solana`
 - **DERO** live mainnet · **Solana** live mainnet (v3, cross-wallet) · **EVM**
   anvil + MyceliumMailbox contract · **XMR** node synced (content off-chain, B1)
-- **Home node**: `spore mailbox run` — always-on, cross-chain, `-privacy`
-  (no sender in log), `-token` (auth), `-cert/-key` (TLS), body padding
+- **Home/hosted mailbox**: `spore mailbox host` — always-on shared ciphertext
+  and prekey service, `-privacy` (no sender in hosted log), per-user tokens,
+  TLS at the edge, body padding; `spore msg recv-e2` decrypts on the device
 - **Relay fabric hop**: `spore relay run` — store-and-forward of opaque bodies
 - **Auto-compost**: `spore msg recv -chain evm|solana` erases each message
   from the mailbox contract/account (`burn()`) the moment it's delivered —

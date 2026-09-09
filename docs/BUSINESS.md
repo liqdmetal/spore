@@ -18,12 +18,13 @@ you — your phone still holds every key."
 
 A phone can't run a DERO/Solana node and can't stay always-on to receive. The
 self-host answer is a home node ([`HOME_NODE.md`](HOME_NODE.md)); the
-no-home-node answer is Model B ([`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md)): a
-hosted `spore mailbox run` + `spore relay run` that
+the no-home-node answer is Model B ([`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md)): a
+hosted `spore mailbox host` + `spore relay run` that
 
 - holds only TTL-bound **ciphertext** bodies and serves **single-use prekeys**,
 - never holds identity/SPK/state private keys (those stay on the user's device),
-- sees only "traffic happened + timing" — content is E2E-private by the ratchet.
+- leaves E2 ratchet decryption on the user's device,
+- sees traffic patterns and timing, but not message content.
 
 **Why it's defensible:** the operator is a *blind courier*, not a trusted
 server. Compromise of the host yields ciphertext that's already expiring, not

@@ -7,16 +7,18 @@ uses the shipped spore binary (v0.2.x) on a Linux box like the Hetzner node.*
 ## 0. What you're running (one per paid user, or shared for free tier)
 1. A **node/wallet RPC** the phone's `-rpc` points at (DERO wallet RPC, or a
    chain RPC for EVM/Solana/XMR). Reuse the DERO node already on the box.
-2. A **hosted mailbox** (`spore mailbox run -privacy`) the phone receives
-   long bodies through.
+2. A **hosted body mailbox** (`spore mailbox host`) for TTL-bound ciphertext
+   and prekey delivery. The phone runs `spore msg recv-e2` and decrypts locally.
 
 Phone commands once provisioned:
 ```
 # on the phone (Termux):
 spore msg send -chain dero -rpc https://<your-host>:<port>/json_rpc \
   -to <friend-dero1...> -msg "hi"
-spore mailbox run -dir ~/mb -chain dero -rpc <your-rpc> -privacy \
-  -token <user-token> -cert /path/cert.pem   # receive, secure
+spore msg recv-e2 -chain dero -rpc <your-rpc> -rpc-login <user:pass> \
+  -store https://<your-host>/u/<user> -store-token <user-token> \
+  -identity ~/mb/identity.key -spk ~/mb/spk.key -opk-pool ~/mb/opk-pool.json \
+  -state-dir ~/mb/state -state-key ~/mb/state.key   # decrypt locally, secure
 ```
 
 ## 1. Provision a user (operator side)

@@ -9,10 +9,12 @@ privacy promise for devices that can't self-host.*
 A phone can't run a DERO node or a Monero node. But it CAN hold its spore
 keys and sign/decrypt locally. What a phone user needs from a service is:
 1. a **reachable, always-on node** (to send txs / read the chain), and
-2. an **always-on mailbox** (to receive long bodies / messages while offline).
+2. a **hosted body mailbox** (`spore mailbox host`) that stores TTL-bound
+   ciphertext and serves prekeys while the phone's `spore msg recv-e2` process
+   performs E2 ratchet decryption locally.
 
-That is exactly what the existing `mailbox` + `-rpc URL` seam already does. The
-service = host those endpoints and sell access.
+The service hosts the body/prekey endpoint and sells access; the user's device
+retains the E2 keys and performs the decryption.
 
 ## The trust model (what the operator does / doesn't see)
 | Operator sees | Operator does NOT see |
@@ -22,9 +24,11 @@ service = host those endpoints and sell access.
 | the phone's connection IP (reduced by Tor) | keys (phone holds them) |
 | body sizes (reduced by padding) | decrypted bodies |
 
-**Privacy mode (shipped):** `mailbox run -privacy` blanks Sender before it hits
-the durable log. **Body padding (shipped):** all long bodies pad to a fixed 1
-KiB bucket, so the operator can't fingerprint message length.
+**Hosted privacy mode (shipped):** `mailbox host -privacy` avoids recording
+sender identities in the hosted log. The hosted service stores TTL-bound
+ciphertext and serves prekeys; `spore msg recv-e2` performs E2 ratchet
+decryption on the user's device. **Body padding (shipped):** all long bodies
+pad to a fixed 1 KiB bucket, so the operator can't fingerprint message length.
 
 ## The product (tiers)
 | Tier | What the phone gets | What the service runs |
@@ -41,7 +45,8 @@ content and (largely) metadata private** for a phone.
 phone (Termux/Android)
    └ spore keys (local) — sign/decrypt on device
       └ -rpc <service-node>        (send txs)      [built: -rpc seam accepts any URL]
-      └ mailbox run -privacy       (receive long)  [built: hosted mailbox, sender-blank]
+      └ mailbox host -privacy      (ciphertext + prekeys) [built: shared host]
+         └ spore msg recv-e2        (E2 decrypt locally on phone)
            └ reachable over Tor/hidden service      [add: operator infra]
       └ relay-fabric hop (future)  (hide IP from a single operator) [roadmap item 3]
 ```
@@ -113,8 +118,8 @@ the hub forces `AutoBurn=false` on the shared watcher regardless of the flag.
 
 ## What's built vs to-build
 - ✅ `-rpc URL` seam accepts a remote node (any URL)
-- ✅ hosted `mailbox run` (always-on, chain-scanning, HTTP-push receive)
-- ✅ `mailbox run -privacy` (no Sender in log)
+- ✅ hosted `mailbox host` (always-on ciphertext/prekey service with one shared watcher)
+- ✅ `mailbox host -privacy` (no Sender in hosted log; E2 decrypt remains client-side)
 - ✅ body padding (fixed 1 KiB bucket)
 - ✅ **`mailbox host`: N mailboxes, 1 process, 1 shared watcher, 1 listener,
   per-user bearer auth, shared reaper** (44 KB/user measured)
