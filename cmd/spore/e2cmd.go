@@ -41,6 +41,10 @@ func msgE2(args []string) {
 		msgSendE2(args[1:])
 	case "recv-e2":
 		msgRecvE2(args[1:])
+	case "reply-e2":
+		msgReplyE2(args[1:])
+	case "sessions":
+		msgSessions(args[1:])
 	case "prekeygen":
 		msgPrekeygen(args[1:])
 	default:
@@ -333,6 +337,8 @@ func msgRecvE2(args []string) {
 	opkPool := fs.String("opk-pool", "", "endpoint-local persistent one-time-prekey pool JSON (preferred)")
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	min := fs.Uint64("min-height", 0, "scan height")
+	autoAck := fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
+	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if *identity == "" || *spk == "" {
@@ -409,7 +415,26 @@ func msgRecvE2(args []string) {
 				fmt.Fprintln(os.Stderr, "e2 decrypt:", e)
 				continue
 			}
+			// Receipts are ratcheted messages like any other: detect the
+			// envelope and surface it as an ack line instead of a message.
+			if inReplyTo, status, isReceipt := parseReceipt(plain); isReceipt {
+				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), status, shortTx(inReplyTo))
+				continue
+			}
 			fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+			if *autoAck && frame.SessionID != ([8]byte{}) {
+				// Reply "delivered" on the same session; the sender's recv
+				// side prints it as an ack line. Best-effort: a failed ack
+				// send or post is logged, never fatal.
+				_, raw, ackErr := sendReceipt(ep, frame.SessionID, inc.TxID, "delivered", *ackTTL)
+				if ackErr != nil {
+					fmt.Fprintln(os.Stderr, "e2 ack:", ackErr)
+					continue
+				}
+				if _, postErr := c.PostPointer(ctx, inc.Sender, raw, 1); postErr != nil {
+					fmt.Fprintln(os.Stderr, "e2 ack post:", postErr)
+				}
+			}
 		case e := <-errs:
 			if e != nil {
 				fmt.Fprintln(os.Stderr, "e2 watch:", e)
@@ -417,5 +442,87 @@ func msgRecvE2(args []string) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// msgReplyE2 continues an existing ratchet session: the email "reply" —
+// same conversation, SendNext on the durable session. The pointer is posted
+// to the recipient chain address like any other continuation.
+func msgReplyE2(args []string) {
+	fs := flag.NewFlagSet("msg reply-e2", flag.ExitOnError)
+	to := fs.String("to", "", "recipient chain address")
+	sessionHex := fs.String("session", "", "16-hex session id (see msg sessions)")
+	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin; never pass plaintext as an argv flag)")
+	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	e2Common(fs)
+	_ = fs.Parse(args)
+	if *to == "" || *sessionHex == "" {
+		check(errors.New("reply-e2 requires -to and -session (plaintext via -msg-file or stdin)"))
+	}
+	rawID, err := hex.DecodeString(*sessionHex)
+	check(err)
+	if len(rawID) != 8 {
+		check(errors.New("-session must be 16 hex chars (8 bytes)"))
+	}
+	var sessionID [8]byte
+	copy(sessionID[:], rawID)
+	plaintext, err := readPlaintext(*msgFile)
+	check(err)
+	if len(plaintext) == 0 {
+		check(errors.New("reply-e2: empty plaintext"))
+	}
+	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String())
+	check(err)
+	stateDir := fs.Lookup("state-dir").Value.String()
+	stateKeyFile := fs.Lookup("state-key").Value.String()
+	if stateDir == "" || stateKeyFile == "" {
+		check(errors.New("E2 requires -state-dir and -state-key"))
+	}
+	stateKey, err := readHexFile(stateKeyFile, 32)
+	check(err)
+	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
+	check(err)
+	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
+	check(err)
+	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
+	check(err)
+	_, raw, err := ep.SendNext(sessionID, plaintext, time.Now().Add(*ttl))
+	check(err)
+	c, err := e2Carrier(fs)
+	check(err)
+	r, err := c.PostPointer(context.Background(), *to, raw, 1)
+	check(err)
+	fmt.Printf("reply-e2 txid %s pointer %x\n", r.TxID, raw)
+}
+
+// msgSessions lists the durable ratchet sessions for the configured state
+// dir. Sessions are the threads: each id is one conversation you can reply
+// into with reply-e2.
+func msgSessions(args []string) {
+	fs := flag.NewFlagSet("msg sessions", flag.ExitOnError)
+	e2Common(fs)
+	_ = fs.Parse(args)
+	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String())
+	check(err)
+	stateDir := fs.Lookup("state-dir").Value.String()
+	stateKeyFile := fs.Lookup("state-key").Value.String()
+	if stateDir == "" || stateKeyFile == "" {
+		check(errors.New("E2 requires -state-dir and -state-key"))
+	}
+	stateKey, err := readHexFile(stateKeyFile, 32)
+	check(err)
+	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
+	check(err)
+	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
+	check(err)
+	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
+	check(err)
+	ids := ep.Sessions.IDs()
+	if len(ids) == 0 {
+		fmt.Println("no sessions")
+		return
+	}
+	for _, id := range ids {
+		fmt.Printf("%x\n", id)
 	}
 }

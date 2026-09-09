@@ -83,7 +83,7 @@ func main() {
 	case "donate":
 		donatecmd(os.Args[2:])
 	case "msg":
-		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "prekeygen") {
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen") {
 			msgE2(os.Args[2:])
 		} else {
 			msgcmd(os.Args[2:])
