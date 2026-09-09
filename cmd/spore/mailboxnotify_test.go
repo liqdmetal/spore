@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/notify"
 )
@@ -43,13 +44,22 @@ func TestNotifyBodyPutEmitsMetadataOnlyAfterAcceptedPut(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ciphertext must not be forwarded"))
 	})
-	wrapped := notifyBodyPut(inner, d)
+	queue, err := notify.NewOutbox(filepath.Join(t.TempDir(), "notify.jsonl"), d, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	wrapped := notifyBodyPut(inner, queue)
 
 	req := httptest.NewRequest(http.MethodPut, "/put/abcdef0123456789", strings.NewReader("ciphertext must not be forwarded"))
 	res := httptest.NewRecorder()
 	wrapped.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("wrapped PUT status = %d, want 200", res.Code)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for gotBody == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if !strings.Contains(gotBody, "abcdef0123456789") {
 		t.Fatalf("notification omitted body identifier: %s", gotBody)

@@ -68,6 +68,8 @@ func main() {
 		demo()
 	case "keygen":
 		keygen()
+	case "provision":
+		provisioncmd(os.Args[2:])
 	case "daemon":
 		daemon(os.Args[2:])
 	case "send":
@@ -122,6 +124,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   spore demo
   spore keygen
+  spore provision -users DIR -name USER -tokens FILE -batch PUBLIC_BATCH.json [-notify-file FILE] [-email ADDRESS] [-sms E164] [-mailbox-url HTTPS_URL]
+             (operator: provision blind mailbox, token, notification route, and public prekeys)
   spore daemon -listen :PORT -dir DIR -priv HEX -rpc URL [-rpc-login u:p]
   spore send -to ADDR -peer-pub HEX -peer-inbox URL -msg TEXT [-rpc URL] [-rpc-login u:p] [-ttl 1h]
   spore channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)

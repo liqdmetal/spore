@@ -117,7 +117,11 @@ func mailboxHost(args []string) {
 		mb   *mailbox.Mailbox
 		tok  string
 	}
-	notifiers, err := buildMailboxNotifiers(*notifyFile, names, notify.Options{
+	notifyRoot := *notifyFile
+	if notifyRoot == "" {
+		notifyRoot = filepath.Join(*usersDir, "notify.json")
+	}
+	notifiers, err := buildMailboxNotifiers(notifyRoot, names, notify.Options{
 		SMTPHost:     os.Getenv("SPORE_NOTIFY_SMTP_HOST"),
 		SMTPPort:     parseEnvPort("SPORE_NOTIFY_SMTP_PORT", 587),
 		SMTPFrom:     os.Getenv("SPORE_NOTIFY_SMTP_FROM"),
@@ -170,6 +174,11 @@ func mailboxHost(args []string) {
 	})
 	defer hub.Close()
 
+	defer func() {
+		for _, q := range notifiers {
+			_ = q.Close()
+		}
+	}()
 	for _, b := range boxes {
 		b := b
 		codec := mailboxCodec(fs, b.mb)
