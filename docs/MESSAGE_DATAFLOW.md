@@ -261,17 +261,20 @@ forward secrecy to the payload.
 | Long-body **ciphertext** | no — off-chain, reaped at deadline | decryptable if an adversary copied it before reap; otherwise no body remains at the honest store |
 | Short whisper on DERO | **yes** | recorded payloads can be retro-decrypted with the relevant wallet secret |
 | Short whisper 0xE1 (public chains) | **yes** | recorded envelopes can be retro-decrypted with the recipient's long-term spore key |
-| Ratcheted content (0xE2) | not shipped yet | past consumed message keys are erased; this is the forward-secrecy target in §5 |
+| Ratcheted content (0xE2) | pointer only (chain); ciphertext off-chain, reaped at deadline | past consumed message keys are erased — a later device-key compromise does NOT unlock old 0xE2 history (forward secrecy holds) |
 
 So the promise is **not** "deleted from the chain" — DERO/EVM blocks are
 append-only and permanent. The accurate current promise is:
 
-> **Today:** passive observers cannot read encrypted payloads without a key;
-> long bodies are kept off-chain and expire; short on-chain messages remain
-> recoverable if the recipient's long-term key is later compromised.
+> **Legacy paths (whisper, 0xE1, one-shot long body):** passive observers
+> cannot read encrypted payloads without a key; long bodies are kept off-chain
+> and expire; but short on-chain messages remain recoverable if the
+> recipient's long-term key is later compromised.
 >
-> **With the ratchet wired:** consumed per-message keys are erased, so a later
-> device-key compromise cannot unlock the old ratcheted conversation history.
+> **The 0xE2 path (shipped):** consumed per-message keys are erased and the
+> ratchet ciphertext lives off-chain under a TTL, so a later device-key
+> compromise cannot unlock the old ratcheted conversation history. The chain
+> keeps only a dead pointer. This is the forward-private path — use it.
 
 ### 4.4 Why erasure is not enough without a ratchet
 
@@ -288,7 +291,7 @@ be computationally inert.
 
 ---
 
-## 5. Forward secrecy / post-compromise (the ratchet, 0xE2) — roadmap
+## 5. Forward secrecy / post-compromise (the ratchet, 0xE2) — SHIPPED
 
 A one-shot envelope is forward-secret *per message* (fresh ephemeral every
 message) but a stolen **long-term** key decrypts everything that key could
@@ -309,13 +312,13 @@ read. The ratchet layer fixes that for ongoing conversations:
   (`SweepSkipped`), so an offline gap can't become a permanent key archive.
 
 **Current status (be honest):** the ratchet is implemented, tested (incl. the
-deterministic-vector conformance suite just fixed), and committed — but it is
-**not yet wired onto the wire**. Today's shipped transport is the one-shot
-0xE1 envelope (public chains) / DERO native (DERO). Per `RATCHET.md` §11.3 the
-0xE2 kind + mailbox `/bundle` route land **feature-flagged behind `-x3dh`**
-until a soak passes, and substantive content goes the ratcheted body path
-(the whisper stays the "knock"). When wired, 0xE2 replaces the outer 0xE1 sig
-with the ratchet's own chain-authentication.
+deterministic-vector conformance suite), **and wired**: `spore msg send-e2` /
+`recv-e2` / `reply-e2` / `forward-e2` drive `internal/ratchetwire` end to end,
+with mailbox prekey discovery (`GET /prekey`, single-use batch pops), durable
+encrypted session state, and an off-chain TTL body store. The chain carries the
+opaque pointer only; substantive content is the ratcheted off-chain body. The
+0xE1 envelope and DERO-native whisper remain available as compatibility
+"knocks" — they are NOT forward-secret and the docs say so everywhere.
 
 ---
 

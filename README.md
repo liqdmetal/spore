@@ -1,188 +1,188 @@
-# Spore — m³ · Multi-chain Messenger
+# Spore — m³ · Multi-chain Private Messenger
 
-**In one line:** an E2E-encrypted, **no-relay** private messenger — you talk
-wallet-to-wallet over DERO, EVM, Solana, or Monero; no server, relay, or box
-sits in the middle, and messages rot by design.
-
-**Honest chain status (one line):** DERO and Solana are **live on mainnet**;
-EVM is verified on a local node (dev); XMR backend is built but **not yet live**.
+**In one line:** an E2E-encrypted, **forward-private, compostable** messenger
+that rides any of seven chains — you talk wallet-to-wallet, money and message
+in the same atomic transaction, and everything rots on your schedule. No
+central server. No VC. No token.
 
 **Want to send your first message? → [`docs/ONBOARDING.md`](docs/ONBOARDING.md)**
-(run `spore demo` first — it works with no chain, no wallet).
+Two commands: `spore init` then `spore msg send-e2 …`. (`spore demo` runs with
+no chain and no wallet if you just want to see it work.)
 
 ---
 
-**The common mycorrhizal network (CMN) for crypto.**
+## What makes Spore different
 
-In a forest, trees look separate — but underground they are joined by a shared
-mycorrhizal network through which they exchange nutrients and warn each other.
-That is the model here — Spore is the messenger of the Spore stack
-(hyphae carry it; the Rhizome Sea is the commons it travels across):
-
-- **Trees = the users / endpoints.** Each is an independent wallet + node on
-  its own chain (DERO, EVM, Solana, Monero…). Separate canopies, self-sovereign.
-- **Spore = the substrate running underneath.** The private, no-relay
-  transport that lets any tree signal another — quietly, point-to-point, no
-  relay or box in between.
-- **The common mycorrhizal network (m³)** is what emerges: trees on different
-  chains, all connected through one underground fabric.
-
-**A forward-private, compostable no-relay messenger.** Spore's target is
-stronger than "encrypted on-chain": per-message keys must rotate and die, so
-a later device-key compromise cannot unlock old conversation history. Bulk
-bodies stay off-chain and expire; chains carry opaque delivery records.
-
-The current direct whisper/envelope paths are encrypted today but do **not**
-yet provide forward secrecy. The X3DH + Double Ratchet implementation in
-`internal/ratchet` is the mitigation being wired into the conversation path
-now. Until that wire integration lands, do not claim forward secrecy for short
-DERO whispers, 0xE1 public-chain envelopes, or the one-shot long-body path.
-
-Private comms tacked onto the chain — no box, no shared store, no relay, no
-exposed IP. Each tree only ever talks to its own roots.
-
-## What it is
-
-**Not a chain.** A transport + coordination layer that rides a chain. It needs
-only two things any chain provides:
-
-1. An **encrypted point-to-peer payload seam** (the tx message field).
-2. A **wallet/signer** holding keys, exposed over RPC.
-
-The core is chain-agnostic: `internal/chain` (the `Chain` interface + `Watch`
-poller) is the seam, and `internal/whisper` is the canonical payload codec.
-Everything above — the crypto, rendezvous, rooms, body store, UI — sits above
-the chain and never touches consensus.
-
-## One home node, every device (the privacy default)
-
-There are two ways to run Spore. **Run your own home node** — it is your
-server, and only yours:
-
-| You run (encouraged default) | You run only if you have NO home node |
-|---|---|
-| An always-on **home node** (your DERO/Solana node + `spore mailbox run`, optionally `spore relay run`). It **is** the server. | A paid **hosted service** (Model B) runs a node + mailbox for you. |
-| Your **phone/laptop dial your own home node** over TLS + token auth — the phone holds the keys. | Your phone dials the **service's** node/mailbox (blind courier, never keys). |
-| No third party ever sits in the middle. Your data, your server. | The service sees traffic happened + timing (content stays E2E-private). |
-
-**Run a home node.** Your always-on node receives + decrypts for you, your
-phone connects to *your* machine, and no service is in between. → **Start
-here: [`docs/HOME_NODE.md`](docs/HOME_NODE.md)** (copy-paste).
-
-**No home node?** A phone can't run a DERO node, so Spore's hosted service is
-the fallback: the phone still holds the keys; the service is a blind courier.
-→ [`docs/MODEL_B_SERVICE.md`](docs/MODEL_B_SERVICE.md) + operator
-[`docs/MODEL_B_RUNBOOK.md`](docs/MODEL_B_RUNBOOK.md).
-
-## Chain status
-
-| Tree | Backend | Payload seam | Secrecy | Status |
+| | Signal | Session | Telegram+TON | **Spore** |
 |---|---|---|---|---|
-| **DERO** | `internal/dero` | native point-to-point tx payload | native | **live, mainnet-verified** |
-| **EVM-compatible** | `internal/evm` | calldata / events (public) | m³ secure ECDH envelope | **live-verified** on a local anvil node |
-| **Solana** | `internal/solana` + BPF mailbox program | program inbox PDA (public) | m³ secure ECDH envelope | **live on mainnet** (program below) |
-| **Monero (XMR)** | `internal/xmr` | 8-byte payment id only | signal on-chain + off-chain rendezvous | built, **mock-verified** — node still syncing |
-| Zcash / ARRR / Decred / Verge / Zama | — | — | — | not built (future) |
+| Forward secrecy (Double Ratchet) | ✓ | ✓ | partial | ✓ |
+| Post-compromise healing | ✓ | ✓ | ✗ | ✓ |
+| No central server | ✗ | ✓ (onion) | ✗ | ✓ (chain + your own node) |
+| **Money moves WITH the message, same atomic tx** | ✗ | ✗ | custodial bots | **✓ native (DERO/EVM)** |
+| **Messages compost** (bodies expire, mailbox burns, local panic-wipe) | ✗ | ✗ | ✗ | **✓** |
+| Single-use prekeys served without exposing your identity key | — | — | — | **✓** |
 
-Precisely:
+Settlement-native, compostable, self-hosted private messaging is an empty
+category. Spore is the messaging fruiting body on the Relay/Sap settlement
+rail — money and words become the same atomic object, and both rot.
 
-- **DERO** — tree #1. Whisper (no-relay unicast), long nobody-but-us bodies,
-  rooms, browser chat. Mainnet-verified. Native point-to-point encryption.
-- **EVM** — the Go backend rides any EVM JSON-RPC. **Live-verified on a local
-  anvil node** (not a real public EVM chain — same code path, swap in a funded
-  account to go live). `contracts/MyceliumMailbox.sol` exists for a scalable
-  inbox on busy chains (not yet deployed).
-- **Solana** — the Go backend + a Rust BPF mailbox program (per-recipient PDA
-  inbox). **Deployed and live-verified on Solana mainnet**: program ID
-  `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa` (v3, the CLI default), RPC
-  default `https://api.mainnet-beta.solana.com`. The client currently does
-  **self-messaging** (deliver into your own inbox PDA) — cross-wallet delivery
-  needs both parties running the backend.
-- **Monero** — built and mock-verified only. XMR has no per-recipient encrypted
-  payload; a tx is a **knock** (short signal ≤8 bytes rides the payment id),
-  content goes off-chain rendezvous. Not yet live — a pruned `monerod` is
-  **syncing (~60%)** on the Hetzner node to enable a real wallet-rpc verify.
+## The mycorrhizal model (m³)
 
-**E2E secure layer (signed envelopes).** Chains without native payload
-encryption (EVM, Solana, XMR) expose their tx/metadata publicly.
-`internal/secure` restores privacy AND proves who sent each message: an
-XChaCha20-Poly1305 envelope signed by the sender's Ed25519 key (`kind 0xE1 ‖
-sig_pub 32B ‖ eph_pub 32B ‖ nonce 24B ‖ sig 64B ‖ ciphertext`), sealed with
-X25519 ECDH + HKDF-SHA256 where the AEAD key binds BOTH public keys of the
-exchange, and the Ed25519 signature (derived from the sender's own key, print
-it with `spore keygen` — the `sig:` line) binds the sender key, ephemeral,
-nonce, recipient prekey, and ciphertext — so messages cannot be forged,
-ciphertext-swapped, or replayed to a different recipient. Receivers are
-STRICT on public chains: only signed envelopes decode; plaintext injection is
-refused. Pin your contacts' `sig` keys (Codec.Pin) and unpinned senders'
-mail never arrives. Calldata / inbox records carry no plaintext — only the
-recipient's private key decrypts. Threat model: `docs/SENDER_AUTH.md`;
-wire formats + interop vectors: `docs/WIRE_SPEC.md`.
+In a forest, trees look separate — underground they are joined by a shared
+mycorrhizal network exchanging nutrients and warnings. That is Spore:
 
-## Privacy model
+- **Trees = endpoints.** Each an independent wallet + node on its own chain.
+- **Spore = the substrate underneath.** A no-relay transport letting any tree
+  signal another — quietly, point-to-point.
+- **m³ = the network that emerges:** trees on different chains, joined through
+  one underground fabric.
 
-- **Point-to-point**: DERO encrypts every tx payload natively; other chains are
-  sealed by the m³ secure envelope.
-- **No relay**: a whisper is a real tx that P2P-fans to the recipient's own
-  node. No intermediary ever holds both halves of a conversation.
-- **Spore**: bodies are TTL-evicted; keys are ephemeral and erased; the
-  on-chain record is a hash + a dead key. Old messages become unrecoverable.
-- **Honest limits**: "a tx happened at ~time" is visible chain-wide (DERO's ring
-  sig hides the sender; EVM/Solana/XMR expose tx metadata — content stays
-  private only via the envelope). Group *broadcast* still needs a relay or an SC
-  — no-relay is unicast by construction. Cross-chain direct messaging is
-  impossible (different key crypto); cross-chain = rendezvous/relay + identity
-  proof. Full details: `docs/SENDER_AUTH.md` (sender-auth threat model),
-  `docs/WIRE_SPEC.md` (wire formats + interop vectors), `WHISPER.md`, `design.md`.
+## Architecture (the honest model)
 
-## CLI
+Spore carries **only an opaque 74-byte pointer on-chain**. The ratcheted
+ciphertext, the handshake, and the message body stay **off-chain** in a
+TTL-bound store and are reaped after expiry. A permanent chain can't forget a
+transaction — so Spore never pretends to. What it guarantees:
+
+> **The message body composts. The permanent carrier retains only an opaque,
+> non-decryptable pointer scrap.**
+
+- **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`): every
+  new conversation is `0xE2`, forward-private, post-compromise healing. The
+  legacy `0xE1` envelope, DERO-native whispers, and one-shot long-body path
+  remain **compatibility-only** and are documented as **not** forward-private.
+- **Off-chain bodies** (`internal/store`): content-addressed, TTL-evicted,
+  crash-safe (the expiry record is written before the body, so a crash can
+  never leave an un-reapable ciphertext).
+- **Single-use prekeys** (`internal/mailbox`): `GET /prekey` pops one
+  pre-signed public bundle per sender — two senders never get the same OPK.
+  The mailbox never touches your identity/SPK private keys; bundles are signed
+  offline (`spore prekeybatch`).
+- **Durable local state**: ratchet sessions are endpoint-local, encrypted at
+  rest, anti-rollback (append-only sequence log survives restart), and
+  inactivity-expiring.
+- **No downgrade**: an unsupported carrier refuses rather than silently
+  falling back to a legacy plaintext-forever path.
+
+## Chain / carrier status
+
+| Carrier | Backend | Pointer transport | Compost | Status |
+|---|---|---|---|---|
+| **DERO** | `internal/dero` | native tx payload | body TTL | **live, mainnet** |
+| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (anvil); deploy pending |
+| **Solana** | `internal/solana` | inbox PDA (program v3) | `burn(idx)` after delivery | **live, mainnet** |
+| **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
+| **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
+| **Cosmos SDK** | `internal/cosmos` | configurable memo field | chain-specific | configurable seam |
+| **TON** | `internal/ton` | configurable comment | no universal burn | configurable seam |
+| Monero (XMR) | `internal/xmr` | 8-byte payment id | off-chain rendezvous | mock-verified; **too small for E2 pointer — refused, not downgraded** |
+
+Full carrier matrix, invariants, and deployment order:
+[`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md).
+
+## Payments (settlement-native)
+
+Money rides the **same transaction** as the pointer on DERO and EVM-calldata —
+atomically, trustlessly, no custody. Spore never holds your funds; your wallet
+signs.
+
+- `spore msg send-e2 -amount 5.5dero …` — pay with the message.
+- `spore msg invoice -amount 25dero …` — request payment in-thread.
+- `spore msg pay -invoice <id> …` — settle: money + proof ride one atomic tx.
+
+Bitcoin/TON value carriage is refused today (their backends discard the amount
+hint) rather than silently sending an unpaid message as if paid.
+
+## CLI (everything after `spore init` picks up config defaults)
 
 ```
-spore demo | keygen | daemon | send | channel | chat | web | donate
-spore whisper send|send-long|recv|keygen          # DERO no-relay unicast
-spore msg send|recv|send-long|keygen -chain dero|evm|xmr|solana   # multi-chain
+spore init                     # one-shot onboarding: identity kit + config.json
+spore demo                     # see it work — no chain, no wallet
+
+# Forward-private E2 (the real messenger):
+spore msg send-e2   -to ADDR (-bundle F | -bundle-url URL) -pinned-sig HEX [-amount 5.5dero] [-msg-file F|-]
+spore msg recv-e2   [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL]
+spore msg reply-e2  -to ADDR -session HEX      # continue a thread
+spore msg forward-e2 -to ADDR -file F …        # new session, same body
+spore msg sessions                             # list thread/session ids
+spore msg invoice|pay -session HEX -amount N   # in-thread settlement
+spore msg compose | flush                      # offline send queue (HMAC-sealed)
+spore msg mail add|list|block|threads|search|purge   # local contacts + search
+
+# Prekey discovery (single-use):
+spore prekeybatch gen|push|status
+
+# Infra:
+spore mailbox run|list|get     # always-on receive + body store + prekey serving
+spore relay run                # store-and-forward hop (auth + backoff)
+spore status | doctor          # health HUD + preflight
+
+# Compostability as a user feature:
+spore panic [-confirm]         # verifiable local wipe of keys/state/maildb/spool
 ```
 
-`msg` dispatches to the right backend via `internal/backend` (default `-chain
-dero`). `donate` prints the per-chain donation rail.
+Plaintext is **never** an argv flag (shell history, `ps`, and crash reports
+read argv) — use `-msg-file` or stdin. Run `spore` with no args for full usage.
+
+## Privacy model (honest limits)
+
+- **Forward-private + compostable** on the E2 path; legacy paths are not.
+- **No relay**: a whisper is a real tx that P2P-fans to the recipient's node.
+- **Metadata is visible**: "a tx happened at ~time" is chain-wide public.
+  DERO's ring sigs hide the sender; EVM/Solana/Bitcoin/TON expose tx metadata
+  (content stays private via the off-chain ratchet body). ntfy sees "you got a
+  message" + a short txid, never the body.
+- **Immutable carriers keep the pointer scrap forever** — deleting an off-chain
+  body does not erase the on-chain pointer. No protocol can promise otherwise.
+- **Local plaintext**: `maildb` stores decrypted snippets for search (0600,
+  purge-able); the spool stores queued plaintext (0600, HMAC-sealed). `panic`
+  wipes both.
+- Threat model: [`docs/SENDER_AUTH.md`](docs/SENDER_AUTH.md) ·
+  wire formats: [`docs/WIRE_SPEC.md`](docs/WIRE_SPEC.md) ·
+  ratchet: [`docs/RATCHET.md`](docs/RATCHET.md).
+
+## Self-host (the privacy default)
+
+**Run your own home node** — it *is* your server, and only yours:
+
+| You run (encouraged) | Only if you have NO home node |
+|---|---|
+| An always-on **home node** (chain node + `spore mailbox run`, optionally `spore relay run`). | A paid **hosted service** (Model B) runs a node + mailbox for you. |
+| Your phone/laptop **dial your own node** over TLS + token — the phone holds the keys. | Your phone dials the **service's** node (blind courier, never keys). |
+| No third party in the middle. | The service sees traffic happened + timing; content stays E2E-private. |
+
+→ [`docs/HOME_NODE.md`](docs/HOME_NODE.md) (copy-paste) ·
+[`docs/MODEL_B_SERVICE.md`](docs/MODEL_B_SERVICE.md) ·
+[`docs/MODEL_B_RUNBOOK.md`](docs/MODEL_B_RUNBOOK.md)
 
 ## Build & test
 
 ```
-go build ./...
-go vet ./...
-go test ./...
+go build ./...   # builds clean
+go vet ./...     # clean
+go test ./...    # all packages green
+go test -race ./internal/ratchetwire ./internal/mailbox ./internal/relay   # race-clean
 ```
 
-## Peer setup (message a friend)
+Go 1.23.1+. No CGO.
 
-Spore is **no-relay**: you and a friend each run a wallet, no server in
-between. **Start with [`docs/ONBOARDING.md`](docs/ONBOARDING.md)** — it's the
-status-first, copy-paste "first message" guide (`spore demo` works with no
-chain). The DERO friend path in one breath:
+## Sustainability (FOSS, grassroots — no VC, no token)
 
-```bash
-# each of you: install dero-wallet-cli, create + register + fund a wallet
-# terminal 1 (each) — your endpoint, leave open (default RPC port 20209):
-dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
+Spore is BSD-3 free software. It stays free. The operator (not the protocol)
+can earn from optional convenience — see [`docs/BUSINESS.md`](docs/BUSINESS.md):
+hosted Model-B mailboxes, settlement rake on in-chat escrow/swaps (sap/relay-dex),
+and an optional business tier. None of it is required to use Spore privately and
+forever-free.
 
-# terminal 2 — SEND to your friend's dero1… address:
-spore whisper send -to <friend-dero1-addr> -msg "hi"
-#   RECEIVE (keep running):
-spore whisper recv
-```
+## Roadmap
 
-Full walkthrough: [`docs/PEER_SETUP.md`](docs/PEER_SETUP.md).
-
-## Roadmap (see ROADMAP.md)
-
-- **XMR live-verify** once the Hetzner monerod finishes syncing.
-- **MyceliumMailbox.sol** deploy, **Solana cross-wallet delivery**.
-- **L1 mempool catch (~1-2s)**: Rust scanner on derohe-rs (BSD-3, clean-room,
-  mainnet-proven) watches the node txpool and decrypts before mining.
-- **Relay fabric** and **cross-chain identity proof** (gated, hard).
+See [`ROADMAP.md`](ROADMAP.md). Shipped recently: E2 (0xE2) forward-private
+transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
+(contacts/threads/search), offline compose queue, single-use prekey batches,
+one-shot onboarding, panic wipe. Next: serverless bodies over `spore-peer`,
+multi-device sync, tokenized search.
 
 ## License
 
 BSD 3-Clause. Spore is clean-room Go; it imports no derohe source. derohe-rs
-(the Rust port used for L1) is separately BSD-3-Clause.
+(the Rust port used for L1) and spore-peer are separately BSD-3-Clause.

@@ -223,6 +223,7 @@ becomes genuinely blind, which was always the README's claim.
   "offline for 3 weeks" case; needs a product decision.
 - Q3: Sealed-sender for the pointer (hide recipient on-chain) — separate
   design; ratchet does not depend on it.
-- Q4: Interop with DERO's native payload encryption for the 0xE1 whisper
-  path stays as-is (no ratchet) — confirm the product line "whispers are
-  knocks" before 0xE2 ships.
+- Q4: **Resolved** — 0xE2 (X3DH + Double Ratchet) has shipped and is the
+  forward-private path. The DERO-native `0xE1` whisper path stays as-is (no
+  ratchet) and is documented as compatibility-only / not forward-private:
+  whispers are knocks. New conversations use `0xE2`.

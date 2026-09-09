@@ -1,55 +1,87 @@
-# m³ — Multi-chain roadmap (the mycorrhizal network, tree by tree)
+# Spore roadmap — what's shipped, what's left
 
-*Trees are the endpoints — each a wallet+node on its own chain. Spore is the
-underground no-relay substrate. m³ is the common mycorrhizal network they form.
-Adding a tree means one `chain.Chain` backend + one payload codec. The seam
-(`internal/chain`) makes each new chain bounded.*
+*Authoritative per-carrier status lives in
+[`README.md`](README.md#chain--carrier-status) and
+[`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md). This roadmap tracks done vs.
+remaining; it does not re-state live status.*
 
-> **Authoritative chain status lives in [`README.md`](README.md#chain-status).**
-> This roadmap tracks what's done vs. what's left; it does not re-state per-tree
-> live status.
+## Shipped
 
-## Done
-- **DERO** — tree #1. Whisper (no-relay unicast), long nobody-but-us bodies,
-  rooms, browser UI. Live, mainnet-verified.
-- **m³ seam** — `internal/chain` (Chain + Watch) + `internal/whisper` canonical
-  codec (kind 0x01 text / 0x02 pointer). Core has zero chain-specific dependency
-  (proven by a mock chain, then on 3 real backends).
-- **EVM** — Go `internal/evm` backend **live-verified** on a local anvil node
-  (same JSON-RPC path a real chain uses). `contracts/MyceliumMailbox.sol`
-  written for scalable inbox-on-busy-chains (deploy pending).
-- **Solana** — Go `internal/solana` backend + Rust BPF mailbox program
-  (per-recipient PDA inbox) **deployed and live-verified on Solana mainnet**
-  (program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`, v2). Client currently
-  self-messaging.
-- **E2E secure layer** — `internal/secure` X25519 ECDH + HKDF-SHA256 +
-  XChaCha20-Poly1305 envelope (`kind 0xE0`) that keeps EVM/Solana/XMR content
-  private on public chains. `internal/crypto` holds the primitives + key-zeroing.
-- **Donate rail** — `spore donate [chain] | --all`, per-chain address registry.
-- **Multi-chain CLI** — `spore msg send|recv|send-long|keygen -chain
-  dero|evm|xmr|solana` dispatch via `internal/backend`.
+### Transport + privacy core
+- **m³ chain seam** (`internal/chain`): `Chain` + `Watch` + `Burner`. Core has
+  zero chain-specific dependency (proven by mock chain + 7 real backends).
+- **DERO** — whisper (no-relay unicast), long bodies, rooms, browser UI.
+  Live, mainnet-verified.
+- **EVM / Solana** — mailbox delivery + auto-burn after receipt. Solana program
+  v3 live on mainnet; EVM verified on anvil (deploy pending).
+- **E2 secure layer** (`internal/secure`, `0xE0` envelope) for public chains.
+- **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`, `0xE2`):
+  forward-private, post-compromise healing, AAD-bound to the session, ratchet
+  rollback on failed decrypt. Interop vectors in `docs/`.
 
-## Remaining (honest, in rough priority order)
+### Compostability
+- Off-chain TTL body store (`internal/store`), crash-safe write ordering.
+- EVM `burn(to,seq)` + Solana `burn(idx)` after delivery; `chain.Watch`
+  auto-burn.
+- Durable encrypted local ratchet state with append-only anti-rollback log.
+- `maildb` purge + `spore panic` verifiable local wipe.
 
-| # | Item | Why it's gated |
+### Carriers (all carry the same opaque 74-byte pointer, no downgrade)
+- **Nostr** (signed events, NIP-09 best-effort delete), **Bitcoin**
+  (`OP_RETURN` ≤80B, signer-injected), **Cosmos** (configurable memo seam),
+  **TON** (configurable comment seam). XMR refused for E2 (8-byte seam too
+  small) rather than downgraded.
+
+### Email-class features
+- Delivery receipts, `reply-e2`, `forward-e2`, session/thread listing.
+- Attachments (`-out-dir` / `-msg-file`), ntfy notifications (metadata only).
+- Offline compose queue (`compose`/`flush`), HMAC-sealed + path-contained.
+- Local `maildb`: contacts + allowlist, threads, tokenized/scoped/highlighted
+  search.
+
+### Settlement (the moat)
+- **Pay-with-message**: `-amount 5.5dero` rides the SAME atomic tx as the
+  pointer (DERO + EVM-calldata; wire-tested). Other carriers refuse `-amount`
+  rather than silently underpay.
+- In-thread **invoice / payment** envelopes (`msg invoice`, `msg pay`).
+
+### Onboarding + ops
+- `spore init` one-shot identity kit + `config.json` defaults (every E2 command
+  picks them up; explicit flags always win).
+- **Single-use prekey batches**: offline `prekeybatch gen` (identity key never
+  leaves the device), `push` to the mailbox, `GET /prekey` pops one bundle per
+  sender. Restart never resurrects a popped bundle.
+- `relay run` with authenticated mailbox hop + per-body exponential backoff.
+- `status` / `doctor` health + preflight.
+
+## Remaining (honest, rough priority order)
+
+| # | Item | Why it's gated / what it needs |
 |---|---|---|
-| 1 | **XMR live-verify** | pruned `monerod` syncing on Hetzner node (~60%); needs a real `monero-wallet-rpc`. Scope = short ≤8-byte signals (knock) + off-chain rendezvous; no native payload encryption. |
-| 2 | **Deploy `MyceliumMailbox.sol`** | written + backend proven; needs a funded EVM account on a real chain. |
-| 3 | **Solana cross-wallet delivery** | program requires recipient to sign; today client self-messages. Both parties must run the backend to deliver cross-wallet. |
-| 4 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs (BSD-3, clean-room, mainnet-proven) watches the node txpool and decrypts before mining. |
-| 5 | **Relay fabric interconnection** | spore relay node forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p) — the underground trunk between chains. |
-| 6 | **Zcash / ARRR / Decred / Verge** | each a `chain.Chain` backend reusing the envelope/relay pattern. |
-| 7 | **Cross-chain identity proof** (DERO↔EVM) | research crypto — the hard piece. Gates true interchain messaging (a pointer from a DERO tree read by an EVM tree). |
-| 8 | **Zama / FHE** | compute-on-encrypted, a different primitive — parked. |
+| 1 | **Serverless bodies over `spore-peer`** | E2 off-chain bodies ride the HTTP mailbox today. Wiring E2 frame fetch to the P2P peer transport removes the last always-on-server dependency for body delivery. The peer repo (`liqdmetal/spore-peer`, Rust) predates E2 and carries no ratchet — needs an E2 body-fetch adapter. |
+| 2 | **Multi-device sync (Tier 3)** | Mailbox as always-on node + per-device X3DH sessions (same identity, fresh session per device; forward secrecy stays device-bound). Cross-device catch-up rides the chain pointer. Biggest UX leap; medium-high effort. |
+| 3 | **Escrow + swap in chat** | Wire `msg` to the live sap escrow / relay-dex HTLC contracts (SC-call seam in the CLI). Contracts are mainnet-live; this is integration, not new crypto. Enables settlement rake (docs/BUSINESS.md line 2). |
+| 4 | **Tokenized search** | maildb search is substring + AND/NOT/phrase/scope today. A real inverted index (AND/OR, phrase, sender-scoped) is the next depth. |
+| 5 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
+| 6 | **Deploy `MyceliumMailbox.sol`** | Written + backend proven; needs a funded EVM account on a real chain. |
+| 7 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
+| 8 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
+| 9 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
+| 10 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p). |
+| 11 | **More chains** (Zcash / ARRR / Decred / Verge) | Each a `chain.Chain` backend reusing the envelope/relay pattern. |
+| 12 | **Cross-chain identity proof** (DERO↔EVM) | Research crypto — the hard piece. Gates true interchain messaging. |
 
 ## Honest notes
-- "Finish to 7 tonight" isn't real: #7 is research crypto; #1–3 are
-  integrations with real-node dependencies. This doc is the map, not a promise
-  of tonight.
-- Where a chain has no native encrypted rail, m³ supplies secrecy — the tradeoff
-  is metadata (a tx/event/inbox record exists) still visible at that layer, same
-  as DERO whisper's honest limit.
+- Items #1–3 are the real product leaps (no-server bodies, multi-device,
+  in-chat settlement); #6–12 are integrations with real-node dependencies or
+  research, not "tonight" work.
+- Where a chain has no native encrypted rail, m³ supplies secrecy — the
+  tradeoff is metadata (a tx/event/inbox record exists) stays visible at that
+  layer, same as DERO whisper's honest limit.
 - **Cross-chain direct messaging is impossible** (different key crypto).
-  Cross-chain = rendezvous/relay + identity proof (#7), signaling + handoff.
+  Cross-chain = rendezvous/relay + identity proof (#12), signaling + handoff.
 - Group *broadcast* still needs a relay or an SC — no-relay is unicast by
   construction.
+- **Immutable carriers keep the pointer scrap forever.** Compostability is
+  cryptographic (bodies rot, local state wipes), not chain-erasure. No protocol
+  can promise otherwise; we don't.

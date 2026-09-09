@@ -5,10 +5,14 @@ must rotate and die so a later device-key compromise cannot unlock old
 conversation history. Bulk bodies stay off-chain and expire; chains carry only
 opaque delivery records.
 
-Current direct whispers and 0xE1 envelopes are encrypted, but are not yet
-forward-secret. `internal/ratchet` is the mitigation being wired into the
-conversation path. Do not claim the target invariant for a path until its
-ratchet wire integration and adversarial tests pass.
+Current direct whispers and `0xE1` envelopes are encrypted but **not**
+forward-secret, and remain **compatibility-only**. The forward-private path is
+`0xE2` (`internal/ratchetwire`): X3DH + Double Ratchet over every carrier,
+off-chain TTL bodies, durable encrypted endpoint state, single-use prekeys, and
+adversarial tests green. New conversations use `0xE2`; the target invariant
+holds **for the `0xE2` path only** — never claim it for a legacy whisper/`0xE1`
+path. See [`docs/RATCHET.md`](docs/RATCHET.md) and
+[`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md).
 
 Spore is chain-agnostic by design. The **seam** (`internal/chain`: the
 `Chain` interface + `Watch` poller) is what any chain plugs into; `internal/whisper`

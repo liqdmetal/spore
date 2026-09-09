@@ -68,3 +68,32 @@ at worst withhold or serve a stale bundle (causing `send-e2` to fail loudly)
 — it cannot forge a bundle that passes signature pinning, and the discovery
 request is a bodyless GET that never carries plaintext, ciphertext, or any
 private key material.
+
+### Single-use batches (the OPK guarantee at the serving layer)
+
+`PUT /prekey-batch` accepts N **pre-signed public bundles** (generated offline
+by `spore prekeybatch gen` — the identity/SPK private keys never reach the
+mailbox). `GET /prekey` **pops one bundle per request** (durable before the
+response), so two senders can never receive the same one-time prekey. On
+exhaustion the mailbox falls back to the static `/prekey` bundle when one was
+published (degraded 3-DH mode, documented in `docs/RATCHET.md` §10), else 404.
+Restart never resurrects a popped bundle.
+
+## Value carriage (pay-with-message)
+
+`chain.PostPayload` takes an `amountHint`: native transfer value rides the
+SAME tx as the pointer — money and message are atomic (both land or neither
+does). Per-carrier truth:
+
+| Carrier | `-amount` | Mechanism |
+|---|---|---|
+| DERO | ✅ supported | `PostPayloadAmount` (atomic units; 1 DERO = 100000). Wire-tested. |
+| EVM | ✅ supported (calldata path) | tx `value` in wei. The mailbox-contract path is NOT payable; the E2 carrier uses the calldata path. |
+| Bitcoin | ❌ refused | backend discards the hint (dust-output value wiring not done) — the CLI refuses `-amount` rather than silently underpaying |
+| TON | ❌ refused | backend discards the hint (value-bearing message not wired) |
+| Nostr / Cosmos / Solana / XMR | ❌ refused | relays hold no value / memo seam / program mailbox / no E2 |
+
+In-thread settlement (`msg invoice` / `msg pay`) rides the same rails: an
+invoice is a ratcheted envelope; `pay` attaches the value AND posts a
+payment envelope referencing the invoice id, so the proof of payment is
+end-to-end encrypted like everything else.

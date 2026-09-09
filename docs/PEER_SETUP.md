@@ -78,14 +78,14 @@ but the two of you.
   reads it.
 - **No body sits on-chain.** Long messages ride a peer-to-peer body store and
   rot after a TTL; the on-chain anchor holds only a hash and a burn deadline.
-- **Current path limitation:** one-shot body encryption is confidential but not
-  forward-secret; a later compromise of the recipient's long-term key can
-  decrypt a copied ciphertext before it expires. The X3DH + Double Ratchet
-  session is implemented in `internal/ratchet`, but its 0xE2 wire integration
-  is not shipped yet.
-- **Target behavior:** ratcheted per-message keys are erased after use, so
-  copied historical ciphertext becomes undecryptable after key compromise.
-  Do not claim that target for the current direct path.
+- **Current path limitation (legacy paths only):** one-shot body encryption is
+  confidential but not forward-secret; a later compromise of the recipient's
+  long-term key can decrypt a copied ciphertext before it expires.
+- **0xE2 is shipped:** X3DH + Double Ratchet is wired end-to-end via
+  `spore msg send-e2` / `recv-e2` (`internal/ratchetwire`). Ratcheted
+  per-message keys are erased after use, so copied historical ciphertext
+  becomes undecryptable after key compromise. Use the E2 path for anything
+  you care about; the direct whisper path remains compatibility-only.
 
 ## What's NOT live yet (honest)
 

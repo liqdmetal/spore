@@ -1,3 +1,53 @@
+# Build artifacts
 dist/
-compost-linux-amd64
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/spore
+/spore-*
+/compost-linux-amd64
+
+# Solidity / Foundry build output (regenerable from contracts/*.sol)
+out/
+cache/
+
+# Go workspace / coverage
+*.coverprofile
+coverage.*
+vendor/
+
+# LOCAL SECRETS + RUNTIME STATE — never commit these. These are exactly the
+# files `spore panic` wipes: identity/spk/state keys, the OPK pool, the
+# encrypted session-state dir, the local mail store, and the offline spool.
+*.key
+state/
+*.state
+opk-pool.json
+prekey.json
+prekey-batch.json
+batch*.json
+mail.json
+maildb.json
+spool/
+messages.log
+
+# Mailbox / relay runtime dirs
+mailbox-data/
+relay-data/
+
+# Solana signer keypairs (deploy uses an offline keypair, never committed)
 solana-program/*-keypair.json
+solana-program/target/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

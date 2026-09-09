@@ -219,7 +219,15 @@ directly and needs no daemon. Name resolution is a convenience over your node
 
 ## 7. What "rot" means, and the honest limits
 
-> **Security status correction:** the current direct DERO whisper, 0xE1 public-chain envelope, and one-shot long-body paths are encrypted but not forward-secret. A later compromise of the recipient's long-term key can retro-decrypt recorded ciphertext. The X3DH + Double Ratchet session in `internal/ratchet` is implemented at the crypto layer but its 0xE2 wire adapter is not shipped yet. Treat forward secrecy as unavailable until that integration and its end-to-end tests land.
+> **Security status:** the `0xE2` path (`spore msg send-e2`/`recv-e2`,
+> `internal/ratchetwire`) **is shipped**: X3DH + Double Ratchet, forward-secret,
+> post-compromise healing, off-chain TTL bodies, single-use prekeys, durable
+> encrypted state, adversarial tests green. **This is the forward-private path —
+> use it for anything you care about.** The older direct DERO whisper, `0xE1`
+> public-chain envelope, and one-shot long-body paths remain available for
+> compatibility but are encrypted *without* forward secrecy: a later compromise
+> of a long-term key can retro-decrypt their recorded ciphertext. Don't claim
+> forward secrecy for those legacy paths.
 
 
 
@@ -244,9 +252,12 @@ Be clear-eyed about what spore does *not* hide:
   design. Real-time group rooms need a hosted box (section 5); broadcasting a
   private message to many people without any box would cost one transaction
   per recipient.
-- **Key exchange is manual.** You share your long-term public key and a peer
-  address out of band. Verify identities through whatever channel you trust —
-  there is no built-in directory or contact discovery yet.
+- **Key exchange is out-of-band by design (TOFU + pinning).** E2 discovery is
+  automated: your mailbox serves pre-signed single-use bundles (`GET
+  /prekey`), senders fetch them with `-bundle-url`, and every bundle is still
+  verified against a pinned sig shared once out-of-band. `spore msg mail` keeps
+  a local address book. There is no global directory — that would be a
+  sybil/linkability farm.
 
 ## 8. Command reference
 

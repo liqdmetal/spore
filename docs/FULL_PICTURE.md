@@ -16,11 +16,12 @@ Compostable by design — they rot.*
 ```
 APPLICATION   spore CLI / mailbox / relay — your tools
 ─────────────────────────────────────────────────────
-TRANSPORT     E2E envelope (X25519+HKDF+XChaCha20), no-relay unicast,
-              off-chain long bodies (compost), relay-fabric hops
+TRANSPORT     0xE2 X3DH + Double Ratchet (forward-private), no-relay unicast,
+              off-chain TTL bodies (compost), relay-fabric hops, pay-with-msg
 ─────────────────────────────────────────────────────
-CHAINS        DERO (native E2E) · Solana (mainnet) · EVM · XMR (off-chain)
-              — each a "tree" the mycelium metaphor grows through
+CHAINS        DERO (native E2E) · Solana (mainnet) · EVM · Nostr · Bitcoin ·
+              Cosmos · TON · XMR (off-chain) — each a "tree" the mycelium
+              metaphor grows through
 ─────────────────────────────────────────────────────
 KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
               courier that never sees content
