@@ -94,6 +94,10 @@ func main() {
 		paniccmd(os.Args[2:])
 	case "sign":
 		signcmd(os.Args[2:])
+	case "publish":
+		publishcmd(os.Args[2:])
+	case "credit":
+		creditcmd(os.Args[2:])
 	case "init":
 		initcmd(os.Args[2:])
 	case "prekeybatch":
@@ -146,6 +150,11 @@ func usage() {
   spore sign verify -file DOC -sig SIG [-pinned-sig HEX]                    (verify; -pinned-sig binds it to a known signer)
   spore sign sheet -file DOC -sigs A.sig,B.sig [-required HEX,HEX]          (multi-party contract: who signed, who has not)
   spore sign anchor -sig SIG                                                (digest to publish on-chain for a real timestamp)
+  spore publish issue -identity F -channel C -seq N -file BODY [-title T]   (sender-key newsletter: encrypt ONCE, fan out tiny notices)
+  spore publish open -notice F -body F -publisher HEX [-last-seq N]         (verify publisher signature + decrypt an issue)
+  spore publish cost -body-bytes N -subscribers N                           (sender-key vs pairwise byte cost)
+  spore credit request -denom msg | finalize -credit F -secret F            (buyer: prepaid anonymous credits)
+  spore credit issue -identity F -request F | redeem -credit F -issuer HEX -ledger L | revenue -ledger L   (operator: no per-user meter)
   spore init [-dir ~/.spore] [-opks 50] [-chain dero] [-store URL]   (one-shot onboarding: generates identity kit + config.json; afterwards ALL e2 commands pick up defaults automatically)
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)
