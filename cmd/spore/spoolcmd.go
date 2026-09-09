@@ -214,6 +214,7 @@ func spoolPathSafe(base, p string) bool {
 
 func msgFlush(args []string) {
 	fs := flag.NewFlagSet("msg flush", flag.ExitOnError)
+	_ = fs.String("config", "", "config file path (default ~/.spore/config.json or $SPORE_CONFIG)")
 	dir := fs.String("dir", "spool", "spool directory to drain")
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
 )
@@ -61,7 +62,7 @@ func initcmd(args []string) {
 	}
 
 	ik := key("identity.key")
-	key("spk.key")
+	sk := key("spk.key")
 	key("state.key")
 
 	// Pinned sig: the PUBLIC half others pin out-of-band to verify our
@@ -70,26 +71,37 @@ func initcmd(args []string) {
 	sigPub, err := secure.SigPubOf(ik)
 	check(err)
 
-	// OPK pool: pre-generate one-time prekeys so the first N strangers can
-	// each get a full 4-DH X3DH (degraded 3-DH only after exhaustion).
+	// OPK pool + single-use public batch: pre-generate one-time prekeys so
+	// the first N strangers each get a full 4-DH X3DH. PRIVATES go to the
+	// local pool (0600, consume-once); PUBLIC pre-signed bundles go to
+	// batch.json, ready for `prekeybatch push` so your mailbox can serve
+	// one bundle per sender (GET /prekey pops single-use).
 	poolPath := filepath.Join(home, "opk-pool.json")
 	pool, err := ratchetwire.NewPersistentOPKPool(poolPath)
 	check(err)
+	batches := make([]ratchet.SPKBundle, 0, *opks)
 	for id := uint32(1); id <= uint32(*opks); id++ {
 		var opk [32]byte
 		if _, err := rand.Read(opk[:]); err != nil {
 			check(err)
 		}
+		b, err := ratchet.BuildBundle(ik, sk, 1, &opk, id)
+		check(err)
 		if err := pool.Add(id, opk); err != nil {
 			check(err)
 		}
+		batches = append(batches, *b)
+	}
+	batchPath := filepath.Join(home, "batch.json")
+	batchRaw, err := json.MarshalIndent(struct {
+		Bundles []ratchet.SPKBundle `json:"bundles"`
+	}{batches}, "", "  ")
+	check(err)
+	if err := os.WriteFile(batchPath, append(batchRaw, '\n'), 0600); err != nil {
+		check(err)
 	}
 
-	// Public bundle for the FIRST opk id is NOT written here: bundles are
-	// per-conversation artifacts recipients publish to their mailbox
-	// (PUT /prekey). We write a bundle.json containing the long-lived
-	// public identity so users can share it however they like; the mailbox
-	// publication path stays the canonical one.
+	// Public identity card for out-of-band sharing (contacts pin this).
 	bundlePath := filepath.Join(home, "bundle.json")
 	pub := map[string]string{
 		"ik_pub":     hex.EncodeToString(mustPub(ik)),
@@ -125,7 +137,8 @@ func initcmd(args []string) {
 	fmt.Printf("spore initialized in %s\n", home)
 	fmt.Printf("  identity   %s\n", identityFile)
 	fmt.Printf("  spk        %s\n", filepath.Join(home, "spk.key"))
-	fmt.Printf("  opk pool   %s (%d keys)\n", poolPath, *opks)
+	fmt.Printf("  opk pool   %s (%d private keys)\n", poolPath, *opks)
+	fmt.Printf("  batch      %s (%d single-use PUBLIC bundles, ready to push)\n", batchPath, *opks)
 	fmt.Printf("  state key  %s\n", filepath.Join(home, "state.key"))
 	fmt.Printf("  config     %s\n", cfgFile)
 	fmt.Println()
@@ -134,11 +147,13 @@ func initcmd(args []string) {
 	fmt.Printf("  bundle:     %s\n", bundlePath)
 	fmt.Println()
 	fmt.Println("next steps:")
-	fmt.Println("  1. run your mailbox so contacts can fetch your prekey bundle:")
+	fmt.Println("  1. run your mailbox (serves bodies + prekey discovery):")
 	fmt.Printf("       spore mailbox run -dir %s -listen 127.0.0.1:8080\n", filepath.Join(home, "mailbox"))
-	fmt.Println("  2. receive (foreground; Ctrl-C stops):")
+	fmt.Println("  2. publish your single-use prekey batch to it (one-time; refill later with prekeybatch gen):")
+	fmt.Printf("       spore prekeybatch push -in %s -mailbox http://127.0.0.1:8080\n", batchPath)
+	fmt.Println("  3. receive (foreground; Ctrl-C stops):")
 	fmt.Println("       spore msg recv-e2")
-	fmt.Println("  3. send to someone whose bundle+pinned-sig you have:")
+	fmt.Println("  4. send to someone whose bundle+pinned-sig you have:")
 	fmt.Println("       spore msg send-e2 -to ADDR -bundle-url http://THEIR-MAILBOX/prekey -pinned-sig THEIR_SIG")
 	fmt.Println("       (plaintext via -msg-file or stdin — never argv)")
 }

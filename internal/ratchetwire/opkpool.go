@@ -93,6 +93,21 @@ func (p *OPKPool) Len() int {
 	return len(p.items)
 }
 
+// MaxID reports the highest OPK id currently held (0 when empty). Callers
+// generating MORE one-time prekeys start above this so new ids can never
+// collide with — and be rejected as duplicates of — keys already in the pool.
+func (p *OPKPool) MaxID() uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var max uint32
+	for id := range p.items {
+		if id > max {
+			max = id
+		}
+	}
+	return max
+}
+
 func cloneOPKs(src map[uint32][32]byte) map[uint32][32]byte {
 	dst := make(map[uint32][32]byte, len(src))
 	for id, key := range src {

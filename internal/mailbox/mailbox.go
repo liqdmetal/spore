@@ -49,7 +49,10 @@ type Mailbox struct {
 	dir      string
 	prekeyMu sync.RWMutex
 	prekey   *ratchet.SPKBundle
-	st       store.Store // durable ciphertext store (HTTP-pushed + local bodies)
+	// batch is the queue of single-use PUBLIC prekey bundles (distinct OPKs,
+	// pre-signed offline by the owner). GET /prekey pops one per request.
+	batch   []ratchet.SPKBundle
+	st      store.Store // durable ciphertext store (HTTP-pushed + local bodies)
 	ep       *longmsg.Endpoint
 	log      *MessageLog
 	// logTTL bounds how long decrypted messages persist on disk (rot).
@@ -155,7 +158,11 @@ func Open(dir string, priv []byte) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL, prekey: prekey}, nil
+	batch, err := loadPrekeyBatch(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL, prekey: prekey, batch: batch}, nil
 }
 
 // Dir returns the mailbox's data directory.
