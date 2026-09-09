@@ -225,20 +225,107 @@ func (m *MailDB) Threads() []Thread {
 	return out
 }
 
-// Search runs a case-insensitive substring search over the indexed messages.
-func (m *MailDB) Search(q string) []MessageMeta {
+// SearchQuery is a parsed search: every term in All must match (AND), plus
+// optional scoping by sender, thread, or txid, and a phrase (exact
+// substring, all terms). A token in AnyOf matches if any listed token does.
+// Matching is case-insensitive.
+type SearchQuery struct {
+	All    []string // all of these tokens must appear (AND)
+	AnyOf  []string // any of these tokens may appear
+	Not    []string // none of these tokens may appear
+	Phrase string   // exact case-insensitive substring (optional)
+	Peer   string   // scope: sender/peer address (exact)
+	Thread string   // scope: session id hex (exact)
+	TxID   string   // scope: txid (exact)
+}
+
+// SearchResult is one hit plus the matched snippet with the matched terms
+// marked up with the standard marker pair so the CLI can highlight without
+// importing a rendering dependency.
+type SearchResult struct {
+	MessageMeta
+	Matched bool // always true; kept for clarity
+}
+
+func matchesQuery(mm MessageMeta, q SearchQuery) bool {
+	peer := strings.ToLower(mm.Peer)
+	txid := strings.ToLower(mm.TxID)
+	thread := strings.ToLower(mm.SessionID)
+	text := strings.ToLower(mm.Snippet)
+	for _, t := range q.All {
+		if !strings.Contains(text, t) {
+			return false
+		}
+	}
+	if len(q.AnyOf) > 0 {
+		any := false
+		for _, t := range q.AnyOf {
+			if strings.Contains(text, t) {
+				any = true
+				break
+			}
+		}
+		if !any {
+			return false
+		}
+	}
+	for _, t := range q.Not {
+		if strings.Contains(text, t) {
+			return false
+		}
+	}
+	if q.Phrase != "" && !strings.Contains(text, strings.ToLower(q.Phrase)) {
+		return false
+	}
+	if q.Peer != "" && peer != strings.ToLower(q.Peer) {
+		return false
+	}
+	if q.Thread != "" && thread != strings.ToLower(q.Thread) {
+		return false
+	}
+	if q.TxID != "" && txid != strings.ToLower(q.TxID) {
+		return false
+	}
+	return true
+}
+
+// Search runs a parsed query over the indexed messages, newest first.
+func (m *MailDB) Search(q SearchQuery) []MessageMeta {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	q = strings.ToLower(q)
 	out := []MessageMeta{}
 	for _, mm := range m.messages {
-		if strings.Contains(strings.ToLower(mm.Snippet), q) ||
-			strings.Contains(strings.ToLower(mm.Peer), q) ||
-			strings.Contains(strings.ToLower(mm.TxID), q) {
+		if matchesQuery(mm, q) {
 			out = append(out, mm)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].At > out[j].At })
 	return out
+}
+
+// SearchSimple is the one-shot convenience for "all these words": it parses
+// the space-separated query into All tokens (case-insensitive AND).
+func (m *MailDB) SearchSimple(q string) []MessageMeta {
+	tokens := strings.Fields(strings.ToLower(q))
+	return m.Search(SearchQuery{All: tokens})
+}
+
+// Highlight returns the snippet with every occurrence of any of the given
+// terms wrapped in the ASCII record separator pairs, so a caller can split
+// on \x1e and render with inverse-video/bold without a template library.
+// Returns the original snippet when no term matches.
+func (m *MailDB) Highlight(snippet string, terms []string) string {
+	s := snippet
+	for _, t := range terms {
+		if t == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, t, "\x1e"+t+"\x1f")
+	}
+	if s == snippet {
+		return snippet
+	}
+	return s
 }
 
 // Messages returns all indexed messages, newest first.

@@ -68,15 +68,42 @@ func TestRecordMessageThreadAndSearch(t *testing.T) {
 	if len(threads) != 1 || threads[0].SessionID != "abcd" || threads[0].Count != 2 {
 		t.Fatalf("threads = %+v", threads)
 	}
-	// Search hits.
-	if got := db.Search("invoice"); len(got) != 1 {
+	// Search hits (simple AND query).
+	if got := db.SearchSimple("invoice"); len(got) != 1 {
 		t.Fatalf("search invoice = %+v", got)
 	}
-	if got := db.Search("DOCK"); len(got) != 1 {
+	if got := db.SearchSimple("DOCK"); len(got) != 1 {
 		t.Fatalf("search DOCK = %+v", got)
 	}
-	if got := db.Search("nonexistent"); len(got) != 0 {
+	if got := db.SearchSimple("nonexistent"); len(got) != 0 {
 		t.Fatalf("search nonexistent = %+v", got)
+	}
+	// AND: both terms must match.
+	if got := db.Search(SearchQuery{All: []string{"dock", "noon"}}); len(got) != 1 {
+		t.Fatalf("search dock+noon = %+v", got)
+	}
+	if got := db.Search(SearchQuery{All: []string{"dock", "invoice"}}); len(got) != 0 {
+		t.Fatalf("search dock+invoice should be empty = %+v", got)
+	}
+	// Phrase.
+	if got := db.Search(SearchQuery{Phrase: "at the dock"}); len(got) != 1 {
+		t.Fatalf("search phrase = %+v", got)
+	}
+	// NOT.
+	if got := db.Search(SearchQuery{Not: []string{"invoice"}}); len(got) != 1 {
+		t.Fatalf("search not-invoice = %+v", got)
+	}
+	// Scope by peer.
+	if got := db.Search(SearchQuery{Peer: "dero1alice"}); len(got) != 2 {
+		t.Fatalf("search peer = %+v", got)
+	}
+	if got := db.Search(SearchQuery{Peer: "dero1nobody"}); len(got) != 0 {
+		t.Fatalf("search wrong peer = %+v", got)
+	}
+	// Highlight marks only the matched term.
+	hl := db.Highlight("meet at the dock at noon", []string{"dock"})
+	if hl != "meet at the \x1edock\x1f at noon" {
+		t.Fatalf("highlight = %q", hl)
 	}
 	// Persistence: reopen and confirm everything survived.
 	db2, err := Open(filepath.Join(dir, "mail.json"))

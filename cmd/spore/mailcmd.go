@@ -43,7 +43,8 @@ func msgMail(args []string) {
 		// token after that is a candidate subcommand. Track only the flags
 		// defined below that take values.
 		if !expectValue && strings.HasPrefix(a, "-") && !strings.Contains(a, "=") &&
-			(a == "-db" || a == "-addr" || a == "-nick" || a == "-pinned") {
+			(a == "-db" || a == "-addr" || a == "-nick" || a == "-pinned" ||
+				a == "-phrase" || a == "-peer" || a == "-thread") {
 			expectValue = true
 			continue
 		}
@@ -58,6 +59,9 @@ func msgMail(args []string) {
 	addr := fs.String("addr", "", "chain address")
 	nick := fs.String("nick", "", "contact nickname")
 	pinned := fs.String("pinned", "", "out-of-band pinned signing public key hex")
+	phrase := fs.String("phrase", "", "exact case-insensitive phrase to search for")
+	searchPeer := fs.String("peer", "", "scope search to this sender/peer address (exact)")
+	searchThread := fs.String("thread", "", "scope search to this session id hex (exact)")
 	_ = fs.Parse(rest)
 	if *dbPath == "" {
 		fmt.Fprintln(os.Stderr, "mail: -db PATH is required")
@@ -123,13 +127,36 @@ func msgMail(args []string) {
 			fmt.Printf("%s peer=%s msgs=%d last=%d\n", t.SessionID, t.Peer, t.Count, t.LastAt)
 		}
 	case "search":
-		q := strings.Join(rest[1:], " ")
-		if q == "" {
+		// Remaining args (rest) are the query tokens after the subcommand
+		// and any flags. Build a SearchQuery: all bare tokens are AND terms;
+		// -peer/-thread/-txid scope exactly; -phrase is the exact substring.
+		q := maildb.SearchQuery{}
+		for _, tok := range fs.Args() {
+			tok = strings.TrimSpace(tok)
+			if tok == "" {
+				continue
+			}
+			q.All = append(q.All, strings.ToLower(tok))
+		}
+		if *phrase != "" {
+			q.Phrase = *phrase
+		}
+		if *searchPeer != "" {
+			q.Peer = *searchPeer
+		}
+		if *searchThread != "" {
+			q.Thread = *searchThread
+		}
+		if len(q.All) == 0 && q.Phrase == "" && q.Peer == "" && q.Thread == "" {
 			fmt.Fprintln(os.Stderr, "mail search: query required")
 			os.Exit(2)
 		}
+		terms := q.All
+		if q.Phrase != "" {
+			terms = append(terms, q.Phrase)
+		}
 		for _, m := range db.Search(q) {
-			fmt.Printf("%s %s %s: %s\n", m.TxID, m.Peer, m.SessionID, m.Snippet)
+			fmt.Printf("%s %s %s: %s\n", m.TxID, m.Peer, m.SessionID, db.Highlight(m.Snippet, terms))
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "mail: unknown subcommand %q (want add|list|block|unblock|threads|search)\n", rest[0])
