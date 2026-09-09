@@ -73,9 +73,13 @@ phone (Termux/Android)
 
 ```
 spore mailbox host -users /srv/spore/users \
-    -listen 0.0.0.0:443 -cert C -key K \
+    -listen 127.0.0.1:18443 \
     -tokens /srv/spore/tokens.json \
-    -chain dero -rpc http://127.0.0.1:10102/json_rpc
+    -notify-file /srv/spore/notify.json \
+    -chain dero -rpc http://127.0.0.1:20209/json_rpc \
+    -rpc-login USER:PASSWORD
+# Put Caddy/nginx in front for public TLS. 20209 is wallet RPC; 10102 is daemon RPC.
+# Keep both loopback-only.
 ```
 
 Every subdirectory of `-users` is one mailbox (own key, own bodies, own log),

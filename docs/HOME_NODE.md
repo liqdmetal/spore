@@ -30,8 +30,10 @@ body/prekey traffic is encrypted.
 ```bash
 # hosted ciphertext/prekey service — one shared watcher, per-user tokens:
 spore mailbox host -users /var/spore/users -chain dero \
-  -rpc http://127.0.0.1:10102/json_rpc \
-  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json -privacy &
+  -rpc http://127.0.0.1:20209/json_rpc -rpc-login USER:PASSWORD \
+  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json \
+  -privacy -notify-file /var/spore/notify.json &
+# 20209 is wallet RPC; 10102 is daemon RPC and cannot serve get_transfers.
 # Put TLS at Caddy/nginx and proxy the public hostname to 127.0.0.1:18443.
 ```
 
