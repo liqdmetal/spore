@@ -29,10 +29,10 @@ func TestLoadMailboxNotifyConfig(t *testing.T) {
 }
 
 func TestNotifyBodyPutEmitsMetadataOnlyAfterAcceptedPut(t *testing.T) {
-	var gotBody string
+	bodyCh := make(chan string, 1)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
+		bodyCh <- string(b)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer provider.Close()
@@ -57,9 +57,11 @@ func TestNotifyBodyPutEmitsMetadataOnlyAfterAcceptedPut(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("wrapped PUT status = %d, want 200", res.Code)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for gotBody == "" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	var gotBody string
+	select {
+	case gotBody = <-bodyCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for notification")
 	}
 	if !strings.Contains(gotBody, "abcdef0123456789") {
 		t.Fatalf("notification omitted body identifier: %s", gotBody)
