@@ -17,6 +17,7 @@ import (
 
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/mailbox"
+	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/safehttp"
 )
 
@@ -67,6 +68,7 @@ func mailboxHost(args []string) {
 	logTTL := fs.Duration("log-ttl", mailbox.DefaultLogTTL, "decrypted-message log retention per user")
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval (all users)")
 	interval := fs.Duration("interval", 3*time.Second, "SHARED chain poll interval (one watcher for all users)")
+	notifyFile := fs.String("notify-file", "", "optional JSON map of user -> {email,sms,webhook}; provider secrets/settings come from environment")
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	autoBurn := fs.Bool("auto-burn", false, "erase each user's on-chain mailbox slot after that user accepts a delivery (per-user, never hub-level)")
 	addChainFlags(fs)
@@ -115,6 +117,16 @@ func mailboxHost(args []string) {
 		mb   *mailbox.Mailbox
 		tok  string
 	}
+	notifiers, err := buildMailboxNotifiers(*notifyFile, names, notify.Options{
+		SMTPHost:     os.Getenv("SPORE_NOTIFY_SMTP_HOST"),
+		SMTPPort:     parseEnvPort("SPORE_NOTIFY_SMTP_PORT", 587),
+		SMTPFrom:     os.Getenv("SPORE_NOTIFY_SMTP_FROM"),
+		SMTPUsername: os.Getenv("SPORE_NOTIFY_SMTP_USER"),
+		TwilioSID:    os.Getenv("SPORE_NOTIFY_TWILIO_SID"),
+		TwilioFrom:   os.Getenv("SPORE_NOTIFY_TWILIO_FROM"),
+		WebhookToken: os.Getenv("SPORE_NOTIFY_WEBHOOK_TOKEN"),
+	})
+	check(err)
 	boxes := make([]userBox, 0, len(names))
 	// Prebuild each user's HTTP handler ONCE. Constructing it per request
 	// would allocate on every hit for every one of N users.
@@ -134,11 +146,16 @@ func mailboxHost(args []string) {
 			log.Fatalf("mailbox host: user %q has no token in -tokens and -listen %s is not loopback; refusing to expose an unauthenticated mailbox to the network", n, *listen)
 		}
 		boxes = append(boxes, userBox{name: n, mb: mb, tok: tok})
+		var handler http.Handler
 		if tok != "" {
-			routes[n] = mb.HandlerToken(tok)
+			handler = mb.HandlerToken(tok)
 		} else {
-			routes[n] = mb.Handler()
+			handler = mb.Handler()
 		}
+		if notifier := notifiers[n]; notifier != nil {
+			handler = notifyBodyPut(handler, notifier)
+		}
+		routes[n] = handler
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

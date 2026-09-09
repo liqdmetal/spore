@@ -1,0 +1,121 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/liqdmetal/spore/internal/notify"
+)
+
+type mailboxNotifySpec struct {
+	Email   string `json:"email,omitempty"`
+	SMS     string `json:"sms,omitempty"`
+	Webhook string `json:"webhook,omitempty"`
+}
+
+func parseEnvPort(name string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 65535 {
+		return fallback
+	}
+	return n
+}
+
+func loadMailboxNotifyConfig(path string) (map[string]mailboxNotifySpec, error) {
+	if path == "" {
+		return map[string]mailboxNotifySpec{}, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("notify config: read: %w", err)
+	}
+	var cfg map[string]mailboxNotifySpec
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("notify config: JSON: %w", err)
+	}
+	return cfg, nil
+}
+
+func buildMailboxNotifiers(path string, names []string, common notify.Options) (map[string]*notify.Dispatcher, error) {
+	cfg, err := loadMailboxNotifyConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*notify.Dispatcher)
+	for _, name := range names {
+		spec := cfg[name]
+		o := common
+		o.EmailTo = spec.Email
+		o.SMSTo = spec.SMS
+		o.WebhookURL = spec.Webhook
+		if spec.Email == "" {
+			o.SMTPHost, o.SMTPPort, o.SMTPFrom, o.SMTPUsername = "", 0, "", ""
+		}
+		if spec.SMS == "" {
+			o.TwilioSID, o.TwilioFrom = "", ""
+		}
+		if spec.Webhook == "" {
+			o.WebhookToken = ""
+		}
+		d, err := notify.NewFromEnv(o)
+		if err != nil {
+			return nil, fmt.Errorf("notify config user %q: %w", name, err)
+		}
+		if spec.Email != "" || spec.SMS != "" || spec.Webhook != "" {
+			out[name] = d
+		}
+	}
+	return out, nil
+}
+
+// notifyBodyPut emits an arrival alert after the authenticated mailbox accepts
+// an encrypted body. The alert contains only the body CID, never body bytes.
+func notifyBodyPut(next http.Handler, d *notify.Dispatcher) http.Handler {
+	if d == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isBodyPut := r.Method == http.MethodPut &&
+			(strings.HasPrefix(r.URL.Path, "/put/") || strings.HasPrefix(r.URL.Path, "/body/"))
+		if !isBodyPut {
+			next.ServeHTTP(w, r)
+			return
+		}
+		sw := &statusResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		if sw.status >= 200 && sw.status < 300 {
+			id := r.URL.Path[strings.LastIndexByte(r.URL.Path, '/')+1:]
+			if err := d.Send(notify.Event{TxID: id, Subject: "Spore private message pending"}); err != nil {
+				log.Printf("mailbox notification: %v", err)
+			}
+		}
+	})
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusResponseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}

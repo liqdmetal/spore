@@ -30,7 +30,10 @@ mkdir -p "$MBROOT/$user"
 # 2. run ONE shared host for all users (Caddy terminates public TLS)
 spore mailbox host -users "$MBROOT" \
   -chain dero -rpc http://127.0.0.1:10102/json_rpc \
-  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json -privacy &
+  -listen 127.0.0.1:18443 -tokens /var/spore/tokens.json \
+  -privacy -notify-file /var/spore/notify.json &
+# notify.json maps users to {"email":"...","sms":"...","webhook":"..."}.
+# Provider secrets/settings come from SPORE_NOTIFY_* environment variables.
 # 3. publish the user's prekey batch to /u/$user/prekey-batch
 spore prekeybatch push -in "$MBROOT/$user/batch.json" \
   -mailbox https://$HOST/u/$user

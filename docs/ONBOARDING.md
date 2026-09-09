@@ -166,7 +166,12 @@ spore msg recv-e2
 #     -auto-ack        reply "delivered" on the same session (delivery receipts)
 #     -maildb ~/.spore/mail.json   index into local contacts/threads/search
 #     -out-dir ~/inbox             save each body to a file (attachments)
-#     -ntfy https://ntfy.sh/your-secret-topic   ping your phone (metadata only)
+#     -ntfy https://ntfy.sh/your-secret-topic   metadata-only webhook/ntfy alert
+#     -notify-email you@example.com -notify-smtp-host smtp.example.com -notify-smtp-from spore@example.com
+#     -notify-sms +15551234567 -notify-twilio-sid AC... -notify-twilio-from +15557654321
+#     # provider passwords/tokens come from SPORE_NOTIFY_SMTP_PASSWORD and
+#     # SPORE_NOTIFY_TWILIO_AUTH_TOKEN, never from argv
+#     # details: docs/NOTIFICATIONS.md
 ```
 
 `recv-e2` watches the chain for pointers addressed to you, fetches the

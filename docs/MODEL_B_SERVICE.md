@@ -121,8 +121,10 @@ the hub forces `AutoBurn=false` on the shared watcher regardless of the flag.
 - ✅ hosted `mailbox host` (always-on ciphertext/prekey service with one shared watcher)
 - ✅ `mailbox host -privacy` (no Sender in hosted log; E2 decrypt remains client-side)
 - ✅ body padding (fixed 1 KiB bucket)
-- ✅ **`mailbox host`: N mailboxes, 1 process, 1 shared watcher, 1 listener,
-  per-user bearer auth, shared reaper** (44 KB/user measured)
+- ✅ `mailbox host`: N mailboxes, 1 process, 1 shared watcher, 1 listener,
+  per-user bearer auth, shared reaper (44 KB/user measured)
+- ✅ optional email/SMS/webhook arrival bridge (`-notify-file`); alerts contain
+  only pending-message metadata, never ciphertext or plaintext
 - 🔲 provisioning + billing (create/suspend a user, meter usage)
 - 🔲 Tor/I2P front for the node/mailbox endpoints
 - 🔲 relay-fabric hop + decoy traffic (the deep metadata answer)

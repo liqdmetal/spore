@@ -22,6 +22,7 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/nostr"
+	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/store"
@@ -586,7 +587,15 @@ func msgRecvE2(args []string) {
 	autoAck := fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	outDir := fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
-	ntfy := fs.String("ntfy", "", "POST a 'new message' notification to this ntfy topic URL on each message (content never leaves the mailbox; metadata only)")
+	ntfy := fs.String("ntfy", "", "POST a metadata-only notification to an ntfy/webhook URL on each message (plaintext never leaves the client)")
+	notifyEmail := fs.String("notify-email", "", "send a metadata-only email notification to this address (SMTP settings come from environment)")
+	notifySMS := fs.String("notify-sms", "", "send a metadata-only SMS notification to this E.164 number (Twilio settings come from environment)")
+	notifySMTPHost := fs.String("notify-smtp-host", "", "SMTP host for metadata-only email notifications")
+	notifySMTPPort := fs.Int("notify-smtp-port", 587, "SMTP port for metadata-only email notifications")
+	notifySMTPFrom := fs.String("notify-smtp-from", "", "SMTP From address for metadata-only email notifications")
+	notifySMTPUser := fs.String("notify-smtp-user", "", "SMTP username (password from SPORE_NOTIFY_SMTP_PASSWORD)")
+	notifyTwilioSID := fs.String("notify-twilio-sid", "", "Twilio account SID (auth token from SPORE_NOTIFY_TWILIO_AUTH_TOKEN)")
+	notifyTwilioFrom := fs.String("notify-twilio-from", "", "Twilio sender number")
 	// -maildb is registered by e2Common (shared with send paths for name
 	// resolution); read it after Parse rather than redeclaring it — a
 	// duplicate fs.String panics with "flag redefined".
@@ -605,6 +614,21 @@ func msgRecvE2(args []string) {
 		}
 	}
 	maildbPath := fs.Lookup("maildb").Value.String()
+	webhookURL := *ntfy
+	webhookToken := ""
+	if webhookURL != "" {
+		// The old -ntfy form is retained as a webhook-compatible alias. Its
+		// optional bearer secret comes only from the environment.
+		webhookToken = os.Getenv("SPORE_NOTIFY_WEBHOOK_TOKEN")
+	}
+	dispatcher, err := notify.NewFromEnv(notify.Options{
+		WebhookURL: webhookURL, WebhookToken: webhookToken,
+		EmailTo: *notifyEmail, SMSTo: *notifySMS,
+		SMTPHost: *notifySMTPHost, SMTPPort: *notifySMTPPort,
+		SMTPFrom: *notifySMTPFrom, SMTPUsername: *notifySMTPUser,
+		TwilioSID: *notifyTwilioSID, TwilioFrom: *notifyTwilioFrom,
+	})
+	check(err)
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
 	}
@@ -735,21 +759,11 @@ func msgRecvE2(args []string) {
 					fmt.Fprintln(os.Stderr, "e2 maildb:", rerr)
 				}
 			}
-			// ntfy hook: notify that a message arrived. The ntfy server
-			// sees only "you got a message" + a short txid — the body never
-			// leaves the mailbox. Receipts are skipped: a receipt already
-			// implies an active conversation and auto-ack would re-notify
-			// on every ack. Topic URL secrecy is the access control.
-			if *ntfy != "" && !isReceipt {
-				body := fmt.Sprintf("spore: new message %s", shortTx(inc.TxID))
-				req, nerr := http.NewRequestWithContext(ctx, http.MethodPost, *ntfy, strings.NewReader(body))
-				if nerr == nil {
-					req.Header.Set("Title", "Spore message")
-					// Bounded client: an unreachable/slow ntfy server must
-					// never wedge the receive loop.
-					if _, derr := (&http.Client{Timeout: 10 * time.Second}).Do(req); derr != nil {
-						fmt.Fprintln(os.Stderr, "e2 ntfy:", derr)
-					}
+			// Notify only after local decryption and never include plaintext.
+			// Provider failures are diagnostics; they must not stop receiving.
+			if !isReceipt && (*ntfy != "" || *notifyEmail != "" || *notifySMS != "") {
+				if nerr := dispatcher.Send(notify.Event{TxID: inc.TxID, Subject: "Spore private message", Received: time.Now()}); nerr != nil {
+					fmt.Fprintln(os.Stderr, "e2 notify:", nerr)
 				}
 			}
 			if *autoAck && frame.SessionID != ([8]byte{}) {

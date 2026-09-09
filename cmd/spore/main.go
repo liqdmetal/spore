@@ -140,7 +140,7 @@ func usage() {
              [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] -store URL
              -state-dir D -state-key F [-msg-file F|-]   (forward-private E2 send; plaintext NEVER on argv)
   spore msg recv-e2 -identity F -spk F [-opk-pool F] -store URL -state-dir D -state-key F
-             [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL]   (forward-private E2 receive loop)
+             [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL] [-notify-email ADDRESS|-notify-sms E164]   (metadata-only arrival notifications)
   spore msg reply-e2 -to ADDR -session HEX -state-dir D -state-key F [-msg-file F|-]   (continue a thread)
   spore msg forward-e2 -to ADDR -identity F -file F (-bundle F | -bundle-url URL) -pinned-sig HEX ...   (new session, same body)
   spore msg sessions [-store URL] -state-dir D -state-key F   (list thread/session ids)
