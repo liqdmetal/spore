@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -53,6 +56,14 @@ type spoolEntry struct {
 	StateDir        string `json:"state_dir"`
 	StateKey        string `json:"state_key"`
 	SessionTTL      string `json:"session_ttl"`
+
+	// Sig is a keyed HMAC-SHA256 over the canonical JSON of all other
+	// fields, so a local attacker who can write the spool dir cannot
+	// silently rewrite where a message goes or which key file is loaded.
+	// The key is derived from the identity private-key file's contents via
+	// a fixed domain-separated SHA-256, so no new secret is introduced and
+	// only the party holding the identity key can compose+flush the spool.
+	Sig string `json:"sig,omitempty"`
 }
 
 func msgCompose(args []string) {
@@ -110,11 +121,90 @@ func msgCompose(args []string) {
 	}
 	raw, err := json.MarshalIndent(e, "", "  ")
 	check(err)
+	// Sign the canonical entry (without the sig field, which is empty here).
+	e.Sig = spoolSig(&e)
+	raw, err = json.MarshalIndent(e, "", "  ")
+	check(err)
 	spoolFile := filepath.Join(*out, fmt.Sprintf("send-%d.json", time.Now().UnixNano()))
 	if err := os.WriteFile(spoolFile, raw, 0600); err != nil {
 		check(err)
 	}
 	fmt.Printf("composed %s (plaintext at %s)\n", spoolFile, spoolMsg)
+}
+
+// spoolKey derives the HMAC key for a spool entry from the identity
+// private-key file. Domain-separated so the key is not the identity key
+// itself and cannot be confused with any other use.
+func spoolKey(identityFile string) ([]byte, error) {
+	raw, err := os.ReadFile(identityFile)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256([]byte("spore/spool/v1\x00" + string(raw)))
+	return sum[:], nil
+}
+
+// spoolSig computes the HMAC-SHA256 tag over the canonical JSON of the
+// entry's payload fields (excluding Sig).
+func spoolSig(e *spoolEntry) string {
+	cp := *e
+	cp.Sig = ""
+	raw, err := json.Marshal(cp)
+	if err != nil {
+		return ""
+	}
+	key, err := spoolKey(cp.Identity)
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(raw)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// spoolVerify reports whether the entry's Sig is present and valid for the
+// current identity key. A mismatch means the entry was tampered with (or the
+// identity key changed since compose) — flush refuses it.
+func spoolVerify(e *spoolEntry) bool {
+	if e.Sig == "" {
+		return false
+	}
+	got := spoolSig(e)
+	return got != "" && hmac.Equal([]byte(got), []byte(e.Sig))
+}
+
+// spoolPathSafe reports whether a file path referenced by a spool entry is
+// either absolute (keys and bundles are user-provided paths, so they may be
+// anywhere) or, if relative, resolves inside the spool dir. It rejects
+// relative paths that escape via .. so a tampered entry cannot read an
+// arbitrary file during flush.
+func spoolPathSafe(base, p string) bool {
+	if p == "" {
+		return false
+	}
+	if filepath.IsAbs(p) {
+		return true
+	}
+	// Relative paths are interpreted RELATIVE TO BASE (the spool dir): the
+	// spool is where msg bodies live, so "msg-1.plain" means
+	// "<spool>/msg-1.plain". Resolve against base, not CWD.
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return false
+	}
+	pAbs, err := filepath.Abs(filepath.Join(base, p))
+	if err != nil {
+		return false
+	}
+	// Containment: pAbs must equal baseAbs or live under it.
+	if pAbs == baseAbs {
+		return true
+	}
+	prefix := baseAbs
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	return strings.HasPrefix(pAbs, prefix)
 }
 
 func msgFlush(args []string) {
@@ -139,6 +229,18 @@ func msgFlush(args []string) {
 		var e spoolEntry
 		if err := json.Unmarshal(raw, &e); err != nil {
 			fmt.Fprintf(os.Stderr, "flush %s: malformed spool: %v\n", name, err)
+			failed++
+			continue
+		}
+		// Integrity: refuse a tampered entry (wrong HMAC) or one that
+		// escapes the spool dir via relative paths.
+		if !spoolVerify(&e) {
+			fmt.Fprintf(os.Stderr, "flush %s: spool signature invalid (tampered or identity key changed) — refusing\n", name)
+			failed++
+			continue
+		}
+		if !spoolPathSafe(*dir, e.MsgFile) || !spoolPathSafe(*dir, e.Bundle) {
+			fmt.Fprintf(os.Stderr, "flush %s: spool path escapes the spool dir — refusing\n", name)
 			failed++
 			continue
 		}
