@@ -454,6 +454,14 @@ func msgRecvE2(args []string) {
 	check(err)
 	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
 	check(err)
+	// Open the mail store ONCE, not per message (re-reading the whole JSON
+	// file for every delivery is wasteful, and a per-message Open failure
+	// would be silently swallowed). Fail loudly up front instead.
+	var mdb *maildb.MailDB
+	if *maildbPath != "" {
+		mdb, err = maildb.Open(*maildbPath)
+		check(err)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{MinHeight: *min, Interval: *interval})
@@ -462,6 +470,15 @@ func msgRecvE2(args []string) {
 		case inc, ok := <-in:
 			if !ok {
 				return
+			}
+			// Allowlist check BEFORE any decryption: a blocked sender's
+			// frame never touches ratchet state and is never even parsed
+			// past the pointer. Chain senders are pseudonymous, so this
+			// filters by chain identity (what maildb knows), not by
+			// long-term key.
+			if mdb != nil && !mdb.Allowed(inc.Sender) {
+				fmt.Fprintf(os.Stderr, "e2: dropped message from blocked sender %s\n", shortTx(inc.Sender))
+				continue
 			}
 			frame, p, e := c.FetchIncomingE2(st, inc, time.Now())
 			if e != nil {
@@ -510,15 +527,12 @@ func msgRecvE2(args []string) {
 			} else {
 				fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
 			}
-			// Mail-store hook: record into threads + search index, drop
-			// blocked senders before they even print.
-			if *maildbPath != "" {
-				if db, derr := maildb.Open(*maildbPath); derr == nil {
-					if db.Allowed(inc.Sender) {
-						_ = db.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain)
-					} else {
-						fmt.Fprintf(os.Stderr, "e2 maildb: dropped message from blocked contact %s\n", shortTx(inc.Sender))
-					}
+			// Mail-store hook: record into threads + search index. Blocked
+			// senders were already dropped before decryption, so everything
+			// recorded here passed the allowlist.
+			if mdb != nil {
+				if rerr := mdb.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain); rerr != nil {
+					fmt.Fprintln(os.Stderr, "e2 maildb:", rerr)
 				}
 			}
 			// ntfy hook: notify that a message arrived. The ntfy server
@@ -531,7 +545,9 @@ func msgRecvE2(args []string) {
 				req, nerr := http.NewRequestWithContext(ctx, http.MethodPost, *ntfy, strings.NewReader(body))
 				if nerr == nil {
 					req.Header.Set("Title", "Spore message")
-					if _, derr := http.DefaultClient.Do(req); derr != nil {
+					// Bounded client: an unreachable/slow ntfy server must
+					// never wedge the receive loop.
+					if _, derr := (&http.Client{Timeout: 10 * time.Second}).Do(req); derr != nil {
 						fmt.Fprintln(os.Stderr, "e2 ntfy:", derr)
 					}
 				}
@@ -616,8 +632,16 @@ func msgSessions(args []string) {
 	fs := flag.NewFlagSet("msg sessions", flag.ExitOnError)
 	e2Common(fs)
 	_ = fs.Parse(args)
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String())
-	check(err)
+	// Listing sessions never touches the off-chain body store, so -store is
+	// optional here: fall back to an in-memory store when omitted.
+	var st ratchetwire.BodyStore
+	if storeURL := fs.Lookup("store").Value.String(); storeURL != "" {
+		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String())
+		check(err)
+		st = s
+	} else {
+		st = store.NewMemStore()
+	}
 	stateDir := fs.Lookup("state-dir").Value.String()
 	stateKeyFile := fs.Lookup("state-key").Value.String()
 	if stateDir == "" || stateKeyFile == "" {

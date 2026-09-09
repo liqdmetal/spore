@@ -336,3 +336,50 @@ func (m *MailDB) Messages() []MessageMeta {
 	sort.Slice(out, func(i, j int) bool { return out[i].At > out[j].At })
 	return out
 }
+
+// Purge deletes every indexed message older than `before` and drops threads
+// left with zero messages. The local store keeps decrypted snippets for
+// search — this is how a user bounds that retention on their own terms.
+// Returns the number of messages removed.
+func (m *MailDB) Purge(before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := before.Unix()
+	kept := make([]MessageMeta, 0, len(m.messages))
+	removed := 0
+	for _, mm := range m.messages {
+		if mm.At < cutoff {
+			removed++
+			continue
+		}
+		kept = append(kept, mm)
+	}
+	m.messages = kept
+	if removed > 0 {
+		// Rebuild thread counters from the surviving messages so counts and
+		// LastAt never lie about pruned history.
+		for id := range m.threads {
+			t := m.threads[id]
+			t.Count = 0
+			t.LastAt = 0
+			m.threads[id] = t
+		}
+		for _, mm := range kept {
+			t := m.threads[mm.SessionID]
+			t.Count++
+			if mm.At > t.LastAt {
+				t.LastAt = mm.At
+			}
+			m.threads[mm.SessionID] = t
+		}
+		for id, t := range m.threads {
+			if t.Count == 0 {
+				delete(m.threads, id)
+			}
+		}
+		if err := m.saveLocked(); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}

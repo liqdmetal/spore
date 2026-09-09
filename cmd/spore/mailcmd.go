@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/maildb"
 )
@@ -24,7 +25,7 @@ import (
 //	spore msg mail -db PATH search QUERY
 func msgMail(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: spore msg mail -db PATH add|list|block|unblock|threads|search [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg mail -db PATH add|list|block|unblock|threads|search|purge [flags]")
 		return
 	}
 	// Flags may appear before OR after the subcommand. Walk the args and
@@ -44,14 +45,14 @@ func msgMail(args []string) {
 		// defined below that take values.
 		if !expectValue && strings.HasPrefix(a, "-") && !strings.Contains(a, "=") &&
 			(a == "-db" || a == "-addr" || a == "-nick" || a == "-pinned" ||
-				a == "-phrase" || a == "-peer" || a == "-thread") {
+				a == "-phrase" || a == "-peer" || a == "-thread" || a == "-older-than") {
 			expectValue = true
 			continue
 		}
 		expectValue = false
 	}
 	if sub == "" {
-		fmt.Fprintln(os.Stderr, "usage: spore msg mail -db PATH add|list|block|unblock|threads|search [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore msg mail -db PATH add|list|block|unblock|threads|search|purge [flags]")
 		return
 	}
 	fs := flag.NewFlagSet("msg mail "+sub, flag.ExitOnError)
@@ -62,6 +63,7 @@ func msgMail(args []string) {
 	phrase := fs.String("phrase", "", "exact case-insensitive phrase to search for")
 	searchPeer := fs.String("peer", "", "scope search to this sender/peer address (exact)")
 	searchThread := fs.String("thread", "", "scope search to this session id hex (exact)")
+	olderThan := fs.Duration("older-than", 0, "purge: delete indexed messages older than this duration (e.g. 30d is not supported by Go durations — use 720h)")
 	_ = fs.Parse(rest)
 	if *dbPath == "" {
 		fmt.Fprintln(os.Stderr, "mail: -db PATH is required")
@@ -158,8 +160,19 @@ func msgMail(args []string) {
 		for _, m := range db.Search(q) {
 			fmt.Printf("%s %s %s: %s\n", m.TxID, m.Peer, m.SessionID, db.Highlight(m.Snippet, terms))
 		}
+	case "purge":
+		if *olderThan <= 0 {
+			fmt.Fprintln(os.Stderr, "mail purge: -older-than required (e.g. -older-than 720h)")
+			os.Exit(2)
+		}
+		n, err := db.Purge(time.Now().Add(-*olderThan))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mail purge:", err)
+			os.Exit(2)
+		}
+		fmt.Printf("purged %d message(s) older than %s\n", n, *olderThan)
 	default:
-		fmt.Fprintf(os.Stderr, "mail: unknown subcommand %q (want add|list|block|unblock|threads|search)\n", rest[0])
+		fmt.Fprintf(os.Stderr, "mail: unknown subcommand %q (want add|list|block|unblock|threads|search|purge)\n", sub)
 		os.Exit(2)
 	}
 }

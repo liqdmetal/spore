@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// relayHTTPClient bounds every relay HTTP call. http.DefaultClient has NO
+// timeout: an unreachable or hung relay (or mailbox, on the pull path) would
+// block the caller forever — a phone on flaky mobile data could wedge mid-push
+// with no way out. 30s matches the relay node's own forwarding client.
+var relayHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // PushViaRelay pushes an opaque body through a relay hop toward a destination
 // mailbox. relayBase is the anonymous middle node's base URL; destMailboxBase
 // is the eventual mailbox base URL the relay should forward to, carried in the
@@ -29,7 +35,7 @@ func PushViaRelay(ctx context.Context, relayBase, destMailboxBase string, cid [3
 	if !deadline.IsZero() {
 		req.Header.Set("X-Burn-Deadline", strconv.FormatInt(deadline.Unix(), 10))
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := relayHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -52,7 +58,7 @@ func PullFromRelay(ctx context.Context, relayBase string, cid [32]byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := relayHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

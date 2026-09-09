@@ -53,6 +53,55 @@ func TestAllowlistBlocklist(t *testing.T) {
 	}
 }
 
+func TestPurgeRemovesOldMessagesAndEmptyThreads(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "mail.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	old := now.Add(-72 * time.Hour)
+	// Thread A: one old, one recent message.
+	if err := db.RecordMessage("threadA", "peerA", "tx1", old, []byte("old body")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordMessage("threadA", "peerA", "tx2", now, []byte("recent body")); err != nil {
+		t.Fatal(err)
+	}
+	// Thread B: only old messages — must vanish entirely.
+	if err := db.RecordMessage("threadB", "peerB", "tx3", old, []byte("gone soon")); err != nil {
+		t.Fatal(err)
+	}
+	n, err := db.Purge(now.Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("purged = %d, want 2", n)
+	}
+	msgs := db.Messages()
+	if len(msgs) != 1 || msgs[0].TxID != "tx2" {
+		t.Fatalf("messages after purge = %+v", msgs)
+	}
+	threads := db.Threads()
+	if len(threads) != 1 || threads[0].SessionID != "threadA" || threads[0].Count != 1 {
+		t.Fatalf("threads after purge = %+v", threads)
+	}
+	// Purge survives reopen (persisted, not in-memory only).
+	db2, err := Open(filepath.Join(dir, "mail.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(db2.Messages()) != 1 || len(db2.Threads()) != 1 {
+		t.Fatalf("purge did not persist: msgs=%d threads=%d", len(db2.Messages()), len(db2.Threads()))
+	}
+	// Nothing to purge -> zero, no error.
+	n, err = db2.Purge(now.Add(-24 * time.Hour))
+	if err != nil || n != 0 {
+		t.Fatalf("second purge = %d, %v", n, err)
+	}
+}
+
 func TestRecordMessageThreadAndSearch(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := Open(filepath.Join(dir, "mail.json"))

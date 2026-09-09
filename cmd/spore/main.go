@@ -119,6 +119,18 @@ func usage() {
   spore donate [chain] | --all                          (per-chain donation rail)
   spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
   spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
+  spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
+  spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
+             [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] -store URL
+             -state-dir D -state-key F [-msg-file F|-]   (forward-private E2 send; plaintext NEVER on argv)
+  spore msg recv-e2 -identity F -spk F [-opk-pool F] -store URL -state-dir D -state-key F
+             [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL]   (forward-private E2 receive loop)
+  spore msg reply-e2 -to ADDR -session HEX -state-dir D -state-key F [-msg-file F|-]   (continue a thread)
+  spore msg forward-e2 -to ADDR -identity F -file F (-bundle F | -bundle-url URL) -pinned-sig HEX ...   (new session, same body)
+  spore msg sessions [-store URL] -state-dir D -state-key F   (list thread/session ids)
+  spore msg compose -out DIR [-msg-file F|-] ...   (offline: queue a send for later)
+  spore msg flush -dir DIR   (drain the compose queue through the real send path)
+  spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
