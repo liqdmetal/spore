@@ -20,6 +20,7 @@ import (
 
 	"github.com/liqdmetal/spore/internal/backend"
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/store"
@@ -54,6 +55,8 @@ func msgE2(args []string) {
 		msgCompose(args[1:])
 	case "flush":
 		msgFlush(args[1:])
+	case "mail":
+		msgMail(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand")
 	}
@@ -412,6 +415,7 @@ func msgRecvE2(args []string) {
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	outDir := fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
 	ntfy := fs.String("ntfy", "", "POST a 'new message' notification to this ntfy topic URL on each message (content never leaves the mailbox; metadata only)")
+	maildbPath := fs.String("maildb", "", "path to the local mail store (maildb JSON). When set, each decrypted message is recorded into its thread + search index, and blocked contacts are dropped")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if *identity == "" || *spk == "" {
@@ -504,6 +508,17 @@ func msgRecvE2(args []string) {
 				fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
 			} else {
 				fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+			}
+			// Mail-store hook: record into threads + search index, drop
+			// blocked senders before they even print.
+			if *maildbPath != "" {
+				if db, derr := maildb.Open(*maildbPath); derr == nil {
+					if db.Allowed(inc.Sender) {
+						_ = db.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain)
+					} else {
+						fmt.Fprintf(os.Stderr, "e2 maildb: dropped message from blocked contact %s\n", shortTx(inc.Sender))
+					}
+				}
 			}
 			// ntfy hook: notify that a message arrived. The ntfy server
 			// sees only "you got a message" + a short txid — the body never
