@@ -59,16 +59,66 @@ phone (Termux/Android)
 1. Run a DERO node (already done on Hetzner) + a Monero node (done, synced).
 2. Expose the wallet/node RPC to phone clients over **TLS + auth** (not plain),
    optionally behind a Tor hidden service.
-3. Run `mailbox run -privacy` per paid user (own dir + key), serve over HTTPS.
+3. Run **one** `spore mailbox host -users DIR` for ALL paid users (see below).
+   Do NOT run `mailbox run` per user — that is one chain poller per user.
 4. Do NOT log the phone's IP / connection metadata beyond what's needed.
 5. Fixed body padding + Sender-blank are already the code defaults for premium.
+
+## `mailbox host` — the multi-user service (built)
+
+```
+spore mailbox host -users /srv/spore/users \
+    -listen 0.0.0.0:443 -cert C -key K \
+    -tokens /srv/spore/tokens.json \
+    -chain dero -rpc http://127.0.0.1:10102/json_rpc
+```
+
+Every subdirectory of `-users` is one mailbox (own key, own bodies, own log),
+all served from **one listener** path-routed at `/u/<name>/...`, behind **one
+shared chain watcher** (`mailbox.ScanHub`).
+
+Why it matters — the old design was one process per user, and each process
+polled the chain independently. At 10k users on a 3s interval that is ~3,333
+RPC/s against a single node, which fails long before RAM does.
+
+### Measured (not estimated)
+
+| Users in one process | Working set | OS threads |
+|---|---|---|
+| 2 | 15.51 MB | 14 |
+| 50 | 21.02 MB | 34 |
+| 200 | 24.00 MB | 22 |
+
+- **Marginal cost: ~44 KB/user** → 10,000 users ≈ **0.43 GB**, 50,000 ≈ 2.1 GB.
+- One-process-per-user measured 5.23 MB each → 10k ≈ **51 GB**. The hub is a
+  **~118× density gain**.
+- **OS threads do not grow with user count** (22 at 200 users). Users are
+  goroutines, so the old "10k × 4 threads = 40,000 threads" ceiling is gone.
+- **Chain RPC is flat**: the hub's scaling test measures 8 polls for 1
+  subscriber and 9 polls for 50 in the same window. 10k users still poll once.
+- Verified live: **200/200 users served HTTP 200**, and **0 cross-token leaks**
+  across 29 wrong-token probes (each returned 401).
+
+### Per-user auth
+`-tokens` is a JSON map `{"alice":"...","bob":"..."}`. Each user's route is
+wrapped with that user's own bearer token, so alice's token cannot read bob's
+mailbox. A user absent from the map gets an **open** route, which is refused
+outright on a non-loopback bind.
+
+### Per-user burn
+`-auto-burn` is applied **per subscriber**, never at the hub: a slot is erased
+only after *that* user accepts a delivery. Hub-level auto-burn would let the
+first user's acceptance destroy the payload before the others ever saw it, so
+the hub forces `AutoBurn=false` on the shared watcher regardless of the flag.
 
 ## What's built vs to-build
 - ✅ `-rpc URL` seam accepts a remote node (any URL)
 - ✅ hosted `mailbox run` (always-on, chain-scanning, HTTP-push receive)
-- ✅ `mailbox run -privacy` (no Sender in log) — just added
-- ✅ body padding (fixed 1 KiB bucket) — just added
-- 🔲 operator infra (TLS/auth front, per-user mailboxes, provisioning, billing)
+- ✅ `mailbox run -privacy` (no Sender in log)
+- ✅ body padding (fixed 1 KiB bucket)
+- ✅ **`mailbox host`: N mailboxes, 1 process, 1 shared watcher, 1 listener,
+  per-user bearer auth, shared reaper** (44 KB/user measured)
+- 🔲 provisioning + billing (create/suspend a user, meter usage)
 - 🔲 Tor/I2P front for the node/mailbox endpoints
 - 🔲 relay-fabric hop + decoy traffic (the deep metadata answer)
 

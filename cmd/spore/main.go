@@ -151,6 +151,7 @@ func usage() {
   spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
   spore msg recv ... -key HEX                   (decrypt E2E with our priv)
   spore mailbox run -dir DIR [-chain dero|evm|xmr|solana] [-listen :ADDR] [-peer-addr H:P] [-rpc URL] [-from ADDR] [-keyfile SOL] [-program PID]   (always-on long-body serve+scan+decrypt)
+  spore mailbox host -users DIR [-listen :ADDR] [-tokens FILE] [-cert C -key K] [-interval 3s]   (HOSTED multi-user: N mailboxes, ONE shared chain watcher, one listener at /u/<name>/...)
   spore mailbox list -dir DIR                   (show decrypted messages)
   spore mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)
   spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]

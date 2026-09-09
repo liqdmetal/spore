@@ -57,6 +57,8 @@ func mailboxcmd(args []string) {
 	switch args[0] {
 	case "run":
 		mailboxRun(args[1:])
+	case "host":
+		mailboxHost(args[1:])
 	case "list":
 		mailboxList(args[1:])
 	case "get":
@@ -64,7 +66,7 @@ func mailboxcmd(args []string) {
 	case "-h", "--help":
 		mailboxUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "mailbox: unknown subcommand %q (want run|list|get)\n", args[0])
+		fmt.Fprintf(os.Stderr, "mailbox: unknown subcommand %q (want run|host|list|get)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -77,6 +79,15 @@ func mailboxUsage() {
              [-min-height N]          (serve + scan + decrypt long bodies, always-on)
              [-cert CERT] [-key KEY]  (serve HTTPS when both set)
              [-token SECRET]          (require Authorization: Bearer SECRET on every route)
+  spore mailbox host -users DIR [-listen :ADDR] [-tokens FILE]
+             [-cert CERT] [-key KEY] [-interval 3s] [-reap 30s] [-privacy]
+             [-log-ttl 168h] [-min-height N] [-auto-burn]
+                                      (HOSTED multi-user service: every
+                                       subdirectory of -users is one mailbox,
+                                       all served from ONE listener at
+                                       /u/<name>/... behind ONE shared chain
+                                       watcher, so chain RPC load does not grow
+                                       with user count)
   spore mailbox list -dir DIR      (show decrypted messages)
   spore mailbox get -dir DIR <cid-or-txid>   (print one decrypted message)`)
 }
