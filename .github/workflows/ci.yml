@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  # Push runs only on main: a bare push trigger fires on every commit twice
+  # (push + PR event), which burns private-repo Actions minutes.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded PR runs (same branch, newer commit) instead of letting
+# stale runs grind to completion.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build + vet + test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Pin to the repo's own go.mod directive so CI and dev never drift.
+          go-version-file: go.mod
+          # Built-in module/build cache is keyed off go.mod/go.sum.
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        # Blocking: vet is currently clean, keep it that way.
+        run: go vet ./...
+      - name: Test (race)
+        # spore is networky (mailbox host, peers) — race detection is cheap
+        # here and catches the cross-goroutine bugs that matter most.
+        run: go test -race ./...
+
+  gofmt:
+    name: gofmt report (non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Report unformatted files
+        # Non-blocking by design: the tree has a pre-existing gofmt backlog
+        # (some of it CRLF noise on Windows checkouts). Surface the list,
+        # flip to blocking once it's drained.
+        continue-on-error: true
+        run: |
+          files=$(gofmt -l . | tee gofmt-report.txt)
+          count=$(wc -l < gofmt-report.txt)
+          echo "gofmt backlog: ${count} file(s)"
+          echo "$files"
+      - name: Upload gofmt report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gofmt-report
+          path: gofmt-report.txt
