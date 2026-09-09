@@ -28,6 +28,7 @@ type spoolEntry struct {
 	BundleURL   string `json:"bundle_url,omitempty"`
 	BundleToken string `json:"bundle_token,omitempty"`
 	MsgFile     string `json:"msg_file"`
+	Amount      string `json:"amount,omitempty"` // pay-with-message, e.g. "5.5dero"
 	TTLSeconds  int64  `json:"ttl_seconds"`
 
 	// Carrier + state flags snapshot (e2Common), so flush needs no flags of
@@ -75,6 +76,7 @@ func msgCompose(args []string) {
 	bundleToken := fs.String("bundle-token", "", "bearer token for -bundle-url")
 	pinned := fs.String("pinned-sig", "", "recipient signing public key hex")
 	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin)")
+	amount := fs.String("amount", "", "pay-with-message value attached at flush time, e.g. 5.5dero (value-carrying carriers only)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	out := fs.String("out", "spool", "directory to hold the composed message")
 	e2Common(fs)
@@ -103,7 +105,7 @@ func msgCompose(args []string) {
 	e := spoolEntry{
 		To: *to, Identity: *identity, Pinned: *pinned,
 		Bundle: *bundle, BundleURL: *bundleURL, BundleToken: *bundleToken,
-		MsgFile: spoolMsg, TTLSeconds: int64(ttl.Seconds()),
+		MsgFile: spoolMsg, Amount: *amount, TTLSeconds: int64(ttl.Seconds()),
 		Chain: fs.Lookup("chain").Value.String(), RPC: fs.Lookup("rpc").Value.String(),
 		RPCLogin: fs.Lookup("rpc-login").Value.String(), From: fs.Lookup("from").Value.String(),
 		KeyFile: fs.Lookup("keyfile").Value.String(), Program: fs.Lookup("program").Value.String(),
@@ -284,5 +286,5 @@ func flushOne(e spoolEntry) error {
 	if e.DeliveryGuarant {
 		_ = fs.Set("delivery-guaranteed", "true")
 	}
-	return sendE2Core(fs, e.To, e.Identity, e.Bundle, e.BundleURL, e.BundleToken, e.Pinned, e.MsgFile, time.Duration(e.TTLSeconds)*time.Second)
+	return sendE2Core(fs, e.To, e.Identity, e.Bundle, e.BundleURL, e.BundleToken, e.Pinned, e.MsgFile, e.Amount, time.Duration(e.TTLSeconds)*time.Second)
 }

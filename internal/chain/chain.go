@@ -44,6 +44,12 @@ type Incoming struct {
 	TxID       string
 	TopoHeight int64
 	Sender     string
+	// Amount is the native transfer value that rode WITH this payload, in
+	// the chain's atomic unit (DERO: 1 DERO = 100000 atomic; EVM: wei).
+	// 0 means the backend does not surface per-message value (or none was
+	// attached beyond required postage). Pay-with-message: the pointer and
+	// the money ride the same transaction, atomically.
+	Amount uint64
 	// Payload is the raw message payload (whisper or pointer). The caller
 	// decodes it with the backend's ParsePayload.
 	Payload Payload

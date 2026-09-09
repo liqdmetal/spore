@@ -83,13 +83,15 @@ func main() {
 	case "donate":
 		donatecmd(os.Args[2:])
 	case "msg":
-		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail") {
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay") {
 			msgE2(os.Args[2:])
 		} else {
 			msgcmd(os.Args[2:])
 		}
 	case "mailbox":
 		mailboxcmd(os.Args[2:])
+	case "panic":
+		paniccmd(os.Args[2:])
 	case "relay":
 		relaycmd(os.Args[2:])
 	case "status":
@@ -131,6 +133,9 @@ func usage() {
   spore msg compose -out DIR [-msg-file F|-] ...   (offline: queue a send for later)
   spore msg flush -dir DIR   (drain the compose queue through the real send path)
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
+  spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
+  spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
+  spore panic [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)

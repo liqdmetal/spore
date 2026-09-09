@@ -189,6 +189,7 @@ type Entry struct {
 	Incoming   bool             `json:"incoming"`
 	TXID       string           `json:"txid"`
 	Sender     string           `json:"sender"`
+	Amount     uint64           `json:"amount"` // atomic DERO (1 DERO = 100000)
 	PayloadRPC anchor.Arguments `json:"payload_rpc"`
 	// Data is the raw payload bytes as base64 (wallets like Engram that fail
 	// the CBOR parse of padded payloads still return this).

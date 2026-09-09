@@ -57,6 +57,10 @@ func msgE2(args []string) {
 		msgFlush(args[1:])
 	case "mail":
 		msgMail(args[1:])
+	case "invoice":
+		msgInvoiceE2(args[1:])
+	case "pay":
+		msgPayE2(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand")
 	}
@@ -283,6 +287,7 @@ func msgSendE2(args []string) {
 	bundleURL := fs.String("bundle-url", "", "fetch recipient SPK bundle from a mailbox GET /prekey URL (mutually exclusive with -bundle; discovery is a transport convenience only — -pinned-sig is still required and still verified)")
 	bundleToken := fs.String("bundle-token", "", "bearer token for -bundle-url, if the mailbox requires auth")
 	pinned := fs.String("pinned-sig", "", "recipient signing public key hex")
+	amount := fs.String("amount", "", "pay-with-message: value to attach to the SAME tx as the pointer, in whole units with asset suffix (e.g. 5.5dero, 0.0001evm). DERO + EVM-calldata only today; the money and the message are atomic — both land or neither does")
 	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin; never pass plaintext as an argv flag — argv is visible to shell history, ps, and crash reports)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
@@ -293,7 +298,7 @@ func msgSendE2(args []string) {
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("send-e2 requires exactly one of -bundle or -bundle-url, not both and not neither"))
 	}
-	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *ttl); err != nil {
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *amount, *ttl); err != nil {
 		check(err)
 	}
 }
@@ -301,7 +306,9 @@ func msgSendE2(args []string) {
 // sendE2Core is the shared send path for send-e2 and the offline-compose
 // flush. fs must be a parsed e2Common FlagSet. Errors are returned (caller
 // decides fatal vs spool-retry) and the plaintext never touches argv.
-func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile string, ttl time.Duration) error {
+// amount is the optional pay-with-message value ("5.5dero"); empty = postage
+// only.
+func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile, amount string, ttl time.Duration) error {
 	plaintext, err := readPlaintext(msgFile)
 	if err != nil {
 		return err
@@ -367,11 +374,35 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err != nil {
 		return err
 	}
-	r, err := c.PostPointer(context.Background(), to, raw, 1)
+	// Pay-with-message: parse -amount, validate the carrier can actually
+	// carry value, and attach it to the SAME tx as the pointer. A refusal
+	// here is deliberate: better to fail loudly than silently send an
+	// unpaid message the sender believes was paid.
+	hint := uint64(1) // postage default
+	if amount != "" {
+		asset, atomic, aerr := parseAmountFlag(amount)
+		if aerr != nil {
+			return aerr
+		}
+		if !carrierCarriesValue(fs.Lookup("chain").Value.String()) {
+			return fmt.Errorf("-amount %s%s is not supported on the %s carrier (value-carrying: dero|evm); refusing to send an unpaid message as if paid", formatAmount(asset, atomic), asset, fs.Lookup("chain").Value.String())
+		}
+		if atomic < hint {
+			return fmt.Errorf("-amount rounds to %d atomic units, below the 1-unit postage floor", atomic)
+		}
+		hint = atomic
+	}
+	r, err := c.PostPointer(context.Background(), to, raw, hint)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("sent-e2 txid %s pointer %x\n", r.TxID, raw)
+	fmt.Printf("sent-e2 txid %s pointer %x", r.TxID, raw)
+	if amount != "" {
+		if asset, atomic, aerr := parseAmountFlag(amount); aerr == nil {
+			fmt.Printf(" PAID %s %s", formatAmount(asset, atomic), strings.ToUpper(asset))
+		}
+	}
+	fmt.Println()
 	return nil
 }
 
@@ -389,6 +420,7 @@ func msgForwardE2(args []string) {
 	bundleToken := fs.String("bundle-token", "", "bearer token for -bundle-url, if the mailbox requires auth")
 	pinned := fs.String("pinned-sig", "", "recipient signing public key hex")
 	file := fs.String("file", "", "the decrypted message file to forward (e.g. a <txid>.msg from recv-e2 -out-dir)")
+	amount := fs.String("amount", "", "optional pay-with-message value, e.g. 5.5dero")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	e2Common(fs)
 	_ = fs.Parse(args)
@@ -398,7 +430,7 @@ func msgForwardE2(args []string) {
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("forward-e2 requires exactly one of -bundle or -bundle-url"))
 	}
-	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *file, *ttl); err != nil {
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *file, *amount, *ttl); err != nil {
 		check(err)
 	}
 }
@@ -516,6 +548,13 @@ func msgRecvE2(args []string) {
 				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), receiptStatus, shortTx(receiptInReplyTo))
 				continue
 			}
+			// Money envelopes (invoice/payment) ride the session like
+			// receipts: surface them as money lines, not message bodies.
+			if kind, summary, isMoney := parseMoneyEnvelope(plain); isMoney {
+				_ = kind
+				fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
+				continue
+			}
 			// Attachments / keep-a-copy mode: write the decrypted body to a
 			// file named by txid instead of printing it.
 			if *outDir != "" {
@@ -526,6 +565,12 @@ func msgRecvE2(args []string) {
 				fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
 			} else {
 				fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+			}
+			// Pay-with-message: surface any native value that rode the
+			// pointer tx. Postage (1 atomic) is noise; anything above it
+			// is money and gets its own line.
+			if inc.Amount > 1 {
+				fmt.Printf("  ↳ received %d atomic units on tx %s\n", inc.Amount, shortTx(inc.TxID))
 			}
 			// Mail-store hook: record into threads + search index. Blocked
 			// senders were already dropped before decryption, so everything
