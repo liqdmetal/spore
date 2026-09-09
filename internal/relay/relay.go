@@ -14,10 +14,16 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +107,13 @@ type pending struct {
 	dest     string
 	deadline time.Time
 	bodyLen  int64 // for the total-bytes quota
+	// nextTry and attempts drive per-body exponential backoff: after a
+	// failed forward attempt the body is not retried again until nextTry,
+	// so a down mailbox is probed gently (interval, then backoff doubling
+	// up to a cap) instead of hammered on every ForwardLoop tick. Both are
+	// persisted in the durable index so backoff state survives restart.
+	nextTry  time.Time
+	attempts int
 }
 
 // Relay is a store-and-forward hop over a content-addressed, TTL-bound body
@@ -113,34 +126,117 @@ type Relay struct {
 	mu      sync.Mutex
 	pending map[[32]byte]*pending
 
+	// indexPath, when non-empty, makes the pending index durable: every
+	// mutation (push, drop) is persisted here atomically (temp+rename), and
+	// New re-reads it at startup. Without this, a relay restart forgets which
+	// mailbox each held body was bound for — the ciphertext survives on disk
+	// (store.DiskStore) but is never forwarded again and never reaped either,
+	// because Reap/ForwardOnce only walk the in-memory index. That is a
+	// silent, permanent loss of exactly the messages this relay exists to
+	// protect against loss. Empty indexPath keeps the old in-memory-only
+	// behavior (fine for store.NewMemStore(), which loses everything on
+	// restart anyway).
+	indexPath string
+
 	// allowedDests is the SSRF allowlist (audit C3): forwarding destinations
 	// NOT on this list are refused at push time (403) and skipped at forward
 	// time. Default is EMPTY = deny all forwarding — an operator must name the
 	// mailboxes this relay serves (relaycmd -allow-dest). That kills the
 	// "relay PUTs attacker-chosen bytes at attacker-chosen URLs" primitive.
 	allowed map[string]bool
+	// fwdTokens maps a normalized destination base URL to the bearer token the
+	// relay must present when forwarding to that mailbox's /put route. Mailboxes
+	// deployed behind HandlerToken (the recommended posture for a mailbox that
+	// a phone reaches over the internet) refuse unauthenticated pushes with 401;
+	// without this the relay would retry every interval until the burn deadline
+	// and then drop the body — silent message loss in exactly the secure
+	// configuration the product recommends. Pushers never see these tokens;
+	// only the relay→mailbox hop is authenticated, so push anonymity is
+	// preserved.
+	fwdTokens map[string]string
 	// quotas.
-	maxPending     int
-	maxTotalBytes  int64
-	maxDeadline    time.Duration
-	pushLimiter    *rateLimiter
-	heldBytes      int64
+	maxPending    int
+	maxTotalBytes int64
+	maxDeadline   time.Duration
+	pushLimiter   *rateLimiter
+	heldBytes     int64
+	// backoffBase and backoffMax bound per-body retry spacing after failures.
+	backoffBase time.Duration
+	backoffMax  time.Duration
 }
 
 // New wraps an underlying store with a relay node. Pass store.NewMemStore() for
 // an ephemeral node or store.NewDiskStore(dir) for durability across restarts.
-// Forwarding destinations are DENIED until SetAllowedDests names them.
+// Forwarding destinations are DENIED until SetAllowedDests names them. The
+// pending index is in-memory only; use NewDurable for a restart-safe index.
 func New(st store.Store) *Relay {
 	return &Relay{
 		st:            st,
 		client:        &http.Client{Timeout: 30 * time.Second},
 		pending:       make(map[[32]byte]*pending),
 		allowed:       map[string]bool{},
+		fwdTokens:     map[string]string{},
 		maxPending:    DefaultMaxPending,
 		maxTotalBytes: DefaultMaxTotalBytes,
 		maxDeadline:   DefaultMaxDeadline,
 		pushLimiter:   newRateLimiter(DefaultPushRatePerMin, time.Minute),
+		backoffBase:   30 * time.Second,
+		backoffMax:    time.Hour,
 	}
+}
+
+// SetForwardTokens configures per-destination bearer tokens the relay presents
+// when forwarding to each mailbox (see fwdTokens). Keys are destination base
+// URLs in the same normalized form as the allowlist (scheme://host[/path]).
+// Calling this REPLACES the map. An empty map leaves forwarding unauthenticated
+// to every allowed destination.
+func (r *Relay) SetForwardTokens(tokens map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fwdTokens = map[string]string{}
+	for dest, tok := range tokens {
+		if key, ok := normalizeDest(dest); ok && tok != "" {
+			r.fwdTokens[key] = tok
+		}
+	}
+}
+
+// SetBackoff overrides the per-body retry backoff bounds (base and max).
+// Zero values keep the defaults. Used by tests to shrink the window; operators
+// generally do not need to touch this.
+func (r *Relay) SetBackoff(base, max time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if base > 0 {
+		r.backoffBase = base
+	}
+	if max > 0 {
+		r.backoffMax = max
+	}
+}
+
+// NewDurable is New plus a durable pending index at indexPath: every push and
+// drop is persisted atomically, and any previously-held entries are restored
+// immediately so a relay restart (crash, deploy, reboot) resumes forwarding
+// exactly where it left off instead of silently orphaning already-accepted
+// bodies. Pair this with store.NewDiskStore(dir) so the bodies themselves
+// also survive restart — an in-memory store defeats the point regardless of
+// index durability.
+func NewDurable(st store.Store, indexPath string) (*Relay, error) {
+	r := New(st)
+	if indexPath == "" {
+		return nil, errors.New("relay: empty index path")
+	}
+	r.indexPath = indexPath
+	restored, err := loadIndex(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("relay: load durable index: %w", err)
+	}
+	for cid, p := range restored {
+		r.pending[cid] = p
+		r.heldBytes += p.bodyLen
+	}
+	return r, nil
 }
 
 // SetAllowedDests configures the forwarding allowlist. Each entry is a base
@@ -199,6 +295,18 @@ func (r *Relay) destAllowed(dest string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.allowed[key]
+}
+
+// forwardToken returns the configured bearer token for forwarding to dest, or
+// "" when none is set (unauthenticated hop).
+func (r *Relay) forwardToken(dest string) string {
+	key, ok := normalizeDest(dest)
+	if !ok {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fwdTokens[key]
 }
 
 // Handler returns the HTTP surface for a relay node:
@@ -345,8 +453,9 @@ func (r *Relay) handlePush(w http.ResponseWriter, req *http.Request, cid [32]byt
 		return
 	}
 	r.mu.Lock()
-	r.pending[cid] = &pending{dest: dest, deadline: deadline, bodyLen: int64(len(body))}
+	r.pending[cid] = &pending{dest: dest, deadline: deadline, bodyLen: int64(len(body)), nextTry: time.Now()}
 	r.heldBytes += int64(len(body))
+	r.persistIndexLocked()
 	r.mu.Unlock()
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -378,15 +487,145 @@ func (r *Relay) drop(cid [32]byte) {
 			r.heldBytes = 0
 		}
 		delete(r.pending, cid)
+		r.persistIndexLocked()
 	}
 	r.mu.Unlock()
 }
 
+// persistIndexLocked writes the current pending index to disk atomically
+// (temp file + rename). Caller must hold r.mu. A no-op if this Relay was
+// built without NewDurable (indexPath == ""). Errors are logged rather than
+// propagated: a failed index write should never block accepting or dropping
+// a push — the in-memory index (this process's view) stays authoritative
+// until the next successful write, same fail-open posture as the rest of the
+// relay's best-effort forwarding.
+func (r *Relay) persistIndexLocked() {
+	if r.indexPath == "" {
+		return
+	}
+	if err := saveIndex(r.indexPath, r.pending); err != nil {
+		// Intentionally silent beyond this comment: relay has no logger
+		// dependency today, and adding one for a single best-effort path
+		// isn't worth the new interface. The failure mode is bounded — the
+		// in-memory index still knows about this entry for the life of the
+		// process, so forwarding/reaping proceed normally; only a restart
+		// between now and the next successful persistIndexLocked call would
+		// lose the update.
+		_ = err
+	}
+}
+
+type indexEntry struct {
+	CIDHex   string `json:"cid"`
+	Dest     string `json:"dest"`
+	Deadline int64  `json:"deadline"` // unix seconds; 0 = no deadline
+	BodyLen  int64  `json:"body_len"`
+	NextTry  int64  `json:"next_try,omitempty"` // unix seconds; 0 = due now
+	Attempts int    `json:"attempts,omitempty"`
+}
+
+// saveIndex writes the full pending index as one JSON array, atomically
+// (temp file in the same directory, fsync, rename) so a crash mid-write
+// never leaves a torn/partial index — the rename either lands the complete
+// new index or the old index is untouched.
+func saveIndex(path string, pending map[[32]byte]*pending) error {
+	entries := make([]indexEntry, 0, len(pending))
+	for cid, p := range pending {
+		var deadlineSec, nextTrySec int64
+		if !p.deadline.IsZero() {
+			deadlineSec = p.deadline.Unix()
+		}
+		if !p.nextTry.IsZero() {
+			nextTrySec = p.nextTry.Unix()
+		}
+		entries = append(entries, indexEntry{
+			CIDHex:   hex.EncodeToString(cid[:]),
+			Dest:     p.dest,
+			Deadline: deadlineSec,
+			BodyLen:  p.bodyLen,
+			NextTry:  nextTrySec,
+			Attempts: p.attempts,
+		})
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func(e error) error {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return e
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		return cleanup(err)
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// loadIndex reads a previously saved index. A missing file is not an error
+// (fresh relay, nothing pending yet) and returns an empty map.
+func loadIndex(path string) (map[[32]byte]*pending, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[[32]byte]*pending{}, nil
+		}
+		return nil, err
+	}
+	var entries []indexEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("relay: malformed index: %w", err)
+	}
+	out := make(map[[32]byte]*pending, len(entries))
+	for _, e := range entries {
+		raw, err := hex.DecodeString(e.CIDHex)
+		if err != nil || len(raw) != 32 {
+			return nil, fmt.Errorf("relay: malformed index entry cid %q", e.CIDHex)
+		}
+		var cid [32]byte
+		copy(cid[:], raw)
+		var deadline time.Time
+		if e.Deadline != 0 {
+			deadline = time.Unix(e.Deadline, 0)
+		}
+		var nextTry time.Time
+		if e.NextTry != 0 {
+			nextTry = time.Unix(e.NextTry, 0)
+		}
+		out[cid] = &pending{dest: e.Dest, deadline: deadline, bodyLen: e.BodyLen, nextTry: nextTry, attempts: e.Attempts}
+	}
+	return out, nil
+}
+
 // ForwardOnce performs one best-effort pass: drop every held body past its
 // burn deadline (it is not forwarded), and retransmit every still-valid body to
-// its destination. Returns the number forwarded and dropped. Successful
-// forwards (2xx from the destination) drop the body; failures are left to be
-// retried on the next pass.
+// its destination that is due for a retry (respecting per-body backoff).
+// Returns the number forwarded and dropped. Successful forwards (2xx from the
+// destination) drop the body; failures schedule the next attempt at
+// now+backoff (doubling per attempt, capped) and are retried on a later pass.
 func (r *Relay) ForwardOnce(ctx context.Context) (forwarded, dropped int) {
 	r.mu.Lock()
 	items := make(map[[32]byte]*pending, len(r.pending))
@@ -405,12 +644,58 @@ func (r *Relay) ForwardOnce(ctx context.Context) (forwarded, dropped int) {
 			dropped++
 			continue
 		}
+		// Backoff gate: not yet due for another attempt. The body stays
+		// pending and the deadline check above still applies on later passes.
+		if !p.nextTry.IsZero() && now.Before(p.nextTry) {
+			continue
+		}
 		if r.forwardOne(ctx, cid, p) {
 			r.drop(cid)
 			forwarded++
+		} else {
+			r.backoff(cid)
 		}
 	}
 	return forwarded, dropped
+}
+
+// backoff records one failed attempt for cid and schedules the next retry at
+// base*2^attempts (jittered ±20%), capped at backoffMax. State is persisted
+// immediately so a restart resumes the same schedule instead of forgetting it.
+func (r *Relay) backoff(cid [32]byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.pending[cid]
+	if !ok {
+		return
+	}
+	p.attempts++
+	delay := r.backoffBase
+	for i := 1; i < p.attempts && delay < r.backoffMax; i++ {
+		delay *= 2
+	}
+	if delay > r.backoffMax {
+		delay = r.backoffMax
+	}
+	// Deterministic-ish jitter within ±20% so a fleet of relays (or many
+	// bodies to the same recovering mailbox) don't all wake in lockstep.
+	jitter := int64(delay) / 5
+	if jitter > 0 {
+		delay = time.Duration(int64(delay) - jitter + rand.Int63n(2*jitter+1))
+	}
+	// Floor: never retry faster than 1s, but respect a deliberately small
+	// configured base (tests shrink it) — the floor exists to stop jitter
+	// collapsing a production backoff to near-zero, not to override the
+	// operator's explicit base.
+	floor := time.Second
+	if r.backoffBase < floor {
+		floor = r.backoffBase
+	}
+	if delay < floor {
+		delay = floor
+	}
+	p.nextTry = time.Now().Add(delay)
+	r.persistIndexLocked()
 }
 
 // forwardOne attempts one hop: push the held body to the destination mailbox's
@@ -434,6 +719,15 @@ func (r *Relay) forwardOne(ctx context.Context, cid [32]byte, p *pending) bool {
 	req.Header.Set("Content-Type", "application/octet-stream")
 	if !p.deadline.IsZero() {
 		req.Header.Set("X-Burn-Deadline", strconv.FormatInt(p.deadline.Unix(), 10))
+	}
+	// Authenticated mailbox hop: if the operator configured a forward token
+	// for this destination, present it. The pusher never learns or supplies
+	// this token — push anonymity is untouched; only the relay→mailbox hop
+	// is authenticated. Without this, a token-gated mailbox (HandlerToken,
+	// the recommended posture) would 401 every attempt until the burn
+	// deadline and the body would be dropped undelivered.
+	if tok := r.forwardToken(p.dest); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {

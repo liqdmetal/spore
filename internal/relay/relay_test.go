@@ -581,3 +581,209 @@ func TestNormalizeDest(t *testing.T) {
 		}
 	}
 }
+
+// authMailbox records the Authorization header on each /put, so a test can
+// assert the relay presented (or withheld) a forward token on the mailbox hop.
+type authMailbox struct {
+	mu      sync.Mutex
+	auth    []string
+	status  int
+	withCID bool
+}
+
+func (f *authMailbox) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
+		}
+		io.Copy(io.Discard, r.Body)
+		f.mu.Lock()
+		f.auth = append(f.auth, r.Header.Get("Authorization"))
+		f.mu.Unlock()
+		w.WriteHeader(f.status)
+	})
+}
+
+func (f *authMailbox) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.auth...)
+}
+
+// TestForwardPresentsConfiguredTokenToTokenGatedMailbox: the recommended
+// mailbox deployment is token-gated (HandlerToken). Without a configured
+// forward token the relay would 401 forever and drop the body at its burn
+// deadline — silent message loss in the secure configuration. With
+// SetForwardTokens the relay must present Bearer <token> on the mailbox hop,
+// and must NOT send any Authorization header when no token is configured.
+func TestForwardPresentsConfiguredTokenToTokenGatedMailbox(t *testing.T) {
+	mb := &authMailbox{status: http.StatusOK}
+	mbSrv := httptest.NewServer(mb.Handler())
+	defer mbSrv.Close()
+
+	r := New(store.NewMemStore())
+	r.SetAllowedDests([]string{mbSrv.URL})
+	r.SetForwardTokens(map[string]string{mbSrv.URL: "relay-secret-123"})
+
+	body := "auth-hop-body"
+	cid, _ := mustCID(body)
+	// Inject directly into the pending map + store (no PushViaRelay: the push
+	// client is tested separately and would need a live relay; ForwardOnce is
+	// what this test exercises).
+	r.mu.Lock()
+	r.pending[cid] = &pending{dest: mbSrv.URL, deadline: time.Now().Add(time.Hour), bodyLen: int64(len(body)), nextTry: time.Now()}
+	r.mu.Unlock()
+	if err := r.st.Put(cid, []byte(body), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 1 {
+		t.Fatalf("forwarded = %d, want 1", fwd)
+	}
+	got := mb.got()
+	if len(got) != 1 || got[0] != "Bearer relay-secret-123" {
+		t.Fatalf("forward auth = %q, want [\"Bearer relay-secret-123\"]", got)
+	}
+
+	// Second mailbox, no token configured: forward must carry no Authorization.
+	mb2 := &authMailbox{status: http.StatusOK}
+	mb2Srv := httptest.NewServer(mb2.Handler())
+	defer mb2Srv.Close()
+	r2 := New(store.NewMemStore())
+	r2.SetAllowedDests([]string{mb2Srv.URL})
+	cid2, _ := mustCID("auth-hop-body-2")
+	r2.mu.Lock()
+	r2.pending[cid2] = &pending{dest: mb2Srv.URL, deadline: time.Now().Add(time.Hour), bodyLen: 15, nextTry: time.Now()}
+	r2.mu.Unlock()
+	r2.st.Put(cid2, []byte("auth-hop-body-2"), time.Now().Add(time.Hour))
+	if fwd, _ := r2.ForwardOnce(context.Background()); fwd != 1 {
+		t.Fatalf("forwarded = %d, want 1", fwd)
+	}
+	if got := mb2.got(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("unauthenticated forward auth = %q, want [\"\"]", got)
+	}
+}
+
+// TestForwardBackoffGrowsAndRecovers: a down mailbox must not be hammered on
+// every ForwardLoop tick — each failed attempt pushes the next retry out by
+// backoff*2^attempts (capped). While a body is in backoff, ForwardOnce skips
+// it entirely (no network call). Once the destination recovers and the backoff
+// window passes, the body forwards and is dropped.
+func TestForwardBackoffGrowsAndRecovers(t *testing.T) {
+	// Destination that 500s until we flip it healthy.
+	var healthy bool
+	var hMu sync.Mutex
+	mbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hMu.Lock()
+		ok := healthy
+		hMu.Unlock()
+		if ok {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mbSrv.Close()
+
+	r := New(store.NewMemStore())
+	r.SetAllowedDests([]string{mbSrv.URL})
+	r.SetBackoff(50*time.Millisecond, 500*time.Millisecond)
+
+	body := "backoff-body"
+	cid, _ := mustCID(body)
+	if err := r.st.Put(cid, []byte(body), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.pending[cid] = &pending{dest: mbSrv.URL, deadline: time.Now().Add(time.Hour), bodyLen: int64(len(body)), nextTry: time.Now()}
+	r.mu.Unlock()
+
+	// Attempt 1 fails -> backoff schedules nextTry in the future, attempts=1.
+	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 0 {
+		t.Fatalf("first pass forwarded = %d, want 0 (down)", fwd)
+	}
+	r.mu.Lock()
+	p1 := *r.pending[cid]
+	r.mu.Unlock()
+	if p1.attempts != 1 || p1.nextTry.IsZero() || !time.Now().Before(p1.nextTry) {
+		t.Fatalf("after fail: attempts=%d nextTry=%v, want attempts=1 and nextTry in future", p1.attempts, p1.nextTry)
+	}
+
+	// Immediate second pass: still in backoff -> skipped, attempts unchanged.
+	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 0 {
+		t.Fatalf("backoff pass forwarded = %d, want 0 (skipped)", fwd)
+	}
+	r.mu.Lock()
+	p2 := *r.pending[cid]
+	r.mu.Unlock()
+	if p2.attempts != 1 {
+		t.Fatalf("backoff pass bumped attempts to %d, want 1 (must not retry while in backoff)", p2.attempts)
+	}
+
+	// Destination recovers; wait out the backoff window; next pass delivers.
+	hMu.Lock()
+	healthy = true
+	hMu.Unlock()
+	time.Sleep(120 * time.Millisecond)
+	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 1 {
+		t.Fatalf("recovery pass forwarded = %d, want 1", fwd)
+	}
+	if r.Len() != 0 {
+		t.Fatalf("len = %d after successful forward, want 0 (dropped)", r.Len())
+	}
+}
+
+// TestBackoffStatePersistsAcrossRestart: the durable index round-trips
+// nextTry/attempts, so a relay restart resumes the same backoff schedule
+// instead of forgetting the failure and hammering a down mailbox at interval
+// pace all over again.
+func TestBackoffStatePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	mb := &authMailbox{status: http.StatusInternalServerError}
+	mbSrv := httptest.NewServer(mb.Handler())
+	defer mbSrv.Close()
+
+	st, err := store.NewDiskStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewDurable(st, dir+"/pending.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SetAllowedDests([]string{mbSrv.URL})
+	r.SetBackoff(50*time.Millisecond, time.Hour)
+
+	body := "persist-backoff"
+	cid, _ := mustCID(body)
+	if err := st.Put(cid, []byte(body), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.pending[cid] = &pending{dest: mbSrv.URL, deadline: time.Now().Add(time.Hour), bodyLen: int64(len(body)), nextTry: time.Now()}
+	r.persistIndexLocked()
+	r.mu.Unlock()
+
+	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 0 {
+		t.Fatalf("first pass forwarded = %d, want 0", fwd)
+	}
+
+	// Restart: fresh relay over the same store + index.
+	r2, err := NewDurable(st, dir+"/pending.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.mu.Lock()
+	p, ok := r2.pending[cid]
+	r2.mu.Unlock()
+	if !ok {
+		t.Fatal("pending entry lost across restart")
+	}
+	if p.attempts < 1 {
+		t.Fatalf("attempts = %d after restart, want >= 1 (backoff state must survive)", p.attempts)
+	}
+	if p.nextTry.IsZero() {
+		t.Fatal("nextTry lost across restart")
+	}
+}

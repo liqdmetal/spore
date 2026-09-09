@@ -12,12 +12,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -45,13 +47,20 @@ func relaycmd(args []string) {
 
 func relayUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
+  spore relay run -listen :ADDR [-dir DIR] [-index-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
              (store-and-forward hop for opaque bodies; always-on)
   spore relay -h, --help
 
 flags:
   -listen       relay HTTP listen address (default 127.0.0.1:19300)
   -dir          disk dir to durably hold bodies; empty = in-memory
+  -index-dir    disk dir to durably hold the forwarding index (which mailbox
+                each held body is bound for); REQUIRED alongside -dir for
+                restart safety — without it, a relay restart forgets which
+                mailbox each already-accepted body was for, and the body sits
+                orphaned (never forwarded, never reaped) until manually
+                cleared. Ignored (and harmless) when -dir is empty, since an
+                in-memory body store already loses everything on restart.
   -token        shared secret; require Authorization: Bearer *** on every route
                 (REQUIRED for non-loopback binds)
   -allow-dest   comma-separated forwarding-destination allowlist (base URLs);
@@ -64,10 +73,12 @@ func relayRun(args []string) {
 	fs := flag.NewFlagSet("relay run", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:19300", "relay HTTP listen address (default loopback-only)")
 	dir := fs.String("dir", "", "disk dir to durably hold bodies (empty = in-memory)")
+	indexDir := fs.String("index-dir", "", "disk dir to durably hold the forwarding index (which mailbox each held body is for); recommended alongside -dir so a restart does not orphan already-accepted bodies")
 	token := fs.String("token", "", "shared secret; require `Authorization: Bearer *** on every route")
 	interval := fs.Duration("interval", 10*time.Second, "forwarder retry interval")
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval")
 	allowDest := fs.String("allow-dest", "", "comma-separated allowlist of forwarding destinations (base URLs); DEFAULT DENIES ALL forwarding — pushes to unlisted destinations are refused (SSRF hardening)")
+	fwdTokens := fs.String("fwd-tokens", "", "path to a JSON file mapping destination base URL -> bearer token the relay presents when forwarding to that mailbox (e.g. {\"https://mail.example.com\": \"secret\"}); REQUIRED for token-gated mailboxes (HandlerToken); mode 0600 recommended; never pass tokens on the command line")
 	_ = fs.Parse(args)
 
 	// Exposure policy (audit C3): the relay accepts pushes from anyone; a
@@ -90,11 +101,33 @@ func relayRun(args []string) {
 		st = store.NewMemStore()
 	}
 	r := relay.New(st)
+	if *dir != "" && *indexDir != "" {
+		var err error
+		r, err = relay.NewDurable(st, filepath.Join(*indexDir, "pending.json"))
+		if err != nil {
+			log.Fatalf("relay run: cannot open durable index: %v", err)
+		}
+		log.Printf("relay: durable forwarding index at %s (survives restart)", *indexDir)
+	} else if *dir != "" {
+		log.Printf("relay: WARNING — -dir set without -index-dir: the forwarding index is IN-MEMORY ONLY. A restart will orphan any body already accepted but not yet forwarded (it stays on disk under -dir but is never forwarded or reaped again). Pass -index-dir to fix this.")
+	}
 	if dests := strings.Split(strings.TrimSpace(*allowDest), ","); len(dests) > 0 && dests[0] != "" {
 		r.SetAllowedDests(dests)
 		log.Printf("relay: forwarding allowlist: %d destination(s); all others refused", len(dests))
 	} else {
 		log.Printf("relay: WARNING — no -allow-dest configured: ALL forwarding is denied (pushes are refused with 403)")
+	}
+	if *fwdTokens != "" {
+		raw, err := os.ReadFile(*fwdTokens)
+		if err != nil {
+			log.Fatalf("relay run: cannot read -fwd-tokens: %v", err)
+		}
+		tokens := map[string]string{}
+		if err := json.Unmarshal(raw, &tokens); err != nil {
+			log.Fatalf("relay run: malformed -fwd-tokens JSON (want {\"dest-url\": \"token\"}): %v", err)
+		}
+		r.SetForwardTokens(tokens)
+		log.Printf("relay: forward tokens loaded for %d destination(s); pushes to those mailboxes are authenticated", len(tokens))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
