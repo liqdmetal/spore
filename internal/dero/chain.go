@@ -35,9 +35,22 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	return chain.PostResult{TxID: txid}, nil
 }
 
-func entryPayload(e Entry) (chain.Payload, error) {
+// EntryPayload returns the canonical typed payload from payload_rpc, or
+// strictly decodes R153's padded raw data when the wallet did not populate it.
+func EntryPayload(e Entry) (chain.Payload, error) {
 	if len(e.PayloadRPC) > 0 {
-		return ArgsToPayload(e.PayloadRPC)
+		raw, err := ArgsToPayload(e.PayloadRPC)
+		if err == nil {
+			if _, decodeErr := PayloadToArgs(raw); decodeErr == nil {
+				return raw, nil
+			}
+		}
+		if len(e.Data) == 0 {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("dero: transfer %s has invalid payload_rpc", e.TXID)
+		}
 	}
 	if len(e.Data) > 0 {
 		args, err := RawPayloadToArgs(e.Data)
@@ -60,7 +73,7 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 			continue
 		}
 		inc := chain.Incoming{TxID: e.TXID, TopoHeight: e.TopoHeight, ScanHeight: e.Height, Sender: e.Sender, Amount: e.Amount}
-		if raw, err := entryPayload(e); err == nil {
+		if raw, err := EntryPayload(e); err == nil {
 			inc.Payload = raw
 		}
 		out = append(out, inc)

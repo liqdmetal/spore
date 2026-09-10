@@ -482,13 +482,13 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				if e.Height > cursor {
 					cursor = e.Height
 				}
-				args := e.PayloadRPC
-				if len(args) == 0 && len(e.Data) > 0 {
-					var err error
-					args, err = dero.RawPayloadToArgs(e.Data)
-					if err != nil {
-						continue // malformed raw payload — skip
-					}
+				raw, err := dero.EntryPayload(e)
+				if err != nil {
+					continue // malformed or undecodable payload — skip
+				}
+				args, err := dero.PayloadToArgs(raw)
+				if err != nil {
+					continue // malformed typed payload — skip
 				}
 				text, isWhisper := ParseArgs(args)
 				if isWhisper {

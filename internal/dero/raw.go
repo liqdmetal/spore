@@ -38,6 +38,9 @@ func RawPayloadToArgs(data []byte) (anchor.Arguments, error) {
 		if !ok || len(key) < 2 {
 			return nil, fmt.Errorf("dero: invalid raw payload key")
 		}
+		if len(key) > maxPayloadName+1 {
+			return nil, fmt.Errorf("dero: raw payload key too long")
+		}
 		i = next
 		end, ok := cborSkip(data, i, 0)
 		if !ok {

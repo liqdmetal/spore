@@ -527,13 +527,13 @@ func webWhisperRecv(w http.ResponseWriter, r *http.Request, wrc, wlogin string) 
 		if e.TXID == "" {
 			continue
 		}
-		args := e.PayloadRPC
-		if len(args) == 0 && len(e.Data) > 0 {
-			var decodeErr error
-			args, decodeErr = dero.RawPayloadToArgs(e.Data)
-			if decodeErr != nil {
-				continue
-			}
+		raw, decodeErr := dero.EntryPayload(e)
+		if decodeErr != nil {
+			continue
+		}
+		args, decodeErr := dero.PayloadToArgs(raw)
+		if decodeErr != nil {
+			continue
 		}
 		text, ok := whisper.ParseArgs(args)
 		if ok {

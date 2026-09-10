@@ -293,13 +293,13 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				if seen[e.TXID] {
 					continue
 				}
-				args := e.PayloadRPC
-				if len(args) == 0 && len(e.Data) > 0 {
-					var err error
-					args, err = RawPayloadToArgs(e.Data)
-					if err != nil {
-						continue // malformed raw payload — skip
-					}
+				raw, err := EntryPayload(e)
+				if err != nil {
+					continue // malformed or undecodable payload — skip
+				}
+				args, err := PayloadToArgs(raw)
+				if err != nil {
+					continue // malformed typed payload — skip
 				}
 				a, err := anchor.FromArguments(args)
 				if err != nil {

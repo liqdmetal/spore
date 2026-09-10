@@ -54,3 +54,12 @@ func TestRawPayloadAcceptsPaddedData(t *testing.T) {
 		t.Fatalf("padded raw payload: args=%#v err=%v", args, err)
 	}
 }
+
+func TestRawPayloadRejectsOversizedKey(t *testing.T) {
+	key := append([]byte{0x78, byte(maxPayloadName + 2)}, bytes.Repeat([]byte{'X'}, maxPayloadName+2)...)
+	data := append([]byte{0, 0xa1}, key...)
+	data = append(data, 0x01)
+	if _, err := RawPayloadToArgs(data); err == nil {
+		t.Fatal("accepted oversized raw key")
+	}
+}
