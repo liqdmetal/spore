@@ -91,22 +91,34 @@ func (e *DurableEndpoint) expired(id [8]byte) {
 // SendFirst performs the existing X3DH send and durably saves the resulting
 // session only after the frame has been stored successfully.
 func (e *DurableEndpoint) SendFirst(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, error) {
+	p, raw, _, err := e.SendFirstSession(identity, bundle, pinnedSig, plaintext, deadline)
+	return p, raw, err
+}
+
+// SendFirstSession is SendFirst that also reports the new session id.
+//
+// It exists because DurableEndpoint embeds *Endpoint, so calling
+// Endpoint.SendFirstSession directly COMPILES but silently skips the durable
+// save — the session then exists only in memory, and a later reply fails with
+// "unknown session" while the send looked successful. Any caller that needs the
+// id must come through here.
+func (e *DurableEndpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, [8]byte, error) {
 	// The session id comes back from the handshake directly. It used to be
 	// recovered by re-fetching the just-stored frame with a synthesised "now"
 	// of deadline-1ns, which silently failed for any deadline carrying
-	// nanoseconds (i.e. every real CLI call) — see SendFirstSession.
+	// nanoseconds (i.e. every real CLI call) — see Endpoint.SendFirstSession.
 	p, raw, id, err := e.Endpoint.SendFirstSession(identity, bundle, pinnedSig, plaintext, deadline)
 	if err != nil {
-		return Pointer{}, nil, err
+		return Pointer{}, nil, [8]byte{}, err
 	}
 	if id == ([8]byte{}) {
-		return Pointer{}, nil, errors.New("ratchetwire: initial session not installed")
+		return Pointer{}, nil, [8]byte{}, errors.New("ratchetwire: initial session not installed")
 	}
 	if err := e.save(id); err != nil {
 		e.expired(id)
-		return Pointer{}, nil, fmt.Errorf("ratchetwire: persist initial session: %w", err)
+		return Pointer{}, nil, [8]byte{}, fmt.Errorf("ratchetwire: persist initial session: %w", err)
 	}
-	return p, raw, nil
+	return p, raw, id, nil
 }
 
 // SendNext saves state after the body store accepts the continuation.
