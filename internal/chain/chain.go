@@ -43,6 +43,10 @@ type PostResult struct {
 type Incoming struct {
 	TxID       string
 	TopoHeight int64
+	// ScanHeight is the backend's stable query cursor. DERO's get_transfers
+	// min_height filters block height, not topoheight; keeping that cursor
+	// separate prevents a DAG topoheight from skipping entries.
+	ScanHeight uint64
 	Sender     string
 	// Amount is the native transfer value that rode WITH this payload, in
 	// the chain's atomic unit (DERO: 1 DERO = 100000 atomic; EVM: wei).
@@ -130,8 +134,15 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 					if seen[inc.TxID] {
 						continue
 					}
-					if inc.TopoHeight > int64(cursor) {
-						cursor = uint64(inc.TopoHeight)
+					// Prefer a backend-provided query cursor. DERO supplies block
+					// height here because R153 get_transfers min_height is a
+					// block-height filter; other backends can fall back to topo.
+					scan := inc.ScanHeight
+					if scan == 0 && inc.TopoHeight > 0 {
+						scan = uint64(inc.TopoHeight)
+					}
+					if scan > cursor {
+						cursor = scan
 					}
 					seen[inc.TxID] = true
 					select {
