@@ -131,10 +131,11 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 				}
 			} else {
 				for _, inc := range list {
-					if inc.TxID == "" {
+					id := incomingIdentity(inc)
+					if id == "" {
 						continue
 					}
-					if seen[inc.TxID] {
+					if seen[id] {
 						continue
 					}
 					// Prefer a backend-provided query cursor. DERO supplies block
@@ -149,9 +150,7 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 						if scan > cursor {
 							cursor = scan
 						}
-						if inc.TxID != "" {
-							seen[inc.TxID] = true
-						}
+						seen[id] = true
 						// Compost: erase the on-chain copy now that the
 						// caller has it. Best-effort — a burn failure never
 						// re-delivers or blocks; it just leaves the scrap.
