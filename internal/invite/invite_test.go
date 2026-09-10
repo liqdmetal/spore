@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/secure"
 )
@@ -21,8 +22,30 @@ func encodeRaw(raw []byte) string {
 var (
 	// A real, on-chain mainnet address (the same one the payload corpus pins).
 	mainnetAddr = "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"
-	otherAddr   = "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fZ"
+	// otherAddr is a SECOND, fully valid mainnet-format address — version 1,
+	// on-curve x = 2, correct checksum. It must pass ValidateAddress, because
+	// the tamper test has to isolate the SIGNATURE: if this were malformed,
+	// address validation would reject it first and the test would pass for the
+	// wrong reason, hiding whether the signature covers the address at all.
+	// TestOtherAddrIsValid keeps this honest.
+	otherAddr = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4"
 )
+
+// TestOtherAddrIsValid guards the tamper fixture. If otherAddr ever stops being
+// a valid address, TestTamperedAddressIsRejected silently degrades into testing
+// address validation instead of the signature.
+func TestOtherAddrIsValid(t *testing.T) {
+	if mainnetAddr == otherAddr {
+		t.Fatal("the tamper fixture is identical to the control address")
+	}
+	if _, err := dero.ValidateAddress(otherAddr); err != nil {
+		t.Fatalf("tamper fixture is not a valid address (%v) — it would be rejected by "+
+			"address validation before the signature is ever checked", err)
+	}
+	if _, err := dero.ValidateAddress(mainnetAddr); err != nil {
+		t.Fatalf("control address is not valid: %v", err)
+	}
+}
 
 func filled(b byte) []byte {
 	out := make([]byte, 32)
