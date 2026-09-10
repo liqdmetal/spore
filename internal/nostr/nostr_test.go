@@ -3,9 +3,10 @@ package nostr
 import (
 	"context"
 	"encoding/hex"
-	n "github.com/nbd-wtf/go-nostr"
 	"strings"
 	"testing"
+
+	n "github.com/nbd-wtf/go-nostr"
 )
 
 type fakeRelay struct {
