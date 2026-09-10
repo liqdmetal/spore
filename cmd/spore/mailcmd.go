@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/invite"
 	"github.com/liqdmetal/spore/internal/maildb"
 )
 
@@ -60,6 +61,7 @@ func msgMail(args []string) {
 	addr := fs.String("addr", "", "chain address")
 	nick := fs.String("nick", "", "contact nickname")
 	pinned := fs.String("pinned", "", "out-of-band pinned signing public key hex")
+	inviteToken := fs.String("invite", "", "add a contact from a spore invite token (verifies the signature and fills -addr/-nick/-pinned)")
 	phrase := fs.String("phrase", "", "exact case-insensitive phrase to search for")
 	searchPeer := fs.String("peer", "", "scope search to this sender/peer address (exact)")
 	searchThread := fs.String("thread", "", "scope search to this session id hex (exact)")
@@ -82,8 +84,39 @@ func msgMail(args []string) {
 	}
 	switch sub {
 	case "add":
+		// An invite fills the contact fields itself, after verifying that the
+		// signature is valid and the bundle is bound to the pinned key. The
+		// explicit flags remain available for out-of-band pinning without an
+		// invite (the original onboarding path).
+		if *inviteToken != "" {
+			inv, verr := invite.DecodeAndVerify(*inviteToken, time.Now())
+			if verr != nil {
+				fmt.Fprintf(os.Stderr, "mail add: invite rejected: %v\n", verr)
+				os.Exit(2)
+			}
+			if *addr != "" && *addr != inv.Address {
+				fmt.Fprintf(os.Stderr, "mail add: -addr %s conflicts with the invite's address %s\n", *addr, inv.Address)
+				os.Exit(2)
+			}
+			if *pinned != "" && *pinned != inv.PinnedSig {
+				fmt.Fprintln(os.Stderr, "mail add: -pinned conflicts with the invite's pinned key")
+				os.Exit(2)
+			}
+			*addr = inv.Address
+			*pinned = inv.PinnedSig
+			if *nick == "" {
+				*nick = inv.Name
+			}
+			fmt.Printf("invite verified (fingerprint %s)\n", inv.Fingerprint())
+			if inv.PrekeyURL != "" {
+				fmt.Printf("  prekey URL  %s\n", inv.PrekeyURL)
+			}
+			if inv.Name == "" {
+				fmt.Println("  note        the invite carries no name — add one with -nick if you want")
+			}
+		}
 		if *addr == "" {
-			fmt.Fprintln(os.Stderr, "mail add: -addr required")
+			fmt.Fprintln(os.Stderr, "mail add: -addr required (or -invite TOKEN)")
 			os.Exit(2)
 		}
 		if err := db.UpsertContact(maildb.Contact{Address: *addr, Nickname: *nick, Pinned: *pinned}); err != nil {

@@ -114,6 +114,8 @@ func main() {
 		statuscmd(os.Args[2:])
 	case "doctor":
 		doctorcmd(os.Args[2:])
+	case "invite":
+		invitecmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
