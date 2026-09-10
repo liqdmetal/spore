@@ -412,10 +412,10 @@ func msgSendE2(args []string) {
 	// it (see resolveTo in sendE2Core). Requiring it here would defeat the
 	// whole point of the address book.
 	if *to == "" || *identity == "" {
-		check(errors.New("send-e2 requires -to (address, contact nickname, or DeroNS name) and -identity, plus exactly one of -bundle or -bundle-url; plaintext via -msg-file or stdin"))
+		check(errors.New("send-e2 requires -to (address, contact nickname, or DeroNS name) and -identity; bundle comes from -bundle, -bundle-url, or a contact added with `spore msg mail add -invite`; plaintext via -msg-file or stdin"))
 	}
-	if (*bundle == "") == (*bundleURL == "") {
-		check(errors.New("send-e2 requires exactly one of -bundle or -bundle-url, not both and not neither"))
+	if *bundle != "" && *bundleURL != "" {
+		check(errors.New("send-e2: -bundle and -bundle-url are mutually exclusive (omit both to use a contact's invite)"))
 	}
 	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *amount, *ttl); err != nil {
 		check(err)
@@ -461,16 +461,11 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		return err
 	}
 	var b *ratchet.SPKBundle
-	if bundle != "" {
-		b, err = readBundle(bundle)
-		if err != nil {
-			return err
-		}
-	} else {
-		b, err = fetchBundle(context.Background(), bundleURL, bundleToken)
-		if err != nil {
-			return err
-		}
+	contact, haveContact := contactForTo(fs.Lookup("maildb").Value.String(), to)
+	b, err = pickBundle(context.Background(), bundle, bundleURL, bundleToken, contact, haveContact,
+		fetchBundle, func(m string) { fmt.Fprintln(os.Stderr, "send-e2:", m) })
+	if err != nil {
+		return err
 	}
 	sig, err := hex.DecodeString(pinned)
 	if err != nil {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/liqdmetal/spore/internal/ratchet"
 )
 
 // Package maildb is the local, private mail store for a Spore endpoint: the
@@ -28,12 +30,26 @@ var (
 // pinned sig is the out-of-band trust anchor that must match a bundle's
 // SPK_sig (TOFU/key-continuity). Blocked is the hard allowlist: messages
 // from a blocked contact are not accepted.
+//
+// PrekeyURL and Bundle are the two ways to reach this contact's prekey
+// material, both recorded from a signed invite:
+//
+//   - PrekeyURL is a mailbox GET /prekey endpoint. Preferred, because it hands
+//     out a FRESH single-use prekey per sender.
+//   - Bundle is the prekey bundle the invite itself carried, used as a fallback
+//     when the URL is absent or unreachable — so a contact added from an invite
+//     stays messagable even if their mailbox is down.
+//
+// A stored Bundle is only ever a hint: EstablishInitiator still verifies it
+// against Pinned, so a substituted or corrupted stored bundle cannot be used.
 type Contact struct {
-	Address  string `json:"address"`
-	Nickname string `json:"nickname,omitempty"`
-	Pinned   string `json:"pinned_sig,omitempty"`
-	Added    int64  `json:"added"`
-	Blocked  bool   `json:"blocked,omitempty"`
+	Address   string             `json:"address"`
+	Nickname  string             `json:"nickname,omitempty"`
+	Pinned    string             `json:"pinned_sig,omitempty"`
+	PrekeyURL string             `json:"prekey_url,omitempty"`
+	Bundle    *ratchet.SPKBundle `json:"bundle,omitempty"`
+	Added     int64              `json:"added"`
+	Blocked   bool               `json:"blocked,omitempty"`
 }
 
 // Thread is one conversation, keyed by ratchet session id (hex). It holds
@@ -135,7 +151,10 @@ func (m *MailDB) saveLocked() error {
 
 // UpsertContact adds or updates a contact (key = address). It never removes
 // an existing pinned sig unless the caller explicitly sets a new one, so a
-// TOFU change is a visible update, not a silent overwrite.
+// TOFU change is a visible update, not a silent overwrite. The same rule
+// applies to the invite-derived prekey route: re-adding a contact by address
+// alone must not silently drop the PrekeyURL/Bundle it was introduced with,
+// or a later send would fail for a reason the user never caused.
 func (m *MailDB) UpsertContact(c Contact) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -145,8 +164,16 @@ func (m *MailDB) UpsertContact(c Contact) error {
 	if c.Added == 0 {
 		c.Added = time.Now().Unix()
 	}
-	if old, ok := m.contacts[c.Address]; ok && c.Pinned == "" {
-		c.Pinned = old.Pinned
+	if old, ok := m.contacts[c.Address]; ok {
+		if c.Pinned == "" {
+			c.Pinned = old.Pinned
+		}
+		if c.PrekeyURL == "" {
+			c.PrekeyURL = old.PrekeyURL
+		}
+		if c.Bundle == nil {
+			c.Bundle = old.Bundle
+		}
 	}
 	m.contacts[c.Address] = c
 	return m.saveLocked()

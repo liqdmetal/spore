@@ -83,6 +83,26 @@ func resolveTo(ctx context.Context, to, maildbPath, daemonURL string) (addr stri
 	return "", "", fmt.Errorf("cannot resolve %q: not a chain address, not a contact in your maildb (spore msg mail add -addr ADDR -nick %s -pinned SIG), and no -daemon given for DeroNS lookup", to, to)
 }
 
+// contactForTo returns the address-book contact a -to value names, matching by
+// nickname (as resolveTo does) and then by address, so a contact added from an
+// invite is found whether the user types the nickname or the raw address.
+func contactForTo(maildbPath, to string) (maildb.Contact, bool) {
+	if maildbPath == "" {
+		return maildb.Contact{}, false
+	}
+	db, err := maildb.Open(maildbPath)
+	if err != nil {
+		return maildb.Contact{}, false
+	}
+	if c, ok := contactByNickname(db, to); ok {
+		return c, true
+	}
+	if c, ok := db.Contact(strings.TrimSpace(to)); ok {
+		return c, true
+	}
+	return maildb.Contact{}, false
+}
+
 // contactByNickname finds a contact whose nickname matches name
 // case-insensitively. Nicknames are the user's own labels, so matching is
 // exact-after-lowercasing (no fuzzy matching: silently messaging the wrong

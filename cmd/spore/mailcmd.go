@@ -9,6 +9,7 @@ import (
 
 	"github.com/liqdmetal/spore/internal/invite"
 	"github.com/liqdmetal/spore/internal/maildb"
+	"github.com/liqdmetal/spore/internal/ratchet"
 )
 
 // msgMail groups the local mail-store commands (address book + allowlist,
@@ -84,6 +85,12 @@ func msgMail(args []string) {
 	}
 	switch sub {
 	case "add":
+		// Fields supplied by an invite, if one was given. Declared outside the
+		// invite branch so the contact write below can use them in both paths.
+		var (
+			invPrekeyURL string
+			invBundle    *ratchet.SPKBundle
+		)
 		// An invite fills the contact fields itself, after verifying that the
 		// signature is valid and the bundle is bound to the pinned key. The
 		// explicit flags remain available for out-of-band pinning without an
@@ -107,9 +114,18 @@ func msgMail(args []string) {
 			if *nick == "" {
 				*nick = inv.Name
 			}
+			// Record the prekey route so `send-e2 -to <nick>` needs no
+			// -bundle/-bundle-url at all. PrekeyURL is preferred at send time
+			// (fresh single-use prekey); the embedded bundle is the offline
+			// fallback.
+			invPrekeyURL = inv.PrekeyURL
+			invBundle = &inv.Bundle
 			fmt.Printf("invite verified (fingerprint %s)\n", inv.Fingerprint())
 			if inv.PrekeyURL != "" {
 				fmt.Printf("  prekey URL  %s\n", inv.PrekeyURL)
+			}
+			if inv.Bundle.OPKPub != nil {
+				fmt.Println("  prekey      single-use (embedded) — this invite reaches ONE sender")
 			}
 			if inv.Name == "" {
 				fmt.Println("  note        the invite carries no name — add one with -nick if you want")
@@ -119,7 +135,13 @@ func msgMail(args []string) {
 			fmt.Fprintln(os.Stderr, "mail add: -addr required (or -invite TOKEN)")
 			os.Exit(2)
 		}
-		if err := db.UpsertContact(maildb.Contact{Address: *addr, Nickname: *nick, Pinned: *pinned}); err != nil {
+		if err := db.UpsertContact(maildb.Contact{
+			Address:   *addr,
+			Nickname:  *nick,
+			Pinned:    *pinned,
+			PrekeyURL: invPrekeyURL,
+			Bundle:    invBundle,
+		}); err != nil {
 			fmt.Fprintln(os.Stderr, "mail add:", err)
 			os.Exit(2)
 		}
