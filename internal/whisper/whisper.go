@@ -469,15 +469,20 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				errc <- err
 				return
 			}
+			// batchMax commits only after the whole batch has been delivered or
+			// deliberately skipped. Advancing the cursor per-entry before the
+			// delivery attempt (as the old code did) could leave an undelivered
+			// message behind when ctx is cancelled mid-batch: the cursor would
+			// already point past it and a restart would never re-poll it.
+			// DERO R153 get_transfers min_height is a block-height filter;
+			// topoheight is a different DAG coordinate and must not drive it.
+			batchMax := cursor
 			for _, e := range entries {
 				if e.TXID == "" {
 					continue
 				}
-				// DERO R153 get_transfers uses block height for min_height;
-				// topoheight is a different DAG coordinate and must not drive
-				// this cursor.
-				if e.Height > cursor {
-					cursor = e.Height
+				if e.Height > batchMax {
+					batchMax = e.Height
 				}
 				raw, err := dero.EntryPayload(e)
 				if err != nil {
@@ -497,7 +502,7 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
 						seen[id] = true
 					case <-ctx.Done():
-						return
+						return // cursor NOT committed — the batch is re-polled on restart
 					}
 					continue
 				}
@@ -508,11 +513,12 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 						HasPointer: true, EphPub: eph, BodyCID: cid}:
 						seen[id] = true
 					case <-ctx.Done():
-						return
+						return // cursor NOT committed — the batch is re-polled on restart
 					}
 					continue
 				}
 			}
+			cursor = batchMax
 			select {
 			case <-time.After(interval):
 			case <-ctx.Done():
