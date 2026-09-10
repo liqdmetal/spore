@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/anchor"
@@ -35,12 +37,40 @@ type Client struct {
 	http *http.Client
 }
 
+// NormalizeWalletRPCURL completes a wallet RPC endpoint that has no path.
+//
+// The wallet answers "DERO BLOCKCHAIN Hello world!" at its ROOT path, so a
+// bare host:port parses as a JSON error ("invalid character 'D'") and reads as
+// a network or serialization fault rather than a missing path segment. Every
+// endpoint that accepts a wallet URL goes through here so that trap cannot
+// reappear at a call site that forgot about it — which is exactly how it
+// survived in one code path after being fixed in another.
+//
+// A URL that ALREADY carries a path is returned untouched: /json_rpc is the
+// common case, but a wallet behind a reverse proxy may legitimately live at
+// /wallet/json_rpc, and appending to that would break a working deployment.
+func NormalizeWalletRPCURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return s // not a URL we can reason about; pass through unchanged
+	}
+	if u.Path != "" && u.Path != "/" {
+		return s
+	}
+	return strings.TrimSuffix(s, "/") + "/json_rpc"
+}
+
 // NewClient builds a client for a wallet RPC endpoint. url is the full
-// /json_rpc endpoint (e.g. "http://127.0.0.1:20209/json_rpc"). user/pass
+// /json_rpc endpoint (e.g. "http://127.0.0.1:20209/json_rpc"); a bare
+// host:port is accepted and completed, see NormalizeWalletRPCURL. user/pass
 // mirror the wallet's --rpc-login; leave empty if the wallet runs without one.
-func NewClient(url, user, pass string) *Client {
+func NewClient(endpoint, user, pass string) *Client {
 	return &Client{
-		url:  url,
+		url:  NormalizeWalletRPCURL(endpoint),
 		user: user,
 		pass: pass,
 		http: &http.Client{Timeout: 60 * time.Second},

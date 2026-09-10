@@ -58,18 +58,20 @@ func TestLiveDoctorChecksAllPass(t *testing.T) {
 
 // TestNormalizeWalletRPCURL covers the one-segment trap: the wallet answers
 // "DERO BLOCKCHAIN Hello world!" at its root, so a base URL parses as a JSON
-// error and reads as a network fault. Normalizing it makes the endpoint work.
+// error and reads as a network fault.
 func TestNormalizeWalletRPCURL(t *testing.T) {
 	cases := map[string]string{
 		"http://127.0.0.1:20211":             "http://127.0.0.1:20211/json_rpc",
 		"http://127.0.0.1:20211/":            "http://127.0.0.1:20211/json_rpc",
 		"http://127.0.0.1:20211/json_rpc":    "http://127.0.0.1:20211/json_rpc",
 		"  https://node.example.com:20211  ": "https://node.example.com:20211/json_rpc",
-		"":                                   "",
+		// A wallet behind a reverse proxy keeps its own path untouched.
+		"https://node.example.com/wallet/json_rpc": "https://node.example.com/wallet/json_rpc",
+		"": "",
 	}
 	for in, want := range cases {
-		if got := normalizeWalletRPCURL(in); got != want {
-			t.Errorf("normalizeWalletRPCURL(%q) = %q, want %q", in, got, want)
+		if got := dero.NormalizeWalletRPCURL(in); got != want {
+			t.Errorf("NormalizeWalletRPCURL(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

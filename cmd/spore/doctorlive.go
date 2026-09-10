@@ -39,7 +39,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/anchor"
@@ -50,21 +49,6 @@ import (
 	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/store"
 )
-
-// normalizeWalletRPCURL makes a wallet endpoint usable by the JSON-RPC client.
-//
-// The wallet serves "DERO BLOCKCHAIN Hello world!" at its ROOT path, which
-// decodes as a JSON error the moment the client parses it. The RPC handler
-// lives at /json_rpc, so a bare http://host:port is a trap: it looks like a
-// network or parse fault rather than a one-segment path mistake. Appending the
-// path here (and saying so in the check output) turns that into a non-event.
-func normalizeWalletRPCURL(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" || strings.HasSuffix(s, "/json_rpc") {
-		return s
-	}
-	return strings.TrimSuffix(s, "/") + "/json_rpc"
-}
 
 // doctorLiveOpts configures the self-tests. Store and RPC are the networked parts.
 type doctorLiveOpts struct {
@@ -302,7 +286,9 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 			Note: "skipped (pass -rpc http://127.0.0.1:20211/json_rpc to test a wallet)"})
 	} else {
 		u, p := parseLogin(o.RPCLogin)
-		ep := normalizeWalletRPCURL(o.RPC)
+		// Normalization lives in the client now, so this is only for the
+		// message we print. One implementation, every caller covered.
+		ep := dero.NormalizeWalletRPCURL(o.RPC)
 		ctx, cancel := context.WithTimeout(context.Background(), o.Timeout)
 		defer cancel()
 		cl := dero.NewClient(ep, u, p)
