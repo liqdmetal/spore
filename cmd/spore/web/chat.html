@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>compost · channel chat</title>
+<title>spore · channel chat</title>
 <style>
   :root{
     --bg:#0c0f14; --panel:#151a22; --panel2:#1c2330; --line:#2a3342;
@@ -96,11 +96,28 @@
   .contacts{max-height:160px;overflow-y:auto;border-bottom:1px solid var(--line);padding:2px 0}
   .contacts:empty{display:none}
   ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  /* welcome / onboarding */
+  #welcome{flex:1;overflow-y:auto;padding:26px 30px;max-width:900px}
+  #welcome h2{margin:0 0 4px;font-size:20px;color:var(--accent);letter-spacing:.5px}
+  #welcome .lead{margin:0 0 18px;color:var(--muted);font-size:13px}
+  #welcome .wcards{display:flex;gap:14px;flex-wrap:wrap}
+  #welcome .wcard{flex:1 1 300px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px;font-size:12.5px}
+  #welcome .wcard.pub{border-left:3px solid var(--pub)}
+  #welcome .wcard.priv{border-left:3px solid var(--priv)}
+  #welcome .whead{font-weight:700;font-size:13px;margin-bottom:8px;color:var(--fg)}
+  #welcome .wtag{font-weight:400;font-size:10px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1px;margin-left:4px}
+  #welcome p{margin:0 0 9px;color:var(--fg);line-height:1.5}
+  #welcome p.wnote{color:var(--muted);font-size:11.5px;margin-bottom:0}
+  #welcome code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:11.5px}
+  #welcome .wfoot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:20px}
+  #welcome .whint{color:var(--muted);font-size:11.5px;margin-left:auto}
 </style>
 </head>
 <body>
 <div id="rail">
-  <div class="rail-brand">⟁ compost</div>
+  <div class="rail-brand">⟁ spore</div>
   <div class="rail-section">Friends</div>
   <div id="friendsList" class="contacts"></div>
   <div id="addFriendRow" style="display:flex;gap:4px;padding:0 8px 6px">
@@ -128,6 +145,29 @@
     <span id="online">● <span class="u" id="onlineList">connecting…</span></span>
   </div>
   <div id="messages"></div>
+  <div id="welcome" style="display:none">
+    <h2>start here</h2>
+    <p class="lead">Two ways to talk. They have different privacy properties — pick deliberately.</p>
+    <div class="wcards">
+      <div class="wcard pub">
+        <div class="whead">◆ Rooms <span class="wtag">this box</span></div>
+        <p><b>Public room</b> — anyone who can reach this box and guess the name reads it. Fast, no wallet needed, kept in memory/disk and rots on a TTL.</p>
+        <p><b>Private room</b> — every line is AES-GCM encrypted in your browser. The box stores <i>ciphertext only</i>. Share the key out-of-band; whoever lacks it sees <code>🔒 unreadable line</code>.</p>
+      </div>
+      <div class="wcard priv">
+        <div class="whead">◇ Whisper <span class="wtag">on-chain, 1:1</span></div>
+        <p><b>No relay, no box.</b> The message rides a DERO transaction payload straight to the recipient. Nobody in the middle holds it.</p>
+        <p><b>Short</b> — about 90 characters (the on-chain payload budget). Long bodies go through the mailbox instead.</p>
+        <p class="wnote">Sending spends real postage per message from the wallet this box is pointed at.</p>
+      </div>
+    </div>
+    <div class="wfoot">
+      <button class="btn primary" id="wJoinRelay">join #relay</button>
+      <button class="btn ghost" id="wNewRoom">make a private room</button>
+      <button class="btn ghost" id="wSkip">explore on my own</button>
+      <span class="whint">reopen this any time with <b>?</b></span>
+    </div>
+  </div>
   <div id="compose">
     <input id="msg" placeholder="Type a message… (Enter to send)" autocomplete="off">
     <button id="sendbtn">Send</button>
@@ -149,7 +189,7 @@
 
 <script>
 // ---- config ----
-// The box base URL. When this page is served BY the box (compost web) it's
+// The box base URL. When this page is served BY the box (spore web) it's
 // same-origin ""; override here for a remote box.
 const BOX = window.location.origin || "";
 const THEME_COLORS = {"#relay":"#38bdf8","#degen":"#f472b6","#build":"#4ade80","#team":"#a78bfa"};
@@ -159,8 +199,21 @@ const POLL = 2000;              // ms
 const $=id=>document.getElementById(id);
 const esc=s=>s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+// ---- storage (renamed compost.* -> spore.*) ----
+// Keys moved when the product was renamed. READ the old key as a fallback so an
+// existing install keeps its nickname, rooms, and friends; always WRITE the new
+// key. A plain find/replace of the key strings would have silently logged every
+// existing user out of their own room list.
+function lsGet(k,dflt){
+  const v=localStorage.getItem("spore."+k);
+  if(v!==null)return v;
+  const old=localStorage.getItem("compost."+k);
+  return old!==null?old:dflt;
+}
+function lsSet(k,v){try{localStorage.setItem("spore."+k,v);}catch(e){}}
+
 const state = {
-  nick: localStorage.getItem("compost.nick")||"anon"+Math.floor(Math.random()*900+100),
+  nick: lsGet("nick")||"anon"+Math.floor(Math.random()*900+100),
   rooms: new Map(),     // name -> {keyhex|null, cursor}
   active: null,
 };
@@ -267,6 +320,10 @@ window.addEventListener("beforeunload",()=>{try{navigator.sendBeacon(BOX+"/prese
 
 // ---- join / UI ----
 async function join(name,{keyhex=null,switchv=false}={}){
+  // Leave onboarding behind on ANY path into a room, not just the welcome
+  // buttons — clicking a room in the rail has to dismiss it too, or the
+  // welcome panel keeps covering the messages it was opened over.
+  hideWelcome();
   name=(name.startsWith("#")?name:"#"+name).toLowerCase();
   if(!state.rooms.has(name))state.rooms.set(name,{keyhex,cursor:0});
   state.active=name;
@@ -279,7 +336,7 @@ async function join(name,{keyhex=null,switchv=false}={}){
   $("messages").innerHTML="";
   sysText(`joined ${name} as ${state.nick} (${r.keyhex?"private":"public"})`);
   if(r.keyhex)sysText("room is encrypted — messages here are readable only by key holders");
-  localStorage.setItem("compost.nick",state.nick);
+  lsSet("nick",state.nick);
   saveRooms(); // remember this room so it reappears on next load
   // Load full history from 0 on entry so returning to a room re-shows earlier
   // messages. pollHistory advances the cursor to the newest, so the periodic
@@ -300,10 +357,39 @@ async function pollHistory(){
   }
   const m=$("messages");while(m.children.length>MAXBACK)m.removeChild(m.firstChild);
 }
+// ---- onboarding ----
+// Shown when there is nothing to show yet. The empty rail used to say nothing
+// at all: a first-time user got blank lists and an unexplained "Whisper" box.
+// Three things this must convey, in priority order — (1) rooms and whispers
+// have different privacy properties, (2) a public room is readable by anyone
+// who reaches the box, (3) whispers cost real postage. Getting those wrong is
+// how someone says something in the wrong lane.
+function showWelcome(){
+  $("welcome").style.display="block";
+  $("messages").style.display="none";
+  $("compose").style.display="none";
+  $("chName").textContent="—";
+  $("chVis").textContent="";
+  $("chVis").className="vis";
+  $("onlineList").textContent="";
+}
+function hideWelcome(){
+  $("welcome").style.display="none";
+  $("messages").style.display="flex";
+  $("compose").style.display="flex";
+}
+function openWelcome(){ lsSet("onboarded","1"); showWelcome(); }
+$("wJoinRelay").onclick=()=>{hideWelcome();join("#relay");};
+$("wNewRoom").onclick=()=>{hideWelcome();openModal("New room",null);$("vis").value="private";$("mKey").value=genKeyHex();};
+$("wSkip").onclick=()=>{lsSet("onboarded","1");hideWelcome();sysText("pick a room on the left, or add a friend to whisper");};
+document.addEventListener("keydown",e=>{
+  if(e.key==="?"&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))openWelcome();
+});
+
 // restore persisted rooms on load
-const saved=JSON.parse(localStorage.getItem("compost.rooms")||"{}");
+const saved=JSON.parse(lsGet("rooms")||"{}");
 for(const k in saved)state.rooms.set(k,{keyhex:saved[k],cursor:0});
-if(state.rooms.size===0)join("#relay");
+if(state.rooms.size===0)showWelcome();
 else{const first=[...state.rooms.keys()][0];join(first);}
 
 // modal
@@ -323,21 +409,21 @@ $("mGo").onclick=async()=>{
   saveRooms();$("modal").style.display="none";
   await join(name,{keyhex});
 };
-function saveRooms(){const o={};for(const[n,r]of state.rooms)o[n]=r.keyhex||"";localStorage.setItem("compost.rooms",JSON.stringify(o));}
+function saveRooms(){const o={};for(const[n,r]of state.rooms)o[n]=r.keyhex||"";lsSet("rooms",JSON.stringify(o));}
 
 // actions
 $("sendbtn").onclick=send;
 $("msg").addEventListener("keydown",e=>{if(e.key==="Enter")send();});
 // nick edit: double-click brand
-$("rail").querySelector(".rail-brand").onclick=()=>{const n=prompt("nickname:",state.nick);if(n){state.nick=n;localStorage.setItem("compost.nick",n);renderOnline();}};
+$("rail").querySelector(".rail-brand").onclick=()=>{const n=prompt("nickname:",state.nick);if(n){state.nick=n;lsSet("nick",n);renderOnline();}};
 
 // ---- whisper lane (1:1 no-relay, proxied through wallet) ----
 const wseen = new Set();
 const contacts = new Map(); // addr -> {last, ts}
 // friends: addr -> {name} persisted in localStorage
 let friends = loadFriends();
-function loadFriends(){try{return new Map(Object.entries(JSON.parse(localStorage.getItem("compost.friends")||"{}")));}catch(e){return new Map();}}
-function saveFriends(){const o={};for(const[a,f]of friends)o[a]=f.name;localStorage.setItem("compost.friends",JSON.stringify(o));}
+function loadFriends(){try{return new Map(Object.entries(JSON.parse(lsGet("friends")||"{}")));}catch(e){return new Map();}}
+function saveFriends(){const o={};for(const[a,f]of friends)o[a]=f.name;lsSet("friends",JSON.stringify(o));}
 function shortAddr(a){return a&&a.length>18?a.slice(0,10)+"…"+a.slice(-4):a;}
 function pickRecipient(addr){
   $("wTo").value=addr||"";

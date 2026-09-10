@@ -1,4 +1,4 @@
-// Command compost is the CLI for the compostable messenger on DERO.
+// Command spore is the CLI for the compostable messenger on DERO.
 //
 // Subcommands:
 //
@@ -7,7 +7,7 @@
 //	daemon      recipient mailbox: durable inbox + chain scanner + decrypt
 //	send        encrypt a message, push body to recipient inbox, post anchor
 //
-// Model A (mailbox): each endpoint runs its own `compost daemon`. Senders push
+// Model A (mailbox): each endpoint runs its own `spore daemon`. Senders push
 // the encrypted body straight to the recipient's daemon (the inbox); no shared
 // or third-party store ever holds ciphertext for more than one conversation.
 // The daemon keeps bodies on disk, reaps them at TTL, and only decrypts a body
@@ -96,6 +96,8 @@ func main() {
 		mailboxcmd(os.Args[2:])
 	case "panic":
 		paniccmd(os.Args[2:])
+	case "e2-device":
+		e2DeviceCmd(os.Args[2:])
 	case "sign":
 		signcmd(os.Args[2:])
 	case "publish":
@@ -481,10 +483,10 @@ func webchat(args []string) {
 	}))
 	srv := &http.Server{Addr: *listen, Handler: mux}
 	if *cert != "" && *key != "" {
-		log.Printf("compost web chat on https://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
+		log.Printf("spore web chat on https://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
 		log.Fatal(srv.ListenAndServeTLS(*cert, *key))
 	}
-	log.Printf("compost web chat on http://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
+	log.Printf("spore web chat on http://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -660,19 +662,19 @@ func whisperKeygen(args []string) {
 		check(os.WriteFile(*keyFile, []byte(hex.EncodeToString(e.PrivKey())), 0o600))
 		fmt.Printf("wrote persistent long-term privkey to %s\n", *keyFile)
 	}
-	fmt.Printf("give senders this compost long-term pubkey:\n%s\n", hex.EncodeToString(e.PublicKey()))
+	fmt.Printf("give senders this spore long-term pubkey:\n%s\n", hex.EncodeToString(e.PublicKey()))
 }
 
-// whisperSendLong encrypts a long body to the recipient's compost pubkey, holds
+// whisperSendLong encrypts a long body to the recipient's spore pubkey, holds
 // it locally, and posts a pointer-whisper. Body never rides a block. The sender
 // must run `spore-peer serve` so the recipient can fetch the body.
 func whisperSendLong(args []string) {
 	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
 	to := fs.String("to", "", "recipient DERO address or dero-name")
-	recipPubHex := fs.String("recipient-pub", "", "recipient compost long-term pubkey (hex)")
+	recipPubHex := fs.String("recipient-pub", "", "recipient spore long-term pubkey (hex)")
 	file := fs.String("file", "", "file whose contents to send")
 	msg := fs.String("msg", "", "or literal message text (long)")
-	outDir := fs.String("out-dir", "compost-outbox", "dir to hold the outbound body")
+	outDir := fs.String("out-dir", "spore-outbox", "dir to hold the outbound body")
 	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
 	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
 	addRPCFlags(fs)
@@ -750,7 +752,7 @@ func whisperRecv(args []string) {
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	statePath := fs.String("state", "", "file persisting the recv cursor and delivered set across restarts; without it every restart replays the wallet's full history")
 	keyFile := fs.String("key", "", "persistent long-term privkey (hex) to decrypt long bodies")
-	inDir := fs.String("in-dir", "compost-inbox", "dir to hold fetched bodies")
+	inDir := fs.String("in-dir", "spore-inbox", "dir to hold fetched bodies")
 	peerAddr := fs.String("peer-addr", "", "sender's reachable spore-peer serve address host:port (for long bodies)")
 	peerBin := fs.String("peer-bin", "spore-peer", "path to spore-peer binary")
 	addRPCFlags(fs)
