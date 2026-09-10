@@ -77,9 +77,9 @@ func Open(path string) (*MailDB, error) {
 	raw, err := os.ReadFile(path)
 	if err == nil {
 		var data struct {
-			Contacts map[string]Contact    `json:"contacts"`
-			Threads  map[string]Thread     `json:"threads"`
-			Messages []MessageMeta         `json:"messages"`
+			Contacts map[string]Contact `json:"contacts"`
+			Threads  map[string]Thread  `json:"threads"`
+			Messages []MessageMeta      `json:"messages"`
 		}
 		if err := json.Unmarshal(raw, &data); err != nil {
 			return nil, err
@@ -99,9 +99,9 @@ func Open(path string) (*MailDB, error) {
 
 func (m *MailDB) saveLocked() error {
 	data := struct {
-		Contacts map[string]Contact    `json:"contacts"`
-		Threads  map[string]Thread     `json:"threads"`
-		Messages []MessageMeta         `json:"messages"`
+		Contacts map[string]Contact `json:"contacts"`
+		Threads  map[string]Thread  `json:"threads"`
+		Messages []MessageMeta      `json:"messages"`
 	}{m.contacts, m.threads, m.messages}
 	raw, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {

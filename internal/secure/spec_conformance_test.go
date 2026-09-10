@@ -35,11 +35,11 @@ type vectors struct {
 		AeadKey        string `json:"aead_key"`
 	} `json:"derived_keys"`
 	Canonical struct {
-		EncodeTextInput     string `json:"encode_text_input"`
-		EncodeTextHex       string `json:"encode_text_hex"`
-		EncodePointerEphPub string `json:"encode_pointer_eph_pub"`
+		EncodeTextInput      string `json:"encode_text_input"`
+		EncodeTextHex        string `json:"encode_text_hex"`
+		EncodePointerEphPub  string `json:"encode_pointer_eph_pub"`
 		EncodePointerBodyCid string `json:"encode_pointer_body_cid"`
-		EncodePointerHex    string `json:"encode_pointer_hex"`
+		EncodePointerHex     string `json:"encode_pointer_hex"`
 	} `json:"canonical"`
 	EnvelopeV2Text struct {
 		RecipientX25519Pub string `json:"recipient_x25519_pub"`
@@ -54,10 +54,10 @@ type vectors struct {
 		ExpectedPayloadHex string `json:"expected_payload_hex"`
 	} `json:"envelope_v2_pointer"`
 	SporePeerFrame struct {
-		BodyHex           string `json:"body_hex"`
-		ExpectedOkFrame   string `json:"expected_ok_frame"`
-		ExpectedErrText   string `json:"expected_err_text"`
-		ExpectedErrFrame  string `json:"expected_err_frame"`
+		BodyHex          string `json:"body_hex"`
+		ExpectedOkFrame  string `json:"expected_ok_frame"`
+		ExpectedErrText  string `json:"expected_err_text"`
+		ExpectedErrFrame string `json:"expected_err_frame"`
 	} `json:"spore_peer_frame"`
 }
 

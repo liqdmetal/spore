@@ -2,12 +2,12 @@
 // surface spore exposes (audit C1/C2/C3, ROADMAP-PRODUCTION T3 "least
 // exposure"):
 //
-//	- all listeners default to a LOOPBACK bind;
-//	- a NON-loopback bind is refused unless the operator explicitly supplies a
-//	  shared-secret Bearer token — erroring out, not warning, so a home node
-//	  can never come up as an open plaintext archive on a public interface;
-//	- callers additionally log a warning when the surface carries plaintext
-//	  and no TLS is configured.
+//   - all listeners default to a LOOPBACK bind;
+//   - a NON-loopback bind is refused unless the operator explicitly supplies a
+//     shared-secret Bearer token — erroring out, not warning, so a home node
+//     can never come up as an open plaintext archive on a public interface;
+//   - callers additionally log a warning when the surface carries plaintext
+//     and no TLS is configured.
 //
 // Every CLI command that calls ListenAndServe must route its -listen value
 // through CheckBind before serving.

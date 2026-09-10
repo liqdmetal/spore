@@ -58,10 +58,10 @@ type spoolEntry struct {
 	// StoreKey is the PATH to the dedicated nostr body-store signing key
 	// (a path, not the secret — same posture as StateKey). Needed so an
 	// offline-composed message can flush to a nostr:// store.
-	StoreKey        string `json:"store_key,omitempty"`
-	StateDir        string `json:"state_dir"`
-	StateKey        string `json:"state_key"`
-	SessionTTL      string `json:"session_ttl"`
+	StoreKey   string `json:"store_key,omitempty"`
+	StateDir   string `json:"state_dir"`
+	StateKey   string `json:"state_key"`
+	SessionTTL string `json:"session_ttl"`
 
 	// Sig is a keyed HMAC-SHA256 over the canonical JSON of all other
 	// fields, so a local attacker who can write the spool dir cannot
@@ -137,9 +137,9 @@ func msgCompose(args []string) {
 		Address: fs.Lookup("address").Value.String(), ChainID: fs.Lookup("chain-id").Value.String(),
 		PostPath: fs.Lookup("post-path").Value.String(), ListPath: fs.Lookup("list-path").Value.String(),
 		HeightPath: fs.Lookup("height-path").Value.String(), MessageField: fs.Lookup("message-field").Value.String(),
-		RecipientField: fs.Lookup("recipient-field").Value.String(),
+		RecipientField:  fs.Lookup("recipient-field").Value.String(),
 		DeliveryGuarant: fs.Lookup("delivery-guaranteed").Value.String() == "true",
-		PrivateKey: fs.Lookup("private-key").Value.String(), PrivateKeyFile: fs.Lookup("private-key-file").Value.String(),
+		PrivateKey:      fs.Lookup("private-key").Value.String(), PrivateKeyFile: fs.Lookup("private-key-file").Value.String(),
 		Relays: fs.Lookup("relays").Value.String(), Store: fs.Lookup("store").Value.String(),
 		StoreToken: fs.Lookup("store-token").Value.String(), StoreKey: fs.Lookup("store-key").Value.String(),
 		StateDir: fs.Lookup("state-dir").Value.String(), StateKey: fs.Lookup("state-key").Value.String(),

@@ -23,9 +23,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/safehttp"
 	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/session"
-	"github.com/liqdmetal/spore/internal/safehttp"
 )
 
 // doctorCheck is one named pass/fail result.

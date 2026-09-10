@@ -62,11 +62,11 @@ type BoxConfig struct {
 	ReapEvery   time.Duration // reaper cadence
 	MaxLines    int           // per-channel ring cap (0 = unbounded)
 	// DoS caps (0 = default, negative = unlimited):
-	MaxRooms      int   // total number of channels the box will create
-	MaxPresence   int   // presence entries per channel
-	MaxDataLen    int   // bytes per line payload
-	MaxSenderLen  int   // bytes per sender string
-	MaxSaveEvery  time.Duration // min interval between full-state saves (I/O amplification guard)
+	MaxRooms     int           // total number of channels the box will create
+	MaxPresence  int           // presence entries per channel
+	MaxDataLen   int           // bytes per line payload
+	MaxSenderLen int           // bytes per sender string
+	MaxSaveEvery time.Duration // min interval between full-state saves (I/O amplification guard)
 }
 
 // Box is a channel relay server. Thread-safe.
@@ -76,7 +76,7 @@ type Box struct {
 	channels map[string]*room
 	done     chan struct{}
 	stopOnce sync.Once
-	dir      string // optional persistence dir; empty = in-memory only
+	dir      string    // optional persistence dir; empty = in-memory only
 	lastSave time.Time // last full-state save (I/O amplification guard)
 }
 
@@ -283,6 +283,7 @@ func (b *Box) Online(ch string) []string {
 	}
 	return out
 }
+
 // Reap evicts expired lines and stale presence across all rooms.
 func (b *Box) Reap(now time.Time) int {
 	b.mu.Lock()

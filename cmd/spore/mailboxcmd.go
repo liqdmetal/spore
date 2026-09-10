@@ -179,27 +179,27 @@ func mailboxRun(args []string) {
 		if err := serve(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
-	}()		// Reap expired (burned) bodies and trim the message log (rot) in the
-		// background.
-		go func() {
-			t := time.NewTicker(*reap)
-			defer t.Stop()
-			for {
-				select {
-				case <-t.C:
-					if n := m.Reap(time.Now()); n > 0 {
-						log.Printf("mailbox: reaped %d burned body(ies)", n)
-					}
-					if kept, err := m.TrimLog(time.Now()); err != nil {
-						log.Printf("mailbox: log trim: %v", err)
-					} else if c := m.CorruptLogLines(); c > 0 {
-						log.Printf("mailbox: log trim kept %d, skipped %d corrupt line(s)", kept, c)
-					}
-				case <-ctx.Done():
-					return
+	}() // Reap expired (burned) bodies and trim the message log (rot) in the
+	// background.
+	go func() {
+		t := time.NewTicker(*reap)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if n := m.Reap(time.Now()); n > 0 {
+					log.Printf("mailbox: reaped %d burned body(ies)", n)
 				}
+				if kept, err := m.TrimLog(time.Now()); err != nil {
+					log.Printf("mailbox: log trim: %v", err)
+				} else if c := m.CorruptLogLines(); c > 0 {
+					log.Printf("mailbox: log trim kept %d, skipped %d corrupt line(s)", kept, c)
+				}
+			case <-ctx.Done():
+				return
 			}
-		}()
+		}
+	}()
 
 	log.Printf("mailbox: pubkey %s", hex.EncodeToString(m.PublicKey()))
 	log.Printf("mailbox: senders encrypt bodies to that pub; push the body to %s://<this-host>%s/put/<cid>", scheme, *listen)

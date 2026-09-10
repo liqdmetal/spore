@@ -17,9 +17,9 @@ type fakeBurnChain struct {
 	burnErr error
 }
 
-func (f *fakeBurnChain) Name() string { return "fake" }
+func (f *fakeBurnChain) Name() string                                { return "fake" }
 func (f *fakeBurnChain) Address(ctx context.Context) (string, error) { return "self", nil }
-func (f *fakeBurnChain) Height(ctx context.Context) (uint64, error) { return 1, nil }
+func (f *fakeBurnChain) Height(ctx context.Context) (uint64, error)  { return 1, nil }
 func (f *fakeBurnChain) PostPayload(ctx context.Context, to string, p Payload, amount uint64) (PostResult, error) {
 	return PostResult{}, nil
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/liqdmetal/spore/internal/whisper"
 )
 
-func h(b []byte) string  { return hex.EncodeToString(b) }
+func h(b []byte) string     { return hex.EncodeToString(b) }
 func h32(b [32]byte) string { return hex.EncodeToString(b[:]) }
 
 // sporePeerFrameVectors builds authoritative frame vectors: frame = LE32(len)
@@ -111,11 +111,11 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 			"aead_key":         h(key),
 		},
 		"canonical": map[string]string{
-			"encode_text_input": text,
-			"encode_text_hex":   h(textPayload),
-			"encode_pointer_eph_pub":      h32(vEph),
-			"encode_pointer_body_cid":     h32(vCID),
-			"encode_pointer_hex":          h(pointerPayload),
+			"encode_text_input":       text,
+			"encode_text_hex":         h(textPayload),
+			"encode_pointer_eph_pub":  h32(vEph),
+			"encode_pointer_body_cid": h32(vCID),
+			"encode_pointer_hex":      h(pointerPayload),
 		},
 		"envelope_v2_text": map[string]string{
 			"recipient_x25519_pub": h(bobPub),
@@ -128,7 +128,7 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 		},
 		"envelope_v2_pointer": map[string]string{
 			"expected_payload_hex": h(ptrEnv),
-		},		// spore-peer transport frame (4-byte LE length + status-prefixed
+		}, // spore-peer transport frame (4-byte LE length + status-prefixed
 		// payload) — cross-implementation Go<->Rust. Frames computed, not
 		// hardcoded, so the length prefixes are authoritative.
 		"spore_peer_frame": sporePeerFrameVectors(),

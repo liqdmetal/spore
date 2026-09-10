@@ -28,12 +28,12 @@ func TestParseAmountExact(t *testing.T) {
 
 func TestParseAmountRejects(t *testing.T) {
 	bad := []struct{ asset, num string }{
-		{"doge", "1"},        // unknown asset: never guess units
-		{"dero", "0.000001"}, // beyond DERO's 5-decimal precision: reject, don't truncate
-		{"dero", "-1"},       // negative
-		{"dero", "0"},        // zero
-		{"dero", ""},         // empty
-		{"dero", "abc"},      // garbage
+		{"doge", "1"},                       // unknown asset: never guess units
+		{"dero", "0.000001"},                // beyond DERO's 5-decimal precision: reject, don't truncate
+		{"dero", "-1"},                      // negative
+		{"dero", "0"},                       // zero
+		{"dero", ""},                        // empty
+		{"dero", "abc"},                     // garbage
 		{"dero", "99999999999999999999999"}, // uint64 overflow
 	}
 	for _, c := range bad {

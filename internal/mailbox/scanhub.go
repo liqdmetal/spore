@@ -126,9 +126,9 @@ func NewScanHub(ctx context.Context, c chain.Chain, opts chain.WatchOpts) *ScanH
 	opts.AutoBurn = false
 	in, errs := chain.Watch(ctx, c, opts)
 	h := &ScanHub{
-		in:     in,
-		errs:   errs,
-		ch:     c,
+		in:       in,
+		errs:     errs,
+		ch:       c,
 		subs:     map[*Subscription]struct{}{},
 		closed:   make(chan struct{}),
 		loopDone: make(chan struct{}),
@@ -331,9 +331,9 @@ func (h *ScanHub) teardownSubs() {
 // concurrently with the loop ending on its own.
 func (h *ScanHub) Close() {
 	h.closeOnce.Do(func() {
-		close(h.closed)   // tell the loop to stop
-		<-h.loopDone      // wait until it has (no sends can be in flight now)
-		h.teardownSubs()  // then, and only then, tear subscribers down
+		close(h.closed)  // tell the loop to stop
+		<-h.loopDone     // wait until it has (no sends can be in flight now)
+		h.teardownSubs() // then, and only then, tear subscribers down
 	})
 }
 

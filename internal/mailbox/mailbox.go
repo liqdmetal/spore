@@ -51,10 +51,10 @@ type Mailbox struct {
 	prekey   *ratchet.SPKBundle
 	// batch is the queue of single-use PUBLIC prekey bundles (distinct OPKs,
 	// pre-signed offline by the owner). GET /prekey pops one per request.
-	batch   []ratchet.SPKBundle
-	st      store.Store // durable ciphertext store (HTTP-pushed + local bodies)
-	ep       *longmsg.Endpoint
-	log      *MessageLog
+	batch []ratchet.SPKBundle
+	st    store.Store // durable ciphertext store (HTTP-pushed + local bodies)
+	ep    *longmsg.Endpoint
+	log   *MessageLog
 	// logTTL bounds how long decrypted messages persist on disk (rot).
 	logTTL time.Duration
 	// noSenderLog, when set, blanks the Sender field before a message is
