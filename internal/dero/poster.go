@@ -169,6 +169,12 @@ func (c *Client) PostPayloadAmountWithRing(ctx context.Context, recipientAddr st
 	if _, err := ValidateAddress(recipientAddr); err != nil {
 		return "", err
 	}
+	// Check the exact R153 CBOR representation locally. The wallet enforces
+	// PAYLOAD0_LIMIT during transfer; failing before the RPC avoids a
+	// deterministic send rejection after all caller-side validation passed.
+	if _, err := PackArguments(payload); err != nil {
+		return "", err
+	}
 	if amount == 0 {
 		amount = 1 // DERO treats a 0-amount transfer as a ring-member decoy
 	}
