@@ -66,6 +66,10 @@ func (c ChainCarrier) DecodeIncomingE2(inc chain.Incoming) (Pointer, error) {
 // FetchIncomingE2 decodes an incoming chain pointer and fetches the matching
 // authenticated frame. Invalid or legacy payloads are rejected; no fallback
 // body lookup or legacy decode is attempted.
+//
+// On a body-fetch failure the POINTER IS STILL RETURNED: the address is known
+// even when the bytes are not, which is what lets the caller queue a retry.
+// Only an undecodable pointer yields a zero Pointer.
 func (c ChainCarrier) FetchIncomingE2(st BodyStore, inc chain.Incoming, now time.Time) (Frame, Pointer, error) {
 	p, err := c.DecodeIncomingE2(inc)
 	if err != nil {
@@ -73,7 +77,7 @@ func (c ChainCarrier) FetchIncomingE2(st BodyStore, inc chain.Incoming, now time
 	}
 	frame, err := FetchFrame(st, p, now)
 	if err != nil {
-		return Frame{}, Pointer{}, err
+		return Frame{}, p, err
 	}
 	return frame, p, nil
 }

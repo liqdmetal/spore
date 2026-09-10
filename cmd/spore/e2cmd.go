@@ -675,6 +675,17 @@ func msgRecvE2(args []string) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Retry queue. "The body is not retrievable yet" is a NORMAL state on a
+	// chain — the sender may push it moments after the pointer lands, or the
+	// mailbox may be briefly down — so a fetch failure is remembered and
+	// re-attempted instead of throwing the pointer away.
+	//
+	// This cannot recover a message whose POINTER never arrived: no CID was
+	// ever learned, so nothing local can find the body. That case is the loss
+	// ledger below, not this queue.
+	retryQ := ratchetwire.NewRetryQueue(ratchetwire.DefaultRetryQueueCap)
+
 	// Loss reporting. A message whose ciphertext never arrives is only
 	// provably lost once its buffered key is swept past the burn deadline
 	// (forward secrecy deletes it), so Expire performs that sweep and the
@@ -702,6 +713,129 @@ func msgRecvE2(args []string) {
 			fmt.Fprintln(os.Stderr, line)
 		}
 	}
+
+	// handleFrame processes one successfully fetched frame. The live path and
+	// the retry path both call it, so decryption happens in exactly ONE place
+	// — two decrypt paths would be a security surface, not just duplication.
+	handleFrame := func(inc chain.Incoming, frame ratchetwire.Frame, p ratchetwire.Pointer) {
+		var plain []byte
+		var decErr error
+		switch frame.Kind {
+		case ratchetwire.FrameInit:
+			body, bodyErr := ratchetwire.GetBody(st, p, time.Now())
+			if bodyErr != nil {
+				fmt.Fprintln(os.Stderr, "e2 frame:", bodyErr)
+				return
+			}
+			if pool != nil {
+				plain, decErr = ep.ReceiveFirstFromOPKPool(ik, sk, pool, frame, body)
+			} else {
+				plain, decErr = ep.ReceiveFirst(ik, sk, op, frame, body)
+			}
+		case ratchetwire.FrameMessage:
+			// Continuations must use the installed ratchet session. Never
+			// reinterpret them as a fresh handshake (downgrade resistance).
+			plain, decErr = ep.ReceiveNext(p, time.Now())
+		default:
+			decErr = ratchetwire.ErrLegacyDowngrade
+		}
+		if decErr != nil {
+			fmt.Fprintln(os.Stderr, "e2 decrypt:", decErr)
+			return
+		}
+		// Receipts are ratcheted messages like any other: detect the
+		// envelope and surface it as an ack line instead of a message.
+		receiptInReplyTo, receiptStatus, isReceipt := parseReceipt(plain)
+		if isReceipt {
+			fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), receiptStatus, shortTx(receiptInReplyTo))
+			return
+		}
+		// Money envelopes (invoice/payment) ride the session like
+		// receipts: surface them as money lines, not message bodies.
+		if kind, summary, isMoney := parseMoneyEnvelope(plain); isMoney {
+			_ = kind
+			fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
+			return
+		}
+		// Attachments / keep-a-copy mode: write the decrypted body to a
+		// file named by txid instead of printing it.
+		if *outDir != "" {
+			if err := os.WriteFile(filepath.Join(*outDir, shortTx(inc.TxID)+".msg"), plain, 0600); err != nil {
+				fmt.Fprintln(os.Stderr, "e2 out-dir:", err)
+				return
+			}
+			fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
+		} else {
+			fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
+		}
+		// Pay-with-message: surface any native value that rode the
+		// pointer tx. Postage (1 atomic) is noise; anything above it
+		// is money and gets its own line.
+		if inc.Amount > 1 {
+			fmt.Printf("  ↳ received %d atomic units on tx %s\n", inc.Amount, shortTx(inc.TxID))
+		}
+		// Mail-store hook: record into threads + search index. Blocked
+		// senders were already dropped before decryption, so everything
+		// recorded here passed the allowlist.
+		if mdb != nil {
+			if rerr := mdb.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain); rerr != nil {
+				fmt.Fprintln(os.Stderr, "e2 maildb:", rerr)
+			}
+		}
+		// Notify only after local decryption and never include plaintext.
+		// Provider failures are diagnostics; they must not stop receiving.
+		if *ntfy != "" || *notifyEmail != "" || *notifySMS != "" {
+			if nerr := dispatcher.Send(notify.Event{TxID: inc.TxID, Subject: "Spore private message", Received: time.Now()}); nerr != nil {
+				fmt.Fprintln(os.Stderr, "e2 notify:", nerr)
+			}
+		}
+		if *autoAck && frame.SessionID != ([8]byte{}) {
+			// Reply "delivered" on the same session; the sender's recv
+			// side prints it as an ack line. Best-effort: a failed ack
+			// send or post is logged, never fatal.
+			_, raw, ackErr := sendReceipt(ep, frame.SessionID, inc.TxID, "delivered", *ackTTL)
+			if ackErr != nil {
+				fmt.Fprintln(os.Stderr, "e2 ack:", ackErr)
+				return
+			}
+			if _, postErr := c.PostPointer(ctx, inc.Sender, raw, 1); postErr != nil {
+				fmt.Fprintln(os.Stderr, "e2 ack post:", postErr)
+			}
+		}
+	}
+
+	// retryDue re-attempts bodies whose fetch failed earlier. Entries past
+	// their burn deadline are abandoned rather than retried forever: the store
+	// may have reaped the body and the ratchet key may be swept, so they are
+	// confirmed losses.
+	retryDue := func() {
+		now := time.Now()
+		for _, pf := range retryQ.Expired(now) {
+			fmt.Fprintf(os.Stderr, "e2 retry: gave up on %s (deadline passed — message lost)\n", shortTx(pf.TxID))
+		}
+		for _, pf := range retryQ.Due(now) {
+			payload, encErr := c.Codec.EncodePointer(ratchetwire.PointerPayload{
+				Version:      ratchetwire.PointerV1,
+				Route:        pf.Pointer.Route,
+				CID:          pf.Pointer.CID,
+				BurnDeadline: pf.Pointer.BurnDeadline,
+			})
+			if encErr != nil {
+				retryQ.Resolve(pf.Pointer.CID)
+				continue
+			}
+			inc := chain.Incoming{TxID: pf.TxID, Sender: pf.Sender, Payload: payload}
+			frame, p, ferr := c.FetchIncomingE2(st, inc, now)
+			if ferr != nil {
+				retryQ.Record(pf.Pointer.CID, now, ferr)
+				continue
+			}
+			retryQ.Resolve(pf.Pointer.CID)
+			handleFrame(inc, frame, p)
+			reportGaps()
+		}
+	}
+
 	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{MinHeight: *min, Interval: *interval})
 	for {
 		select {
@@ -720,93 +854,21 @@ func msgRecvE2(args []string) {
 			}
 			frame, p, e := c.FetchIncomingE2(st, inc, time.Now())
 			if e != nil {
-				fmt.Fprintln(os.Stderr, "e2 frame:", e)
-				continue
-			}
-			var plain []byte
-			switch frame.Kind {
-			case ratchetwire.FrameInit:
-				body, bodyErr := ratchetwire.GetBody(st, p, time.Now())
-				if bodyErr != nil {
-					fmt.Fprintln(os.Stderr, "e2 frame:", bodyErr)
+				// The pointer is known even when the body is not, so queue a
+				// retry rather than losing the message to a transient miss.
+				if p.CID == ([32]byte{}) {
+					fmt.Fprintln(os.Stderr, "e2 frame:", e)
 					continue
 				}
-				if pool != nil {
-					plain, e = ep.ReceiveFirstFromOPKPool(ik, sk, pool, frame, body)
-				} else {
-					plain, e = ep.ReceiveFirst(ik, sk, op, frame, body)
+				if !retryQ.NoteFetchFailure(p, inc.Sender, inc.TxID, time.Now(), e) {
+					fmt.Fprintf(os.Stderr, "e2 retry: queue full (%d), abandoning %s\n", retryQ.Cap(), shortTx(inc.TxID))
 				}
-			case ratchetwire.FrameMessage:
-				// Continuations must use the installed ratchet session. Never
-				// reinterpret them as a fresh handshake (downgrade resistance).
-				plain, e = ep.ReceiveNext(p, time.Now())
-			default:
-				e = ratchetwire.ErrLegacyDowngrade
-			}
-			if e != nil {
-				fmt.Fprintln(os.Stderr, "e2 decrypt:", e)
 				continue
 			}
-			// Receipts are ratcheted messages like any other: detect the
-			// envelope and surface it as an ack line instead of a message.
-			receiptInReplyTo, receiptStatus, isReceipt := parseReceipt(plain)
-			if isReceipt {
-				fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), receiptStatus, shortTx(receiptInReplyTo))
-				continue
-			}
-			// Money envelopes (invoice/payment) ride the session like
-			// receipts: surface them as money lines, not message bodies.
-			if kind, summary, isMoney := parseMoneyEnvelope(plain); isMoney {
-				_ = kind
-				fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
-				continue
-			}
-			// Attachments / keep-a-copy mode: write the decrypted body to a
-			// file named by txid instead of printing it.
-			if *outDir != "" {
-				if err := os.WriteFile(filepath.Join(*outDir, shortTx(inc.TxID)+".msg"), plain, 0600); err != nil {
-					fmt.Fprintln(os.Stderr, "e2 out-dir:", err)
-					continue
-				}
-				fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
-			} else {
-				fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
-			}
-			// Pay-with-message: surface any native value that rode the
-			// pointer tx. Postage (1 atomic) is noise; anything above it
-			// is money and gets its own line.
-			if inc.Amount > 1 {
-				fmt.Printf("  ↳ received %d atomic units on tx %s\n", inc.Amount, shortTx(inc.TxID))
-			}
-			// Mail-store hook: record into threads + search index. Blocked
-			// senders were already dropped before decryption, so everything
-			// recorded here passed the allowlist.
-			if mdb != nil {
-				if rerr := mdb.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain); rerr != nil {
-					fmt.Fprintln(os.Stderr, "e2 maildb:", rerr)
-				}
-			}
-			// Notify only after local decryption and never include plaintext.
-			// Provider failures are diagnostics; they must not stop receiving.
-			if !isReceipt && (*ntfy != "" || *notifyEmail != "" || *notifySMS != "") {
-				if nerr := dispatcher.Send(notify.Event{TxID: inc.TxID, Subject: "Spore private message", Received: time.Now()}); nerr != nil {
-					fmt.Fprintln(os.Stderr, "e2 notify:", nerr)
-				}
-			}
-			if *autoAck && frame.SessionID != ([8]byte{}) {
-				// Reply "delivered" on the same session; the sender's recv
-				// side prints it as an ack line. Best-effort: a failed ack
-				// send or post is logged, never fatal.
-				_, raw, ackErr := sendReceipt(ep, frame.SessionID, inc.TxID, "delivered", *ackTTL)
-				if ackErr != nil {
-					fmt.Fprintln(os.Stderr, "e2 ack:", ackErr)
-					continue
-				}
-				if _, postErr := c.PostPointer(ctx, inc.Sender, raw, 1); postErr != nil {
-					fmt.Fprintln(os.Stderr, "e2 ack post:", postErr)
-				}
-			}
+			handleFrame(inc, frame, p)
+			reportGaps()
 		case <-gapTick.C:
+			retryDue()
 			reportGaps()
 		case e := <-errs:
 			if e != nil {
