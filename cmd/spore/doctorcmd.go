@@ -112,7 +112,7 @@ func doctorcmd(args []string) {
 	dir := fs.String("dir", "", "data dir to check")
 	listen := fs.String("listen", "127.0.0.1:19191", "bind address to evaluate")
 	timeout := fs.Duration("timeout", 5*time.Second, "chain probe timeout")
-	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet)")
+	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet, wallet receive-readiness)")
 	storeURL := fs.String("store", "", "with -live: mailbox base URL (https://host/u/<name>) for a real store round-trip")
 	storeTok := fs.String("store-token", "", "with -live: bearer token for -store")
 	addChainFlags(fs) // optional -chain/-rpc probe (same flags as `spore status`)
@@ -138,7 +138,13 @@ func doctorcmd(args []string) {
 	// Self-tests: prove this build still decodes what the network sends.
 	if *live {
 		fmt.Println("  --- live self-tests ---")
-		report(runLiveDoctorChecks(doctorLiveOpts{Store: *storeURL, StoreTok: *storeTok, Timeout: *timeout}))
+		report(runLiveDoctorChecks(doctorLiveOpts{
+			Store:    *storeURL,
+			StoreTok: *storeTok,
+			RPC:      fs.Lookup("rpc").Value.String(),
+			RPCLogin: fs.Lookup("rpc-login").Value.String(),
+			Timeout:  *timeout,
+		}))
 	}
 
 	// Optional chain probe (same machinery as `spore status`). Keyed off -rpc,

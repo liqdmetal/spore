@@ -35,9 +35,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/anchor"
@@ -49,10 +51,27 @@ import (
 	"github.com/liqdmetal/spore/internal/store"
 )
 
-// doctorLiveOpts configures the self-tests. Store is the only networked part.
+// normalizeWalletRPCURL makes a wallet endpoint usable by the JSON-RPC client.
+//
+// The wallet serves "DERO BLOCKCHAIN Hello world!" at its ROOT path, which
+// decodes as a JSON error the moment the client parses it. The RPC handler
+// lives at /json_rpc, so a bare http://host:port is a trap: it looks like a
+// network or parse fault rather than a one-segment path mistake. Appending the
+// path here (and saying so in the check output) turns that into a non-event.
+func normalizeWalletRPCURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" || strings.HasSuffix(s, "/json_rpc") {
+		return s
+	}
+	return strings.TrimSuffix(s, "/") + "/json_rpc"
+}
+
+// doctorLiveOpts configures the self-tests. Store and RPC are the networked parts.
 type doctorLiveOpts struct {
 	Store    string // mailbox base URL, e.g. https://host/u/alice ("" = skip)
 	StoreTok string
+	RPC      string // wallet RPC endpoint, e.g. http://127.0.0.1:20211/json_rpc ("" = skip)
+	RPCLogin string // wallet RPC basic auth user:pass
 	Timeout  time.Duration
 }
 
@@ -267,8 +286,45 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 		}
 	}
 
-	// 7. Live store round-trip. The only networked check, and the only one
-	// that proves the hosed mailbox actually accepts and returns a body.
+	// 7. Wallet receive-readiness. A wallet whose transfer history is empty
+	// while its balance is NOT accepts pointers on chain and then reports
+	// nothing, so every inbound message is silently missed. That failure is
+	// invisible to a balance check and invisible to a send test — both look
+	// healthy — which is exactly why it earns an explicit check.
+	//
+	// Measured live (2026-09-10) on a freshly generated R153 wallet: held
+	// 10002 atomic, sent fine, and returned an empty set from get_transfers
+	// for every flag combination, before and after a full rescan. An
+	// established wallet recorded the same inbound transfer immediately, so
+	// the receiving role is what such a wallet cannot do.
+	if o.RPC == "" {
+		out = append(out, doctorCheck{Name: "wallet-recv", OK: true,
+			Note: "skipped (pass -rpc http://127.0.0.1:20211/json_rpc to test a wallet)"})
+	} else {
+		u, p := parseLogin(o.RPCLogin)
+		ep := normalizeWalletRPCURL(o.RPC)
+		ctx, cancel := context.WithTimeout(context.Background(), o.Timeout)
+		defer cancel()
+		cl := dero.NewClient(ep, u, p)
+		ready, hasHistory, bal, err := cl.WalletReceiveReady(ctx)
+		switch {
+		case err != nil:
+			out = append(out, doctorCheck{Name: "wallet-recv", OK: false,
+				Note: fmt.Sprintf("%s: %v — the endpoint must be the /json_rpc PATH and -rpc-login must match the wallet", ep, err)})
+		case !ready:
+			out = append(out, doctorCheck{Name: "wallet-recv", OK: false,
+				Note: fmt.Sprintf("UNUSABLE AS A RECEIVER: balance %d but get_transfers returned NO history — inbound pointers would be silently missed. Receive with an established wallet, or rebuild this one's transfer index", bal)})
+		case !hasHistory:
+			out = append(out, doctorCheck{Name: "wallet-recv", OK: true,
+				Note: "empty wallet (zero balance, no history): fine as a sender, but receiving is UNVERIFIED here — fund it and re-run to confirm it can report inbound transfers"})
+		default:
+			out = append(out, doctorCheck{Name: "wallet-recv", OK: true,
+				Note: fmt.Sprintf("history present (balance %d) — reports inbound transfers", bal)})
+		}
+	}
+
+	// 8. Live store round-trip. The only check that proves the hosed mailbox
+	// actually accepts and returns a body.
 	if o.Store == "" {
 		out = append(out, doctorCheck{Name: "mailbox-put", OK: true,
 			Note: "skipped (pass -store https://host/u/<name> to test a real mailbox)"})

@@ -202,8 +202,17 @@ func (c *Client) PostPayloadAmountWithRing(ctx context.Context, recipientAddr st
 }
 
 // GetTransfersParams mirrors the subset of Get_Transfers_Params we use.
+//
+// In/Out/Coinbase are the wallet's own filters and they INTERACT: from
+// walletapi/wallet.go, an entry is returned only when one of the requested
+// buckets matches it (coinbase, incoming, outgoing). Asking with every bucket
+// false returns nothing at all, which is why the readiness probe below sets
+// them all. Out is omitempty so existing callers that only set In keep sending
+// exactly the bytes they sent before.
 type GetTransfersParams struct {
 	In        bool   `json:"in"`
+	Out       bool   `json:"out,omitempty"`
+	Coinbase  bool   `json:"coinbase,omitempty"`
 	MinHeight uint64 `json:"min_height,omitempty"`
 }
 
@@ -262,6 +271,52 @@ func (c *Client) GetHeight(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	return out.Height, nil
+}
+
+// GetBalance returns the wallet's balance and unlocked balance in atomic units.
+// A wallet can report a non-zero balance while its transfer HISTORY is empty —
+// see WalletReceiveReady, which is the check that catches that combination.
+func (c *Client) GetBalance(ctx context.Context) (balance, unlocked uint64, err error) {
+	var out struct {
+		Balance       uint64 `json:"balance"`
+		Unlocked      uint64 `json:"unlocked_balance"`
+		BalanceString string `json:"balance_string"`
+	}
+	if err := c.call(ctx, "getbalance", nil, &out); err != nil {
+		return 0, 0, err
+	}
+	return out.Balance, out.Unlocked, nil
+}
+
+// WalletReceiveReady reports whether this wallet can report RECEIVED transfers.
+//
+// Some wallets answer get_transfers with an empty set no matter what flags are
+// passed, even while holding a non-zero balance: their transfer index is only
+// populated by a history scan that never ran (a freshly created wallet is the
+// usual case). Such a wallet is a perfectly good SENDER and a useless RECEIVER
+// for anything that discovers messages through transfer history — the pointer
+// is on chain and the funds arrived, but the receiver sees nothing to fetch.
+//
+// The signal is the combination, never either half alone: an empty history with
+// a ZERO balance is just a new wallet (nothing to show), while a non-zero
+// balance with a non-empty history is healthy. Only balance-without-history
+// means "this wallet will silently miss inbound messages".
+//
+// Returned counts are for the caller's message; the error is transport-level
+// only and is never used to infer readiness.
+func (c *Client) WalletReceiveReady(ctx context.Context) (ready, hasHistory bool, balance uint64, err error) {
+	bal, _, berr := c.GetBalance(ctx)
+	if berr != nil {
+		return false, false, 0, berr
+	}
+	// Ask for every bucket the filter accepts, so an empty answer is genuinely
+	// "no history" rather than "the flags excluded it".
+	entries, terr := c.GetTransfers(ctx, GetTransfersParams{In: true, Out: true, Coinbase: true})
+	if terr != nil {
+		return false, false, bal, terr
+	}
+	hasHistory = len(entries) > 0
+	return hasHistory || bal == 0, hasHistory, bal, nil
 }
 
 // AnchorEvent is one anchor observed on-chain addressed to us.

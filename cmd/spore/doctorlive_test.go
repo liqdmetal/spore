@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -20,6 +22,7 @@ var liveCheckNames = []string{
 	"ring-byte",
 	"e2-pointer",
 	"ratchet-echo",
+	"wallet-recv",
 	"mailbox-put",
 }
 
@@ -45,6 +48,80 @@ func TestLiveDoctorChecksAllPass(t *testing.T) {
 	// mailbox-put must be a skip, not a silent pass, when no store is given.
 	if note := got["mailbox-put"].Note; !strings.Contains(note, "skipped") {
 		t.Errorf("mailbox-put without -store should report a skip, got %q", note)
+	}
+	// Same for wallet-recv: no -rpc means the wallet was never examined, and
+	// reporting a bare pass would imply a receive test that did not happen.
+	if note := got["wallet-recv"].Note; !strings.Contains(note, "skipped") {
+		t.Errorf("wallet-recv without -rpc should report a skip, got %q", note)
+	}
+}
+
+// TestNormalizeWalletRPCURL covers the one-segment trap: the wallet answers
+// "DERO BLOCKCHAIN Hello world!" at its root, so a base URL parses as a JSON
+// error and reads as a network fault. Normalizing it makes the endpoint work.
+func TestNormalizeWalletRPCURL(t *testing.T) {
+	cases := map[string]string{
+		"http://127.0.0.1:20211":             "http://127.0.0.1:20211/json_rpc",
+		"http://127.0.0.1:20211/":            "http://127.0.0.1:20211/json_rpc",
+		"http://127.0.0.1:20211/json_rpc":    "http://127.0.0.1:20211/json_rpc",
+		"  https://node.example.com:20211  ": "https://node.example.com:20211/json_rpc",
+		"":                                   "",
+	}
+	for in, want := range cases {
+		if got := normalizeWalletRPCURL(in); got != want {
+			t.Errorf("normalizeWalletRPCURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestLiveDoctorWalletRecvVerdicts drives the check against a real HTTP server
+// standing in for the wallet, so both the failing and passing verdicts are
+// exercised rather than only the skip path (no wallet is running in CI).
+func TestLiveDoctorWalletRecvVerdicts(t *testing.T) {
+	serve := func(balance, transfers string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["method"] == "getbalance" {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"0","result":{"balance":` + balance + `}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"0","result":` + transfers + `}`))
+		}))
+	}
+	findCheck := func(checks []doctorCheck) doctorCheck {
+		for _, c := range checks {
+			if c.Name == "wallet-recv" {
+				return c
+			}
+		}
+		t.Fatal("wallet-recv check missing")
+		return doctorCheck{}
+	}
+
+	// Funded with an empty transfer index: the trap. Must FAIL.
+	bad := serve("10002", `{}`)
+	defer bad.Close()
+	c := findCheck(runLiveDoctorChecks(doctorLiveOpts{RPC: bad.URL, Timeout: 5 * time.Second}))
+	if c.OK {
+		t.Fatalf("funded wallet with no history passed: %s", c.Note)
+	}
+	if !strings.Contains(c.Note, "UNUSABLE AS A RECEIVER") {
+		t.Errorf("failure note should say what is wrong, got %q", c.Note)
+	}
+
+	// Funded with history: healthy. Must PASS.
+	good := serve("10002", `{"entries":[{"height":1,"incoming":true,"txid":"aa"}]}`)
+	defer good.Close()
+	c = findCheck(runLiveDoctorChecks(doctorLiveOpts{RPC: good.URL, Timeout: 5 * time.Second}))
+	if !c.OK {
+		t.Fatalf("healthy wallet failed: %s", c.Note)
+	}
+
+	// Unreachable: must FAIL rather than pass quietly.
+	c = findCheck(runLiveDoctorChecks(doctorLiveOpts{RPC: "http://127.0.0.1:1", Timeout: 2 * time.Second}))
+	if c.OK {
+		t.Fatalf("unreachable wallet passed: %s", c.Note)
 	}
 }
 
