@@ -452,14 +452,30 @@ func RecvChain(ctx context.Context, c chain.Chain, codec Codec, opts chain.Watch
 // Recv polls get_transfers (in:true) for incoming whispers and delivers each as
 // it confirms. Delivered entry identities are deduped so a whisper fires once.
 // Non-whisper incoming transfers are skipped.
-func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval time.Duration) (<-chan Msg, <-chan error) {
+//
+// statePath optionally names a file that persists the scan cursor and the
+// delivered-identity set across restarts, so a restart resumes where the
+// previous run stopped instead of re-delivering the wallet's entire history.
+// An empty statePath keeps the historical in-memory-only behavior.
+func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval time.Duration, statePath string) (<-chan Msg, <-chan error) {
 	ch := make(chan Msg)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(ch)
 		defer close(errc)
+		state, err := LoadRecvState(statePath)
+		if err != nil {
+			errc <- err
+			return
+		}
 		cursor := minHeight
 		seen := map[string]bool{}
+		if state != nil {
+			if state.Cursor > cursor {
+				cursor = state.Cursor
+			}
+			seen = state.seenSet()
+		}
 		for {
 			entries, err := client.GetTransfers(ctx, dero.GetTransfersParams{In: true, MinHeight: cursor})
 			if err != nil {
@@ -501,6 +517,9 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
 						seen[id] = true
+						if state != nil {
+							state.addSeen(id)
+						}
 					case <-ctx.Done():
 						return // cursor NOT committed — the batch is re-polled on restart
 					}
@@ -512,6 +531,9 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender,
 						HasPointer: true, EphPub: eph, BodyCID: cid}:
 						seen[id] = true
+						if state != nil {
+							state.addSeen(id)
+						}
 					case <-ctx.Done():
 						return // cursor NOT committed — the batch is re-polled on restart
 					}
@@ -519,6 +541,13 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				}
 			}
 			cursor = batchMax
+			if state != nil {
+				state.Cursor = cursor
+				if err := SaveRecvState(statePath, state); err != nil {
+					errc <- err
+					return
+				}
+			}
 			select {
 			case <-time.After(interval):
 			case <-ctx.Done():

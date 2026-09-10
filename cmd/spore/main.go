@@ -748,6 +748,7 @@ func resolveDest(ctx context.Context, daemonURL, dest string) (string, error) {
 func whisperRecv(args []string) {
 	fs := flag.NewFlagSet("whisper recv", flag.ExitOnError)
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
+	statePath := fs.String("state", "", "file persisting the recv cursor and delivered set across restarts; without it every restart replays the wallet's full history")
 	keyFile := fs.String("key", "", "persistent long-term privkey (hex) to decrypt long bodies")
 	inDir := fs.String("in-dir", "compost-inbox", "dir to hold fetched bodies")
 	peerAddr := fs.String("peer-addr", "", "sender's reachable spore-peer serve address host:port (for long bodies)")
@@ -758,6 +759,15 @@ func whisperRecv(args []string) {
 	client := makeClient(fs)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	resumeFrom, known := uint64(0), 0
+	if *statePath != "" {
+		if st, err := whisper.LoadRecvState(*statePath); err != nil {
+			check(err)
+		} else if st != nil {
+			resumeFrom, known = st.Cursor, len(st.Seen)
+		}
+	}
 
 	// Build the receiving long-term endpoint (persistent key) so long bodies
 	// can be decrypted.
@@ -781,7 +791,12 @@ func whisperRecv(args []string) {
 	}
 
 	log.Printf("whisper recv: listening for no-relay messages (own node only)")
-	ch, errc := whisper.Recv(ctx, client, 0, *interval)
+	if *statePath != "" {
+		log.Printf("whisper recv: resuming from height %d (%d delivered known)", resumeFrom, known)
+	} else {
+		log.Printf("whisper recv: no -state file — restart will replay the wallet's full history")
+	}
+	ch, errc := whisper.Recv(ctx, client, 0, *interval, *statePath)
 	for {
 		select {
 		case m, ok := <-ch:
