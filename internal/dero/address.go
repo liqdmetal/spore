@@ -29,13 +29,52 @@ func ValidateAddress(input string) (string, error) {
 	if hrp == "dero" && len(raw) != 34 {
 		return "", fmt.Errorf("dero: invalid base address length")
 	}
-	if hrp == "deroi" && len(raw) <= 34 {
-		return "", fmt.Errorf("dero: invalid integrated address length")
+	if hrp == "deroi" {
+		if len(raw) <= 34 {
+			return "", fmt.Errorf("dero: invalid integrated address length")
+		}
+		if err := validateIntegratedArguments(raw[34:]); err != nil {
+			return "", fmt.Errorf("dero: invalid integrated address: %w", err)
+		}
 	}
 	if err := validateCompressedPoint(raw[1:34]); err != nil {
 		return "", fmt.Errorf("dero: invalid destination public key: %w", err)
 	}
 	return addr, nil
+}
+
+// validateIntegratedArguments mirrors R153 rpc.Arguments.UnmarshalBinary for the
+// argument tail that follows the 33-byte key of an integrated (deroi) address:
+// the tail must decode as one CBOR map whose text keys are at least 2 bytes —
+// a 1-byte name plus a 1-byte datatype, exactly as rpc.MarshalBinary writes them.
+//
+// Without this check the address validator was more permissive than the wallet.
+// Measured against a live R153 wallet, split_integrated_address refuses a
+// valid-checksum deroi address whose tail is not decodable arguments
+// ("Invalid encoding for key 'D'", or "cbor: unexpected break code"), while
+// this validator accepted it — so a bad destination passed every local check and
+// only failed once the send reached the wallet.
+func validateIntegratedArguments(tail []byte) error {
+	count, i, err := cborContainerLen(tail, 0, 5) // major type 5 = CBOR map
+	if err != nil {
+		return fmt.Errorf("arguments are not a CBOR map: %w", err)
+	}
+	if count > maxRawMapPairs {
+		return fmt.Errorf("too many arguments")
+	}
+	for n := uint64(0); n < count; n++ {
+		key, next, ok := cborText(tail, i)
+		if !ok || len(key) < 2 {
+			return fmt.Errorf("argument key must be a name plus datatype")
+		}
+		i = next
+		next, ok = cborSkip(tail, i, 0)
+		if !ok {
+			return fmt.Errorf("argument value is malformed")
+		}
+		i = next
+	}
+	return nil
 }
 
 // bn256FieldPrime is the BN256 base-field modulus p = 36u⁴+36u³+24u²+6u+1
