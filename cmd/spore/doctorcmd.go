@@ -112,23 +112,39 @@ func doctorcmd(args []string) {
 	dir := fs.String("dir", "", "data dir to check")
 	listen := fs.String("listen", "127.0.0.1:19191", "bind address to evaluate")
 	timeout := fs.Duration("timeout", 5*time.Second, "chain probe timeout")
+	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet)")
+	storeURL := fs.String("store", "", "with -live: mailbox base URL (https://host/u/<name>) for a real store round-trip")
+	storeTok := fs.String("store-token", "", "with -live: bearer token for -store")
 	addChainFlags(fs) // optional -chain/-rpc probe (same flags as `spore status`)
 	_ = fs.Parse(args)
 
 	fmt.Println("spore doctor")
 	fmt.Println("---------------")
 	failed := 0
-	for _, c := range runDoctorChecks(doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen}) {
-		mark := "✅"
-		if !c.OK {
-			mark = "❌"
-			failed++
+
+	report := func(checks []doctorCheck) {
+		for _, c := range checks {
+			mark := "✅"
+			if !c.OK {
+				mark = "❌"
+				failed++
+			}
+			fmt.Printf("  %s %-13s %s\n", mark, c.Name, c.Note)
 		}
-		fmt.Printf("  %s %-10s %s\n", mark, c.Name, c.Note)
 	}
 
-	// Optional chain probe (same machinery as `spore status`).
-	if fs.Lookup("chain").Value.String() != "" {
+	report(runDoctorChecks(doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen}))
+
+	// Self-tests: prove this build still decodes what the network sends.
+	if *live {
+		fmt.Println("  --- live self-tests ---")
+		report(runLiveDoctorChecks(doctorLiveOpts{Store: *storeURL, StoreTok: *storeTok, Timeout: *timeout}))
+	}
+
+	// Optional chain probe (same machinery as `spore status`). Keyed off -rpc,
+	// not -chain: -chain defaults to "dero", so testing it would fire the probe
+	// on every plain `spore doctor` and fail for lack of an endpoint.
+	if fs.Lookup("rpc").Value.String() != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		defer cancel()
 		c := msgBackend(fs)
@@ -139,9 +155,9 @@ func doctorcmd(args []string) {
 			failed++
 		}
 		if p.ok {
-			fmt.Printf("  %s %-10s ok  addr=%s height=%d\n", mark, p.name, truncMid(p.address, 22), p.height)
+			fmt.Printf("  %s %-13s ok  addr=%s height=%d\n", mark, p.name, truncMid(p.address, 22), p.height)
 		} else {
-			fmt.Printf("  %s %-10s %s\n", mark, p.name, p.detail)
+			fmt.Printf("  %s %-13s %s\n", mark, p.name, p.detail)
 		}
 	}
 
