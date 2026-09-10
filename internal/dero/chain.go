@@ -46,10 +46,8 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 			continue
 		}
 		inc := chain.Incoming{TxID: e.TXID, TopoHeight: e.TopoHeight, ScanHeight: e.Height, Sender: e.Sender, Amount: e.Amount}
-		if len(e.PayloadRPC) > 0 {
-			if raw, err := ArgsToPayload(e.PayloadRPC); err == nil {
-				inc.Payload = raw
-			}
+		if raw, err := entryPayload(e); err == nil {
+			inc.Payload = raw
 		}
 		out = append(out, inc)
 	}

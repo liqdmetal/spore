@@ -111,6 +111,9 @@ func packValue(arg anchor.Argument) (interface{}, error) {
 		if !ok || len(v) != 33 {
 			return nil, fmt.Errorf("dero: %s must be a 33-byte compressed address key", arg.Name)
 		}
+		if err := validateCompressedPoint(v); err != nil {
+			return nil, fmt.Errorf("dero: %s invalid compressed address key: %w", arg.Name, err)
+		}
 		return v, nil
 	case anchor.DataTime:
 		v, ok := arg.Value.(time.Time)

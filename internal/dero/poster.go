@@ -293,7 +293,15 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				if seen[e.TXID] {
 					continue
 				}
-				a, err := anchor.FromArguments(e.PayloadRPC)
+				args := e.PayloadRPC
+				if len(args) == 0 && len(e.Data) > 0 {
+					var err error
+					args, err = RawPayloadToArgs(e.Data)
+					if err != nil {
+						continue // malformed raw payload — skip
+					}
+				}
+				a, err := anchor.FromArguments(args)
 				if err != nil {
 					continue // not a compost anchor (or malformed) — skip
 				}

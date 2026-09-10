@@ -2,6 +2,7 @@ package dero
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -31,7 +32,63 @@ func ValidateAddress(input string) (string, error) {
 	if hrp == "deroi" && len(raw) <= 34 {
 		return "", fmt.Errorf("dero: invalid integrated address length")
 	}
+	if err := validateCompressedPoint(raw[1:34]); err != nil {
+		return "", fmt.Errorf("dero: invalid destination public key: %w", err)
+	}
 	return addr, nil
+}
+
+// bn256FieldPrime is the BN256 base-field modulus p = 36u⁴+36u³+24u²+6u+1
+// (derohe cryptography/bn256/constants.go, bn256.P).
+//
+// This is NOT the group order. The two are close but distinct:
+//
+//	P     = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47
+//	Order = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+//
+// Field arithmetic must use P. Substituting Order still compiles and still
+// rejects garbage most of the time, but it tests quadratic residuosity in the
+// wrong field, so it false-rejects roughly half of all genuinely valid
+// destinations. Keep the real-mainnet-address test in address_test.go as the
+// guard: a wrong modulus does not fail loudly on its own.
+const bn256FieldPrime = "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47"
+
+// bn256CurveB is the curve constant b in y² = x³ + b
+// (derohe cryptography/bn256/changes.go: const B = 3).
+const bn256CurveB = 3
+
+// validateCompressedPoint mirrors derohe's bn256 xToY / G1.DecodeCompressed
+// decompression check without importing the DERO implementation.
+//
+// The compressed form is a 32-byte big-endian x coordinate followed by a
+// one-byte y selector. bn256.G1.Compress only ever emits 0x00 or 0x01, so any
+// other value is rejected here as non-canonical (DERO's own decoder is more
+// permissive and would fall through to a default root).
+func validateCompressedPoint(encoded []byte) error {
+	if len(encoded) != 33 {
+		return fmt.Errorf("compressed point must be 33 bytes")
+	}
+	if encoded[32] != 0 && encoded[32] != 1 {
+		return fmt.Errorf("invalid y selector")
+	}
+	x := new(big.Int).SetBytes(encoded[:32])
+	modulus, ok := new(big.Int).SetString(bn256FieldPrime, 16)
+	if !ok {
+		return fmt.Errorf("invalid field modulus")
+	}
+	if x.Cmp(modulus) >= 0 {
+		return fmt.Errorf("x coordinate out of range")
+	}
+	// xToY: t = x³ + B. The point decompresses iff t is a quadratic residue
+	// mod p, i.e. ModSqrt has a solution.
+	rhs := new(big.Int).Mul(x, x)
+	rhs.Mul(rhs, x)
+	rhs.Add(rhs, big.NewInt(bn256CurveB))
+	rhs.Mod(rhs, modulus)
+	if new(big.Int).ModSqrt(rhs, modulus) == nil {
+		return fmt.Errorf("point is not on curve")
+	}
+	return nil
 }
 
 const deroBech32Charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"

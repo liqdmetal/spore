@@ -524,9 +524,18 @@ func webWhisperRecv(w http.ResponseWriter, r *http.Request, wrc, wlogin string) 
 	}
 	var out []wm
 	for _, e := range entries {
-		text, ok := whisper.ParseArgs(e.PayloadRPC)
-		// R153 typed payloads are decoded only from payload_rpc; raw padded
-		// Entry.Data is not reinterpreted as an application message.
+		if e.TXID == "" {
+			continue
+		}
+		args := e.PayloadRPC
+		if len(args) == 0 && len(e.Data) > 0 {
+			var decodeErr error
+			args, decodeErr = dero.RawPayloadToArgs(e.Data)
+			if decodeErr != nil {
+				continue
+			}
+		}
+		text, ok := whisper.ParseArgs(args)
 		if ok {
 			out = append(out, wm{Txid: e.TXID, Sender: e.Sender, Text: text})
 		}

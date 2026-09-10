@@ -17,6 +17,16 @@ func RawPayloadToArgs(data []byte) (anchor.Arguments, error) {
 	if len(data) < 2 || len(data) > maxRawPayloadBytes {
 		return nil, fmt.Errorf("dero: invalid raw payload length %d", len(data))
 	}
+	// data[0] is DERO's reserved ring-position byte. transaction.go:
+	// "1 byte has been reserved for sender position in ring representation in
+	// a byte, uptp 256 ring" — and transaction_build.go writes
+	// byte(witness_index[1]) into it from a randomly shuffled ring, so EVERY
+	// byte value 0x00-0xff is a legitimate position.
+	//
+	// It is deliberately NOT range-checked. Any bound here silently drops real
+	// messages (a `> 127` bound discards roughly half of large-ring traffic).
+	// What actually keeps non-payload data out of this fallback is that the
+	// CBOR map must parse at offset 1 and every typed argument must validate.
 	count, i, err := cborContainerLen(data, 1, 5)
 	if err != nil || count > maxRawMapPairs {
 		return nil, fmt.Errorf("dero: invalid raw payload map")

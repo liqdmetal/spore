@@ -482,9 +482,15 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				if e.Height > cursor {
 					cursor = e.Height
 				}
-				text, isWhisper := ParseArgs(e.PayloadRPC)
-				// Only payload_rpc is accepted on the R153 receive path. Raw
-				// padded Entry.Data is intentionally not reinterpreted here.
+				args := e.PayloadRPC
+				if len(args) == 0 && len(e.Data) > 0 {
+					var err error
+					args, err = dero.RawPayloadToArgs(e.Data)
+					if err != nil {
+						continue // malformed raw payload — skip
+					}
+				}
+				text, isWhisper := ParseArgs(args)
 				if isWhisper {
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
@@ -496,7 +502,7 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					}
 					continue
 				}
-				eph, cid, isPtr := ParsePointer(e.PayloadRPC)
+				eph, cid, isPtr := ParsePointer(args)
 				if isPtr {
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender,
