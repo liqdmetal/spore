@@ -675,6 +675,33 @@ func msgRecvE2(args []string) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// Loss reporting. A message whose ciphertext never arrives is only
+	// provably lost once its buffered key is swept past the burn deadline
+	// (forward secrecy deletes it), so Expire performs that sweep and the
+	// resulting picture is reported whenever it changes. This keeps a
+	// conversation with holes from being silently presented as complete.
+	gapTick := time.NewTicker(*interval)
+	defer gapTick.Stop()
+	lastGapNote := ""
+	reportGaps := func() {
+		ep.Expire(time.Now())
+		r := ep.Gaps()
+		if r.Empty() {
+			if lastGapNote != "" {
+				lastGapNote = ""
+				fmt.Fprintln(os.Stderr, "e2 gaps: none — every message accounted for")
+			}
+			return
+		}
+		note := fmt.Sprintf("%d/%d", len(r.Pending), r.LostTotal)
+		if note == lastGapNote {
+			return
+		}
+		lastGapNote = note
+		for _, line := range gapReportLines(r) {
+			fmt.Fprintln(os.Stderr, line)
+		}
+	}
 	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{MinHeight: *min, Interval: *interval})
 	for {
 		select {
@@ -779,6 +806,8 @@ func msgRecvE2(args []string) {
 					fmt.Fprintln(os.Stderr, "e2 ack post:", postErr)
 				}
 			}
+		case <-gapTick.C:
+			reportGaps()
 		case e := <-errs:
 			if e != nil {
 				fmt.Fprintln(os.Stderr, "e2 watch:", e)

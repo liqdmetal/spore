@@ -3,6 +3,7 @@ package ratchetwire
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/ratchet"
@@ -16,6 +17,13 @@ type DurableEndpoint struct {
 	states *FileStateStore
 	// SessionExpiry is an inactivity TTL. Zero disables session expiry.
 	SessionExpiry time.Duration
+
+	// lossMu guards the confirmed-loss ledger. It is a leaf lock: taken only
+	// after Sessions' own lock has been released, never held across it.
+	lossMu    sync.Mutex
+	lostTotal uint64
+	lostTrunc bool
+	lostGaps  []MessageGap
 }
 
 // NewDurableEndpoint opens the endpoint-local state directory and restores all
@@ -187,11 +195,19 @@ func (e *DurableEndpoint) ReceiveNext(p Pointer, now time.Time) ([]byte, error) 
 // SessionExpiry is configured, erases sessions that have been inactive for the
 // configured duration. Erasure removes both live key material and its protected
 // durable record.
+//
+// Every swept skipped key is a CONFIRMED LOSS — a message whose ciphertext
+// never arrived and whose key is now gone — and is recorded in the endpoint's
+// loss ledger (see Gaps).
 func (e *DurableEndpoint) Expire(now time.Time) int {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	removed := e.Sessions.Sweep(now)
+	lost := e.Sessions.SweepGaps(now)
+	if len(lost) > 0 {
+		e.noteLost(lost)
+	}
+	removed := len(lost)
 	if e.SessionExpiry <= 0 {
 		return removed
 	}

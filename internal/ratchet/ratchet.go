@@ -594,27 +594,10 @@ func chainID(dhPub [32]byte) string { return hex.EncodeToString(dhPub[:]) }
 // (docs/RATCHET.md §5/§7: call from the Reap/Trim loop). Returns how many
 // keys died. Zero-deadline keys never expire here — they are bounded by the
 // hard caps instead.
+//
+// Each dropped key is a confirmed loss; SweepSkippedDetailed reports which.
 func (s *Session) SweepSkipped(now time.Time) int {
-	dropped := 0
-	for id, sk := range s.skipped {
-		if !sk.Deadline.IsZero() && sk.Deadline.Before(now) {
-			delete(s.skipped, id)
-			dropped++
-		}
-	}
-	if dropped == 0 {
-		return 0
-	}
-	// Recompute per-chain counters from what survived.
-	s.skippedPerChain = map[string]int{}
-	for id := range s.skipped {
-		raw, err := hex.DecodeString(id)
-		if err != nil || len(raw) < 32 {
-			continue
-		}
-		s.skippedPerChain[hex.EncodeToString(raw[:32])]++
-	}
-	return dropped
+	return len(s.SweepSkippedDetailed(now))
 }
 
 // Erase wipes all key material (conversation delete, §7: finally the
