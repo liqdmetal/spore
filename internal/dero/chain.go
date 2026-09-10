@@ -63,16 +63,18 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 	}
 	out := make([]chain.Incoming, 0, len(entries))
 	for _, e := range entries {
-		inc := chain.Incoming{TxID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Amount: e.Amount}
+		// R153's get_transfers min_height is a block-height cursor. Do not
+		// advance the generic watcher by topoheight: DAG topoheight can jump
+		// past later entries that share a block height.
+		inc := chain.Incoming{TxID: e.TXID, TopoHeight: e.TopoHeight, ScanHeight: e.Height, Sender: e.Sender, Amount: e.Amount}
 		if len(e.PayloadRPC) > 0 {
 			if raw, err := ArgsToPayload(e.PayloadRPC); err == nil {
 				inc.Payload = raw
-			} else if len(e.Data) > 0 {
-				inc.Payload = e.Data
 			}
-		} else if len(e.Data) > 0 {
-			inc.Payload = e.Data
 		}
+		// Do not reinterpret Entry.Data as typed payload here. The generic
+		// backend path is deliberately payload_rpc-only; raw padded data is
+		// rejected unless the caller explicitly uses the legacy parser.
 		out = append(out, inc)
 	}
 	return out, nil
@@ -100,8 +102,17 @@ func PayloadToArgs(p chain.Payload) (anchor.Arguments, error) {
 	if err := json.Unmarshal(p, &env); err != nil {
 		return nil, fmt.Errorf("dero: bad payload envelope: %w", err)
 	}
+	if len(env.Args) == 0 {
+		return nil, fmt.Errorf("dero: empty payload envelope")
+	}
 	out := make(anchor.Arguments, 0, len(env.Args))
 	for _, a := range env.Args {
+		if a.N == "" {
+			return nil, fmt.Errorf("dero: empty argument name")
+		}
+		if !validDataType(a.T) {
+			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.T)
+		}
 		arg := anchor.Argument{Name: a.N, DataType: a.T}
 		if a.T == anchor.DataUint64 {
 			n, err := strconv.ParseUint(strings.TrimSpace(a.V), 10, 64)
@@ -145,7 +156,7 @@ func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
 			ja.T = anchor.DataUint64
 			ja.V = strconv.FormatUint(uint64(v), 10)
 		case float64:
-			if v < 0 || v != float64(uint64(v)) {
+			if v < 0 || v >= 18446744073709551616.0 || v != float64(uint64(v)) {
 				return nil, fmt.Errorf("dero: invalid uint argument %s", a.Name)
 			}
 			ja.T = anchor.DataUint64

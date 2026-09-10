@@ -29,6 +29,7 @@ require (
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/fatih/color v1.9.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/gagliardetto/binary v0.8.0 // indirect
 	github.com/gagliardetto/treeout v0.1.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -52,6 +53,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	go.mongodb.org/mongo-driver v1.11.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect

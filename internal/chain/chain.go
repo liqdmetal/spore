@@ -131,22 +131,24 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 				}
 			} else {
 				for _, inc := range list {
-					if seen[inc.TxID] {
+					if inc.TxID != "" && seen[inc.TxID] {
 						continue
 					}
 					// Prefer a backend-provided query cursor. DERO supplies block
 					// height here because R153 get_transfers min_height is a
 					// block-height filter; other backends can fall back to topo.
-					scan := inc.ScanHeight
-					if scan == 0 && inc.TopoHeight > 0 {
-						scan = uint64(inc.TopoHeight)
-					}
-					if scan > cursor {
-						cursor = scan
-					}
-					seen[inc.TxID] = true
 					select {
 					case out <- inc:
+						scan := inc.ScanHeight
+						if scan == 0 && inc.TopoHeight > 0 {
+							scan = uint64(inc.TopoHeight)
+						}
+						if scan > cursor {
+							cursor = scan
+						}
+						if inc.TxID != "" {
+							seen[inc.TxID] = true
+						}
 						// Compost: erase the on-chain copy now that the
 						// caller has it. Best-effort — a burn failure never
 						// re-delivers or blocks; it just leaves the scrap.

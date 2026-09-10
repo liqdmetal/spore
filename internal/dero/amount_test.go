@@ -24,7 +24,7 @@ func TestPostPayloadAmountAttachesValue(t *testing.T) {
 
 	c := NewClient(srv.URL, "", "")
 	args := anchor.Arguments{{Name: "W", DataType: anchor.DataUint64, Value: uint64(0xE220)}}
-	txid, err := c.PostPayloadAmount(context.Background(), "dero1payee", args, 550000) // 5.5 DERO
+	txid, err := c.PostPayloadAmount(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", args, 550000) // 5.5 DERO
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestPostPayloadAmountAttachesValue(t *testing.T) {
 	if tr["amount"].(float64) != 550000 {
 		t.Fatalf("amount = %v, want 550000 (5.5 DERO attached to the message tx)", tr["amount"])
 	}
-	if tr["destination"].(string) != "dero1payee" {
+	if tr["destination"].(string) != "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq" {
 		t.Fatalf("destination = %v", tr["destination"])
 	}
 	if _, ok := tr["payload_rpc"]; !ok {
@@ -51,8 +51,8 @@ func TestListIncomingSurfacesAmount(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"0","result":{"entries":[
-			{"topoheight":42,"incoming":true,"txid":"tx1","sender":"dero1sender","amount":550000},
-			{"topoheight":43,"incoming":true,"txid":"tx2","sender":"dero1sender2","amount":1}
+			{"height":42,"topoheight":7594414,"incoming":true,"txid":"tx1","sender":"dero1sender","amount":550000},
+			{"height":43,"topoheight":7594415,"incoming":true,"txid":"tx2","sender":"dero1sender2","amount":1}
 		]}}`))
 	}))
 	defer srv.Close()

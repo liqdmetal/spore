@@ -28,7 +28,7 @@ func TestPostAnchorWireShape(t *testing.T) {
 
 	c := NewClient(srv.URL, "", "")
 	a := &anchor.Anchor{Version: anchor.Version, Kind: anchor.KindMessage, BurnDeadline: 12345}
-	txid, err := c.PostAnchor(context.Background(), "dero1abc", a, 0)
+	txid, err := c.PostAnchor(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", a, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,24 +55,31 @@ func TestPostAnchorWireShape(t *testing.T) {
 	if tr["amount"].(float64) != 1 {
 		t.Fatalf("amount = %v, want 1 (minimum postage; 0 never surfaces to recipient)", tr["amount"])
 	}
-	if tr["destination"].(string) != "dero1abc" {
+	if tr["destination"].(string) != "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq" {
 		t.Fatalf("destination = %v", tr["destination"])
 	}
-	// ringsize defaults to 2.
-	if params["ringsize"].(float64) != 2 {
-		t.Fatalf("ringsize = %v, want 2", params["ringsize"])
+	// ringsize=0 delegates to the wallet's configured R153 default.
+	if params["ringsize"].(float64) != 0 {
+		t.Fatalf("ringsize = %v, want 0 (wallet default)", params["ringsize"])
 	}
 	prpc, ok := tr["payload_rpc"].([]interface{})
 	if !ok || len(prpc) != 4 {
 		t.Fatalf("payload_rpc len = %d", len(prpc))
 	}
-	first := prpc[0].(map[string]interface{})
-	if first["name"].(string) != "K" || first["datatype"].(string) != "H" {
-		t.Fatalf("first arg = %v", first)
+	seen := map[string]bool{}
+	for _, raw := range prpc {
+		arg := raw.(map[string]interface{})
+		name, _ := arg["name"].(string)
+		typ, _ := arg["datatype"].(string)
+		seen[name] = true
+		if (name == "K" || name == "C") && (typ != "H" || len(arg["value"].(string)) != 64) {
+			t.Fatalf("hash arg = %v", arg)
+		}
 	}
-	// K and C values must be 64-char hex strings.
-	if len(first["value"].(string)) != 64 {
-		t.Fatalf("K value not 64-char hex: %v", first["value"])
+	for _, name := range []string{"K", "C", "D", "F"} {
+		if !seen[name] {
+			t.Fatalf("missing payload arg %s", name)
+		}
 	}
 }
 
@@ -115,6 +122,16 @@ func TestGetTransfersParse(t *testing.T) {
 	}
 	if a.Version != anchor.Version {
 		t.Fatalf("version = %d", a.Version)
+	}
+}
+
+func TestPostPayloadAmountWithRingValidatesR153Ring(t *testing.T) {
+	c := NewClient("http://127.0.0.1:1", "", "")
+	args := anchor.Arguments{{Name: "W", DataType: anchor.DataUint64, Value: uint64(1)}}
+	for _, ring := range []uint64{1, 3, 129} {
+		if _, err := c.PostPayloadAmountWithRing(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", args, 1, ring); err == nil {
+			t.Fatalf("ringsize %d was accepted", ring)
+		}
 	}
 }
 

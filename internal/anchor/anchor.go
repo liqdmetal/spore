@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -128,8 +129,8 @@ func FromArguments(args Arguments) (*Anchor, error) {
 			have["F"] = true
 		}
 	}
-	if !have["K"] || !have["C"] {
-		return nil, errors.New("anchor: missing K or C field (not a compost anchor)")
+	if !have["K"] || !have["C"] || !have["D"] || !have["F"] {
+		return nil, errors.New("anchor: missing required K/C/D/F field (not a compost anchor)")
 	}
 	a.Version = byte(meta)
 	a.Kind = Kind(byte(meta >> 8))
@@ -180,13 +181,15 @@ func uintFromValue(v interface{}) (uint64, error) {
 		}
 		return uint64(x), nil
 	case float64:
-		if x < 0 {
-			return 0, errors.New("negative uint64")
+		// 2^64 is exactly representable as float64 but is outside uint64;
+		// compare before converting so malformed JSON cannot wrap or truncate.
+		if x < 0 || x >= 18446744073709551616.0 || x != float64(uint64(x)) {
+			return 0, errors.New("invalid uint64")
 		}
 		return uint64(x), nil
 	case string:
-		var u uint64
-		if _, err := fmt.Sscanf(x, "%d", &u); err != nil {
+		u, err := strconv.ParseUint(x, 10, 64)
+		if err != nil {
 			return 0, fmt.Errorf("uint64 string %q: %w", x, err)
 		}
 		return u, nil

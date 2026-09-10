@@ -71,6 +71,40 @@ func TestFromArgumentsMissingFields(t *testing.T) {
 	if _, err := FromArguments(Arguments{{Name: "D", DataType: DataUint64, Value: uint64(1)}}); err == nil {
 		t.Fatal("expected missing-field error")
 	}
+	args := (&Anchor{Version: Version, Kind: KindMessage}).ToArguments()
+	filtered := args[:0]
+	for _, arg := range args {
+		if arg.Name != "D" {
+			filtered = append(filtered, arg)
+		}
+	}
+	if _, err := FromArguments(filtered); err == nil {
+		t.Fatal("expected missing D-field error")
+	}
+}
+
+func TestFromArgumentsRejectsNonIntegralNumbers(t *testing.T) {
+	args := (&Anchor{Version: Version, Kind: KindMessage}).ToArguments()
+	for i := range args {
+		if args[i].Name == "D" {
+			args[i].Value = float64(1.5)
+		}
+	}
+	if _, err := FromArguments(args); err == nil {
+		t.Fatal("expected fractional uint rejection")
+	}
+}
+
+func TestFromArgumentsRejectsTrailingDigits(t *testing.T) {
+	args := (&Anchor{Version: Version, Kind: KindMessage}).ToArguments()
+	for i := range args {
+		if args[i].Name == "D" {
+			args[i].Value = "123junk"
+		}
+	}
+	if _, err := FromArguments(args); err == nil {
+		t.Fatal("expected malformed uint rejection")
+	}
 }
 
 func TestFromArgumentsBadVersion(t *testing.T) {

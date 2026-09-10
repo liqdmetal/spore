@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -469,36 +470,37 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				return
 			}
 			for _, e := range entries {
-				if seen[e.TXID] {
+				if e.TXID != "" && seen[e.TXID] {
 					continue
 				}
-				if e.TopoHeight > int64(cursor) {
-					cursor = uint64(e.TopoHeight)
+				// DERO R153 get_transfers uses block height for min_height;
+				// topoheight is a different DAG coordinate and must not drive
+				// this cursor.
+				if e.Height > cursor {
+					cursor = e.Height
 				}
 				text, isWhisper := ParseArgs(e.PayloadRPC)
-				if !isWhisper && len(e.Data) > 0 {
-					// Some wallets (Engram) fail to decode payload_rpc from the
-					// padded CBOR but still return the raw `data` bytes.
-					text, isWhisper = ParseArgsFromData(e.Data)
-				}
+				// Only payload_rpc is accepted on the R153 receive path. Raw
+				// padded Entry.Data is intentionally not reinterpreted here.
 				if isWhisper {
-					seen[e.TXID] = true
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
+						if e.TXID != "" {
+							seen[e.TXID] = true
+						}
 					case <-ctx.Done():
 						return
 					}
 					continue
 				}
 				eph, cid, isPtr := ParsePointer(e.PayloadRPC)
-				if !isPtr && len(e.Data) > 0 {
-					eph, cid, isPtr = ParsePointerFromData(e.Data)
-				}
 				if isPtr {
-					seen[e.TXID] = true
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender,
 						HasPointer: true, EphPub: eph, BodyCID: cid}:
+						if e.TXID != "" {
+							seen[e.TXID] = true
+						}
 					case <-ctx.Done():
 						return
 					}
@@ -538,13 +540,13 @@ func uintVal(v interface{}) (uint64, error) {
 		}
 		return uint64(x), nil
 	case float64:
-		if x < 0 {
-			return 0, errors.New("neg")
+		if x < 0 || x >= 18446744073709551616.0 || x != float64(uint64(x)) {
+			return 0, errors.New("invalid uint64")
 		}
 		return uint64(x), nil
 	case string:
-		var u uint64
-		if _, err := fmt.Sscanf(strings.TrimSpace(x), "%d", &u); err != nil {
+		u, err := strconv.ParseUint(strings.TrimSpace(x), 10, 64)
+		if err != nil {
 			return 0, err
 		}
 		return u, nil

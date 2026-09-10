@@ -11,7 +11,7 @@ import (
 )
 
 func TestLiveDEROShapePreservesUintValues(t *testing.T) {
-	const response = `{"jsonrpc":"2.0","id":"1","result":{"entries":[{"topoheight":7594414,"txid":"live-tx","amount":1,"incoming":true,"payload_rpc":[{"name":"C","datatype":"H","value":"0f766b4482ab0c400003631ff5e5ab6e1bdcc4ed2d76f0ad8a0a93452791775e"},{"name":"D","datatype":"U","value":1788969051},{"name":"R","datatype":"H","value":"301ed2dae1ef717d5e6ef786435e21d535d3ab43a7a2d2dd697f84d15bc0d6e1"},{"name":"W","datatype":"U","value":57888}]}]}}`
+	const response = `{"jsonrpc":"2.0","id":"1","result":{"entries":[{"height":7594400,"topoheight":7594414,"txid":"live-tx","amount":1,"incoming":true,"payload_rpc":[{"name":"C","datatype":"H","value":"0f766b4482ab0c400003631ff5e5ab6e1bdcc4ed2d76f0ad8a0a93452791775e"},{"name":"D","datatype":"U","value":1788969051},{"name":"R","datatype":"H","value":"301ed2dae1ef717d5e6ef786435e21d535d3ab43a7a2d2dd697f84d15bc0d6e1"},{"name":"W","datatype":"U","value":57888}]}]}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response)) }))
 	defer srv.Close()
 

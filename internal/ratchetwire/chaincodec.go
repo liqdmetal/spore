@@ -107,8 +107,8 @@ func asUint(v interface{}) (uint64, error) {
 		}
 		return uint64(x), nil
 	case float64:
-		if x < 0 {
-			return 0, fmt.Errorf("negative uint")
+		if x < 0 || x >= 18446744073709551616.0 || x != float64(uint64(x)) {
+			return 0, fmt.Errorf("invalid uint")
 		}
 		return uint64(x), nil
 	case string:

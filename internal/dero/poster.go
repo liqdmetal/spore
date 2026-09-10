@@ -89,6 +89,9 @@ func (c *Client) call(ctx context.Context, method string, params, out interface{
 	if resp.StatusCode == http.StatusUnauthorized {
 		return errors.New("dero: wallet RPC auth failed (401)")
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("dero: wallet RPC HTTP status %s", resp.Status)
+	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -139,7 +142,8 @@ type TransferResult struct {
 //
 // Ringsize: a plain minimum-postage message transfer does not use SIGNER(),
 // so any valid ringsize works; 2 is the minimum and cheapest, larger
-// obscures the sender better. Default to 2 for message-only traffic.
+// obscures the sender better. A zero ringsize delegates to the wallet's
+// configured R153 default.
 func (c *Client) PostAnchor(ctx context.Context, recipientAddr string, a *anchor.Anchor, ringsize uint64) (string, error) {
 	return c.PostPayload(ctx, recipientAddr, a.ToArguments(), ringsize)
 }
@@ -147,17 +151,29 @@ func (c *Client) PostAnchor(ctx context.Context, recipientAddr string, a *anchor
 // PostPayload posts a minimum-postage transfer carrying arbitrary typed
 // payload Arguments to recipientAddr and returns the txid. It is the shared
 // primitive under PostAnchor and the whisper transport. See PostAnchor for the
-// non-zero-postage rule.
+// non-zero-postage rule. ringsize=0 means use the wallet's configured default;
+// nonzero values must be a R153-valid power of two in [2,128].
 func (c *Client) PostPayload(ctx context.Context, recipientAddr string, payload anchor.Arguments, ringsize uint64) (string, error) {
-	return c.PostPayloadAmount(ctx, recipientAddr, payload, 1)
+	return c.PostPayloadAmountWithRing(ctx, recipientAddr, payload, 1, ringsize)
 }
 
-// PostPayloadAmount is PostPayload with an explicit transfer amount. amount
-// must be >=1 (DERO treats a 0-amount transfer as a ring-member decoy and the
-// recipient never sees it).
+// PostPayloadAmount is PostPayload with an explicit transfer amount using
+// ringsize 2, the minimum R153-valid ring size. Use
+// PostPayloadAmountWithRing when a different valid ring size is required.
 func (c *Client) PostPayloadAmount(ctx context.Context, recipientAddr string, payload anchor.Arguments, amount uint64) (string, error) {
+	return c.PostPayloadAmountWithRing(ctx, recipientAddr, payload, amount, 2)
+}
+
+// PostPayloadAmountWithRing posts an explicit amount and ringsize.
+func (c *Client) PostPayloadAmountWithRing(ctx context.Context, recipientAddr string, payload anchor.Arguments, amount, ringsize uint64) (string, error) {
+	if _, err := ValidateAddress(recipientAddr); err != nil {
+		return "", err
+	}
 	if amount == 0 {
 		amount = 1 // DERO treats a 0-amount transfer as a ring-member decoy
+	}
+	if ringsize != 0 && (ringsize < 2 || ringsize > 128 || ringsize&(ringsize-1) != 0) {
+		return "", fmt.Errorf("dero: ringsize must be 0 or a power of two in [2,128], got %d", ringsize)
 	}
 	params := TransferParams{
 		Transfers: []Transfer{{
@@ -165,7 +181,7 @@ func (c *Client) PostPayloadAmount(ctx context.Context, recipientAddr string, pa
 			Amount:      amount,
 			PayloadRPC:  payload,
 		}},
-		Ringsize: 2,
+		Ringsize: ringsize,
 	}
 	var result TransferResult
 	if err := c.call(ctx, "transfer", params, &result); err != nil {
@@ -185,6 +201,8 @@ type GetTransfersParams struct {
 
 // Entry is the subset of rpc.Entry we read.
 type Entry struct {
+	// Height is the block height used by R153 get_transfers min_height.
+	Height     uint64           `json:"height"`
 	TopoHeight int64            `json:"topoheight"`
 	Incoming   bool             `json:"incoming"`
 	TXID       string           `json:"txid"`
@@ -217,7 +235,7 @@ func (c *Client) GetAddress(ctx context.Context) (string, error) {
 	var out struct {
 		Address string `json:"address"`
 	}
-	if err := c.call(ctx, "getaddress", nil, &out); err != nil {
+	if err := c.call(ctx, "getaddress", struct{}{}, &out); err != nil {
 		return "", err
 	}
 	return out.Address, nil
@@ -228,7 +246,7 @@ func (c *Client) GetHeight(ctx context.Context) (uint64, error) {
 	var out struct {
 		Height uint64 `json:"height"`
 	}
-	if err := c.call(ctx, "getheight", nil, &out); err != nil {
+	if err := c.call(ctx, "getheight", struct{}{}, &out); err != nil {
 		return 0, err
 	}
 	return out.Height, nil
@@ -264,23 +282,29 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				errc <- err
 				return
 			}
+			maxHeight := cursor
 			for _, e := range entries {
-				if seen[e.TXID] {
-					continue
+				if e.Height > maxHeight {
+					maxHeight = e.Height
 				}
-				if e.TopoHeight > int64(cursor) {
-					cursor = uint64(e.TopoHeight)
+				if e.TXID != "" && seen[e.TXID] {
+					continue
 				}
 				a, err := anchor.FromArguments(e.PayloadRPC)
 				if err != nil {
 					continue // not a compost anchor (or malformed) — skip
 				}
-				seen[e.TXID] = true
 				select {
 				case ch <- AnchorEvent{TXID: e.TXID, TopoHeight: e.TopoHeight, Anchor: a}:
+					if e.TXID != "" {
+						seen[e.TXID] = true
+					}
 				case <-ctx.Done():
 					return
 				}
+			}
+			if maxHeight > cursor {
+				cursor = maxHeight
 			}
 			select {
 			case <-time.After(interval):
