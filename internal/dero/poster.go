@@ -287,7 +287,10 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				if e.Height > maxHeight {
 					maxHeight = e.Height
 				}
-				if e.TXID != "" && seen[e.TXID] {
+				if e.TXID == "" {
+					continue
+				}
+				if seen[e.TXID] {
 					continue
 				}
 				a, err := anchor.FromArguments(e.PayloadRPC)

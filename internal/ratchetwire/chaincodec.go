@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/liqdmetal/spore/internal/anchor"
@@ -107,7 +108,7 @@ func asUint(v interface{}) (uint64, error) {
 		}
 		return uint64(x), nil
 	case float64:
-		if x < 0 || x >= 18446744073709551616.0 || x != float64(uint64(x)) {
+		if math.IsNaN(x) || math.IsInf(x, 0) || x < 0 || x >= 18446744073709551616.0 || x != math.Trunc(x) {
 			return 0, fmt.Errorf("invalid uint")
 		}
 		return uint64(x), nil

@@ -131,7 +131,10 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 				}
 			} else {
 				for _, inc := range list {
-					if inc.TxID != "" && seen[inc.TxID] {
+					if inc.TxID == "" {
+						continue
+					}
+					if seen[inc.TxID] {
 						continue
 					}
 					// Prefer a backend-provided query cursor. DERO supplies block

@@ -1,13 +1,11 @@
 // Package dero implements the chain.Chain backend for the DERO network.
-// It wraps the low-level wallet-RPC client and maps DERO's typed CBOR
-// rpc.Arguments payload onto the chain-agnostic chain.Payload. This is the
-// seam a future EVM/Monero backend will mirror.
 package dero
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -15,47 +13,28 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 )
 
-// Backend adapts *Client (low-level RPC) to chain.Chain.
-type Backend struct {
-	client *Client
-}
+type Backend struct{ client *Client }
 
-// NewBackend builds a DERO chain.Chain from a wallet-RPC client.
-func NewBackend(client *Client) *Backend { return &Backend{client: client} }
+func NewBackend(client *Client) *Backend                       { return &Backend{client: client} }
+func (b *Backend) Name() string                                { return "dero" }
+func (b *Backend) Address(ctx context.Context) (string, error) { return b.client.GetAddress(ctx) }
+func (b *Backend) Height(ctx context.Context) (uint64, error)  { return b.client.GetHeight(ctx) }
 
-// Name implements chain.Chain.
-func (b *Backend) Name() string { return "dero" }
-
-// Address implements chain.Chain.
-func (b *Backend) Address(ctx context.Context) (string, error) {
-	return b.client.GetAddress(ctx)
-}
-
-// Height implements chain.Chain.
-func (b *Backend) Height(ctx context.Context) (uint64, error) {
-	return b.client.GetHeight(ctx)
-}
-
-// PostPayload implements chain.Chain. amountHint is used as transfer value;
-// DERO requires >=1 atomic unit or the recipient never sees the transfer.
 func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain.Payload, amountHint uint64) (chain.PostResult, error) {
 	args, err := PayloadToArgs(p)
 	if err != nil {
 		return chain.PostResult{}, err
 	}
-	amt := amountHint
-	if amt == 0 {
-		amt = 1 // minimum postage; 0 would make it a ring-member decoy
+	if amountHint == 0 {
+		amountHint = 1
 	}
-	txid, err := b.client.PostPayloadAmount(ctx, recipientAddr, args, amt)
+	txid, err := b.client.PostPayloadAmount(ctx, recipientAddr, args, amountHint)
 	if err != nil {
 		return chain.PostResult{}, err
 	}
 	return chain.PostResult{TxID: txid}, nil
 }
 
-// ListIncoming implements chain.Chain. It surfaces raw payload bytes; the
-// caller decodes with ParsePayload.
 func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
 	entries, err := b.client.GetTransfers(ctx, GetTransfersParams{In: true, MinHeight: minHeight})
 	if err != nil {
@@ -63,112 +42,149 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 	}
 	out := make([]chain.Incoming, 0, len(entries))
 	for _, e := range entries {
-		// R153's get_transfers min_height is a block-height cursor. Do not
-		// advance the generic watcher by topoheight: DAG topoheight can jump
-		// past later entries that share a block height.
+		if e.TXID == "" {
+			continue
+		}
 		inc := chain.Incoming{TxID: e.TXID, TopoHeight: e.TopoHeight, ScanHeight: e.Height, Sender: e.Sender, Amount: e.Amount}
 		if len(e.PayloadRPC) > 0 {
 			if raw, err := ArgsToPayload(e.PayloadRPC); err == nil {
 				inc.Payload = raw
 			}
 		}
-		// Do not reinterpret Entry.Data as typed payload here. The generic
-		// backend path is deliberately payload_rpc-only; raw padded data is
-		// rejected unless the caller explicitly uses the legacy parser.
 		out = append(out, inc)
 	}
 	return out, nil
 }
 
-// --- payload codec: chain.Payload <-> anchor.Arguments ---
-
-// A chain.Payload stores the parsed argument list as JSON so the core can
-// round-trip a whisper/pointer without importing DERO's CBOR. A future backend
-// may use a different codec; the core only ever calls back into the same
-// backend's ParsePayload, so the encoding is backend-private.
 type argEnvelope struct {
 	Args []argJSON `json:"a"`
 }
-
 type argJSON struct {
-	N string `json:"n"`
-	T string `json:"t"`
-	V string `json:"v"`
+	N string          `json:"n"`
+	T string          `json:"t"`
+	V json.RawMessage `json:"v"`
 }
 
-// PayloadToArgs decodes a chain.Payload back to anchor.Arguments.
+const maxPayloadArgs = 32
+const maxPayloadName = 64
+const maxPayloadValue = 2048
+
 func PayloadToArgs(p chain.Payload) (anchor.Arguments, error) {
+	if len(p) == 0 || len(p) > Payload0Limit*64 {
+		return nil, fmt.Errorf("dero: payload envelope size %d out of range", len(p))
+	}
 	var env argEnvelope
-	if err := json.Unmarshal(p, &env); err != nil {
+	dec := json.NewDecoder(strings.NewReader(string(p)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&env); err != nil {
 		return nil, fmt.Errorf("dero: bad payload envelope: %w", err)
 	}
-	if len(env.Args) == 0 {
-		return nil, fmt.Errorf("dero: empty payload envelope")
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("dero: trailing payload envelope data")
+	}
+	if len(env.Args) == 0 || len(env.Args) > maxPayloadArgs {
+		return nil, fmt.Errorf("dero: payload argument count out of range")
 	}
 	out := make(anchor.Arguments, 0, len(env.Args))
+	seen := make(map[string]struct{}, len(env.Args))
 	for _, a := range env.Args {
-		if a.N == "" {
-			return nil, fmt.Errorf("dero: empty argument name")
+		if len(a.N) == 0 || len(a.N) > maxPayloadName || strings.TrimSpace(a.N) != a.N {
+			return nil, fmt.Errorf("dero: invalid argument name")
 		}
+		if _, ok := seen[a.N+a.T]; ok {
+			return nil, fmt.Errorf("dero: duplicate argument %q", a.N+a.T)
+		}
+		seen[a.N+a.T] = struct{}{}
 		if !validDataType(a.T) {
 			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.T)
 		}
+		if len(a.V) > maxPayloadValue {
+			return nil, fmt.Errorf("dero: argument %q value too large", a.N)
+		}
 		arg := anchor.Argument{Name: a.N, DataType: a.T}
+		var value string
+		if err := json.Unmarshal(a.V, &value); err != nil {
+			return nil, fmt.Errorf("dero: argument %q value must be a JSON string: %w", a.N, err)
+		}
 		if a.T == anchor.DataUint64 {
-			n, err := strconv.ParseUint(strings.TrimSpace(a.V), 10, 64)
+			n, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("dero: bad uint in payload: %w", err)
 			}
 			arg.Value = n
 		} else {
-			arg.Value = a.V
+			arg.Value = value
 		}
 		out = append(out, arg)
 	}
 	return out, nil
 }
 
-// ArgsToPayload encodes anchor.Arguments into a chain.Payload.
 func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
-	env := argEnvelope{}
+	if len(args) == 0 || len(args) > maxPayloadArgs {
+		return nil, fmt.Errorf("dero: payload argument count out of range")
+	}
+	env := argEnvelope{Args: make([]argJSON, 0, len(args))}
+	seen := make(map[string]struct{}, len(args))
 	for _, a := range args {
+		if len(a.Name) == 0 || len(a.Name) > maxPayloadName || strings.TrimSpace(a.Name) != a.Name {
+			return nil, fmt.Errorf("dero: invalid argument name")
+		}
+		if !validDataType(a.DataType) {
+			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.DataType)
+		}
+		if _, ok := seen[a.Name+string(a.DataType)]; ok {
+			return nil, fmt.Errorf("dero: duplicate argument %q", a.Name+string(a.DataType))
+		}
+		seen[a.Name+string(a.DataType)] = struct{}{}
 		ja := argJSON{N: a.Name, T: string(a.DataType)}
 		switch v := a.Value.(type) {
 		case uint64:
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(v, 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(v, 10)))
 		case uint:
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(uint64(v), 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case uint32:
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(uint64(v), 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case int:
 			if v < 0 {
 				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
 			}
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(uint64(v), 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case int64:
 			if v < 0 {
 				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
 			}
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(uint64(v), 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case float64:
 			if v < 0 || v >= 18446744073709551616.0 || v != float64(uint64(v)) {
 				return nil, fmt.Errorf("dero: invalid uint argument %s", a.Name)
 			}
 			ja.T = anchor.DataUint64
-			ja.V = strconv.FormatUint(uint64(v), 10)
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case string:
-			ja.V = v
+			ja.V = json.RawMessage(strconv.Quote(v))
 		case []byte:
-			ja.V = string(v)
+			ja.V = json.RawMessage(strconv.Quote(string(v)))
 		default:
-			ja.V = fmt.Sprintf("%v", v)
+			return nil, fmt.Errorf("dero: unsupported argument value type %T", a.Value)
+		}
+		if len(ja.V) > maxPayloadValue {
+			return nil, fmt.Errorf("dero: argument %q value too large", a.Name)
 		}
 		env.Args = append(env.Args, ja)
 	}
-	return json.Marshal(env)
+	p, err := json.Marshal(env)
+	if err != nil {
+		return nil, err
+	}
+	if len(p) > Payload0Limit*64 {
+		return nil, fmt.Errorf("dero: payload envelope too large")
+	}
+	return p, nil
 }

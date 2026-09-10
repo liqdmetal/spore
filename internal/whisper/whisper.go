@@ -470,7 +470,10 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				return
 			}
 			for _, e := range entries {
-				if e.TXID != "" && seen[e.TXID] {
+				if e.TXID == "" {
+					continue
+				}
+				if seen[e.TXID] {
 					continue
 				}
 				// DERO R153 get_transfers uses block height for min_height;
