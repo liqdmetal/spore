@@ -53,3 +53,26 @@ jobs:
             gofmt -d $unformatted
             exit 1
           fi
+
+  goimports:
+    name: goimports (import-section gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check import grouping
+        # goimports = gofmt + canonical import sectioning (stdlib /
+        # third-party / module-internal groups, alphabetized) — the layer
+        # gofmt deliberately does not enforce. Pinned to v0.28.0: the newest
+        # release whose go directive the repo's Go 1.23 satisfies, so CI
+        # doesn't silently toolchain-switch the way @latest does.
+        run: |
+          go install golang.org/x/tools/cmd/goimports@v0.28.0
+          unformatted=$("$(go env GOPATH)/bin/goimports" -l .)
+          if [ -n "$unformatted" ]; then
+            echo "goimports would rewrite:" "$unformatted"
+            "$(go env GOPATH)/bin/goimports" -d $unformatted
+            exit 1
+          fi
