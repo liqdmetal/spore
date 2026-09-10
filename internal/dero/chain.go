@@ -3,11 +3,14 @@ package dero
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/anchor"
 	"github.com/liqdmetal/spore/internal/chain"
@@ -127,19 +130,9 @@ func PayloadToArgs(p chain.Payload) (anchor.Arguments, error) {
 		if len(a.V) > maxPayloadValue {
 			return nil, fmt.Errorf("dero: argument %q value too large", a.N)
 		}
-		arg := anchor.Argument{Name: a.N, DataType: a.T}
-		var value string
-		if err := json.Unmarshal(a.V, &value); err != nil {
-			return nil, fmt.Errorf("dero: argument %q value must be a JSON string: %w", a.N, err)
-		}
-		if a.T == anchor.DataUint64 {
-			n, err := strconv.ParseUint(value, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("dero: bad uint in payload: %w", err)
-			}
-			arg.Value = n
-		} else {
-			arg.Value = value
+		arg, err := decodeEnvelopeArgument(a)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, arg)
 	}
@@ -162,36 +155,102 @@ func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
 		ja := argJSON{N: a.Name, T: string(a.DataType)}
 		switch v := a.Value.(type) {
 		case uint64:
-			ja.T = anchor.DataUint64
+			if a.DataType != anchor.DataUint64 {
+				return nil, fmt.Errorf("dero: %s requires datatype U for uint64", a.Name)
+			}
 			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(v, 10)))
 		case uint:
-			ja.T = anchor.DataUint64
+			if a.DataType != anchor.DataUint64 {
+				return nil, fmt.Errorf("dero: %s requires datatype U for uint", a.Name)
+			}
 			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case uint32:
-			ja.T = anchor.DataUint64
+			if a.DataType != anchor.DataUint64 {
+				return nil, fmt.Errorf("dero: %s requires datatype U for uint32", a.Name)
+			}
 			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
 		case int:
-			if v < 0 {
-				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
+			if a.DataType != anchor.DataInt64 {
+				return nil, fmt.Errorf("dero: %s requires datatype I for int", a.Name)
 			}
-			ja.T = anchor.DataUint64
-			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatInt(int64(v), 10)))
 		case int64:
-			if v < 0 {
-				return nil, fmt.Errorf("dero: negative uint argument %s", a.Name)
+			if a.DataType != anchor.DataInt64 {
+				return nil, fmt.Errorf("dero: %s requires datatype I for int64", a.Name)
 			}
-			ja.T = anchor.DataUint64
-			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
+			ja.V = json.RawMessage(strconv.Quote(strconv.FormatInt(v, 10)))
 		case float64:
-			if v < 0 || v >= 18446744073709551616.0 || v != float64(uint64(v)) {
-				return nil, fmt.Errorf("dero: invalid uint argument %s", a.Name)
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("dero: %s requires a finite numeric value", a.Name)
 			}
-			ja.T = anchor.DataUint64
-			ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
+			switch a.DataType {
+			case anchor.DataUint64:
+				if v < 0 || v >= 18446744073709551616.0 || v != math.Trunc(v) {
+					return nil, fmt.Errorf("dero: %s requires an integral uint64", a.Name)
+				}
+				ja.V = json.RawMessage(strconv.Quote(strconv.FormatUint(uint64(v), 10)))
+			case anchor.DataInt64:
+				if v < -9223372036854775808.0 || v >= 9223372036854775808.0 || v != math.Trunc(v) {
+					return nil, fmt.Errorf("dero: %s requires an integral int64", a.Name)
+				}
+				ja.V = json.RawMessage(strconv.Quote(strconv.FormatInt(int64(v), 10)))
+			case anchor.DataFloat64:
+				ja.V = json.RawMessage(strconv.Quote(strconv.FormatFloat(v, 'g', -1, 64)))
+			default:
+				return nil, fmt.Errorf("dero: %s float64 value incompatible with datatype %s", a.Name, a.DataType)
+			}
 		case string:
-			ja.V = json.RawMessage(strconv.Quote(v))
+			switch a.DataType {
+			case anchor.DataString:
+				ja.V = json.RawMessage(strconv.Quote(v))
+			case anchor.DataHash:
+				if len(v) != 64 {
+					return nil, fmt.Errorf("dero: %s must be 64-char hash hex", a.Name)
+				}
+				if _, err := hex.DecodeString(v); err != nil {
+					return nil, fmt.Errorf("dero: %s must be 64-char hash hex", a.Name)
+				}
+				ja.V = json.RawMessage(strconv.Quote(v))
+			case anchor.DataAddress:
+				decoded, err := hex.DecodeString(v)
+				if err != nil || len(decoded) != 33 {
+					return nil, fmt.Errorf("dero: %s must be a 33-byte compressed address key", a.Name)
+				}
+				if err := validateCompressedPoint(decoded); err != nil {
+					return nil, fmt.Errorf("dero: %s invalid compressed address key: %w", a.Name, err)
+				}
+				ja.V = json.RawMessage(strconv.Quote(v))
+			case anchor.DataTime:
+				if _, err := time.Parse(time.RFC3339Nano, v); err != nil {
+					return nil, fmt.Errorf("dero: %s must be RFC3339 time", a.Name)
+				}
+				ja.V = json.RawMessage(strconv.Quote(v))
+			default:
+				return nil, fmt.Errorf("dero: %s string value incompatible with datatype %s", a.Name, a.DataType)
+			}
 		case []byte:
-			ja.V = json.RawMessage(strconv.Quote(string(v)))
+			switch a.DataType {
+			case anchor.DataHash:
+				if len(v) != 32 {
+					return nil, fmt.Errorf("dero: %s hash must be 32 bytes", a.Name)
+				}
+				ja.V = json.RawMessage(strconv.Quote(hex.EncodeToString(v)))
+			case anchor.DataAddress:
+				if len(v) != 33 {
+					return nil, fmt.Errorf("dero: %s must be a 33-byte compressed address key", a.Name)
+				}
+				if err := validateCompressedPoint(v); err != nil {
+					return nil, fmt.Errorf("dero: %s invalid compressed address key: %w", a.Name, err)
+				}
+				ja.V = json.RawMessage(strconv.Quote(hex.EncodeToString(v)))
+			default:
+				return nil, fmt.Errorf("dero: %s []byte value incompatible with datatype %s", a.Name, a.DataType)
+			}
+		case time.Time:
+			if a.DataType != anchor.DataTime {
+				return nil, fmt.Errorf("dero: %s requires datatype T for time.Time", a.Name)
+			}
+			ja.V = json.RawMessage(strconv.Quote(v.UTC().Format(time.RFC3339Nano)))
 		default:
 			return nil, fmt.Errorf("dero: unsupported argument value type %T", a.Value)
 		}
