@@ -36,26 +36,20 @@ jobs:
         run: go test -race ./...
 
   gofmt:
-    name: gofmt report (non-blocking)
+    name: gofmt (blocking gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Report unformatted files
-        # Non-blocking by design: the tree has a pre-existing gofmt backlog
-        # (some of it CRLF noise on Windows checkouts). Surface the list,
-        # flip to blocking once it's drained.
-        continue-on-error: true
+      - name: Check formatting
+        # Blocking since the backlog was drained: any file gofmt would
+        # rewrite fails the build immediately.
         run: |
-          files=$(gofmt -l . | tee gofmt-report.txt)
-          count=$(wc -l < gofmt-report.txt)
-          echo "gofmt backlog: ${count} file(s)"
-          echo "$files"
-      - name: Upload gofmt report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gofmt-report
-          path: gofmt-report.txt
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite:" "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
