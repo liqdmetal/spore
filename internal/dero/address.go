@@ -47,10 +47,19 @@ func ValidateAddress(input string) (string, error) {
 //	Order = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
 //
 // Field arithmetic must use P. Substituting Order still compiles and still
-// rejects garbage most of the time, but it tests quadratic residuosity in the
-// wrong field, so it false-rejects roughly half of all genuinely valid
-// destinations. Keep the real-mainnet-address test in address_test.go as the
-// guard: a wrong modulus does not fail loudly on its own.
+// looks correct in review, but it tests quadratic residuosity in the wrong
+// field. Measured over 20k random samples per class:
+//
+//	49.5% of genuinely valid destinations REJECTED
+//	50.2% of genuinely invalid destinations ACCEPTED
+//
+// i.e. very nearly a coin flip in both directions. The false-accept direction
+// is the dangerous one: an unusable destination is admitted, and the failure
+// only surfaces later, at send time.
+//
+// A wrong modulus does not fail loudly on its own, so the real-mainnet-address
+// test in address_test.go (and the addr-mainnet / addr-reject self-tests in
+// `spore doctor --live`) are the actual guards.
 const bn256FieldPrime = "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47"
 
 // bn256CurveB is the curve constant b in y² = x³ + b

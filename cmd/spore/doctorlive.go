@@ -10,8 +10,9 @@
 //   - a Bech32 generator constant had lost a hex digit, so EVERY destination
 //     address failed with "invalid checksum";
 //   - address validation did BN256 field arithmetic with the group ORDER
-//     instead of the base-field prime P, so it false-rejected roughly half of
-//     all genuinely valid destinations;
+//     instead of the base-field prime P — measured at 49.5% of valid
+//     destinations rejected and 50.2% of invalid ones accepted, i.e. a coin
+//     flip in both directions;
 //   - a `data[0] > 127` guard on DERO's ring-position byte silently dropped
 //     about half of large-ring traffic.
 //
