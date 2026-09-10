@@ -497,9 +497,17 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err != nil {
 		return err
 	}
-	_, raw, err := ep.SendFirst(id, b, sig, plaintext, time.Now().Add(ttl))
+	// SendFirstSession over SendFirst because the session id is what the
+	// multi-device ledger keys on: a new session cannot conflict yet, but
+	// recording this device as its writer is what makes a LATER collision
+	// (another device sending on the same session from the same counter)
+	// detectable at all.
+	_, raw, sessID, err := ep.SendFirstSession(id, b, sig, plaintext, time.Now().Add(ttl))
 	if err != nil {
 		return err
+	}
+	if devState, derr := ratchetwire.LoadOrCreateDevice(stateDir); derr == nil {
+		_ = ratchetwire.RecordSend(stateDir, sessID, devState)
 	}
 	c, err := e2Carrier(fs)
 	if err != nil {
@@ -919,8 +927,18 @@ func msgReplyE2(args []string) {
 	check(err)
 	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
 	check(err)
+	// Multi-device guard (before the send, not after): a continuation is the
+	// operation that can reuse a message key if another device advanced this
+	// same session from the same counter. Refusing here costs one error; not
+	// refusing costs the confidentiality of both messages.
+	devState, err := ratchetwire.LoadOrCreateDevice(stateDir)
+	check(err)
+	if err := ratchetwire.CheckSendAllowed(stateDir, sessionID, devState); err != nil {
+		check(err)
+	}
 	_, raw, err := ep.SendNext(sessionID, plaintext, time.Now().Add(*ttl))
 	check(err)
+	check(ratchetwire.RecordSend(stateDir, sessionID, devState))
 	c, err := e2Carrier(fs)
 	check(err)
 	r, err := c.PostPointer(context.Background(), *to, raw, 1)
