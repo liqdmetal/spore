@@ -116,7 +116,7 @@ The existing `-ntfy` flag is a generic POST webhook alias. Use a secret topic UR
 
 ```text
 spore msg recv-e2 ... \
-  -ntfy https://ntfy.example/secret-topic
+  -ntfy https://notify.mycoid.net/<secret-topic>
 ```
 
 An optional bearer token is read from `SPORE_NOTIFY_WEBHOOK_TOKEN`; it is never placed in argv:

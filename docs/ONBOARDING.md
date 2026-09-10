@@ -248,10 +248,12 @@ spore msg recv-e2
 #     -ntfy https://notify.mycoid.net/<secret-topic>   metadata-only ntfy alert (hosted beta)
 #     SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]             ntfy auth (process environment, not argv)
 #     -notify-email you@example.com -notify-smtp-host smtp.example.com -notify-smtp-from spore@example.com
-#     SPORE_NOTIFY_SMTP_PASSWORD=[REDACTED]            SMTP password (process environment)
 #     -notify-sms +155****4567 -notify-twilio-sid AC... -notify-twilio-from +155****4321
-#     SPORE_NOTIFY_TWILIO_AUTH_TOKEN=[REDACTED]        Twilio auth token (process environment)
-#     # details: docs/NOTIFICATIONS.md
+#
+#   Provider passwords/tokens come from environment variables, never argv:
+#     SPORE_NOTIFY_SMTP_PASSWORD=[REDACTED]
+#     SPORE_NOTIFY_TWILIO_AUTH_TOKEN=[REDACTED]
+#   details: docs/NOTIFICATIONS.md
 ```
 
 `recv-e2` watches the chain for pointers addressed to you, fetches the
@@ -266,12 +268,13 @@ You need the recipient's **chain address**, their **pinned-sig**, and a way to
 get their **bundle** (a local file, or their mailbox's `/prekey` URL).
 
 ```bash
-# discover their bundle from their mailbox (pinned-sig still verified):
+# discover their bundle from their mailbox (pinned-sig still verified);
+# your own body goes in YOUR store, not the recipient's:
 echo "hello" | spore msg send-e2 \
   -to dero1q…their-address… \
   -bundle-url http://THEIR-MAILBOX/prekey \
   -pinned-sig THEIR_PINNED_SIG_HEX \
-  -store http://THEIR-MAILBOX \
+  -store http://YOUR-MAILBOX-or-local-store \
   -store-token [REDACTED]
 
 # …or from a bundle file they shared with you:
@@ -279,7 +282,7 @@ echo "hello" | spore msg send-e2 \
   -to dero1q…their-address… \
   -bundle ./their-bundle.json \
   -pinned-sig THEIR_PINNED_SIG_HEX \
-  -store http://THEIR-MAILBOX \
+  -store http://YOUR-MAILBOX-or-local-store \
   -store-token [REDACTED]
 ```
 
