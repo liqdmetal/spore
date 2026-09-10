@@ -56,10 +56,12 @@ type doctorLiveOpts struct {
 	Timeout  time.Duration
 }
 
-// mainnetSample is a real, on-chain DERO address. It is the primary guard for
-// the address checks: a wrong field modulus or a corrupted Bech32 constant does
-// not fail loudly on its own, but it cannot validate this string.
-const mainnetSample = "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"
+// mainnetSample is a SYNTHETIC but fully valid mainnet-format DERO address:
+// genuine bech32, version 1, on-curve x = 2, correct checksum. It is the
+// primary guard for the address checks — a wrong field modulus or a corrupted
+// Bech32 generator constant does not fail loudly on its own, but it cannot
+// validate this string. It is deliberately not anybody's real address.
+const mainnetSample = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4"
 
 // offCurveKey is a compressed key whose x coordinate is 4. x³ + 3 = 67 is not
 // a quadratic residue mod the BN256 field prime, so no point has this x and the
@@ -111,13 +113,13 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 		switch {
 		case err != nil:
 			out = append(out, doctorCheck{Name: "addr-mainnet", OK: false,
-				Note: fmt.Sprintf("real mainnet address REJECTED: %v — a constant or the field modulus is wrong", err)})
+				Note: fmt.Sprintf("valid mainnet-format address REJECTED: %v — a constant or the field modulus is wrong", err)})
 		case got != mainnetSample:
 			out = append(out, doctorCheck{Name: "addr-mainnet", OK: false,
 				Note: fmt.Sprintf("canonical form changed: %q", got)})
 		default:
 			out = append(out, doctorCheck{Name: "addr-mainnet", OK: true,
-				Note: "real mainnet address validates"})
+				Note: "valid mainnet-format address accepted"})
 		}
 	}
 

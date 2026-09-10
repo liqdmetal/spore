@@ -28,7 +28,7 @@ func TestPostAnchorWireShape(t *testing.T) {
 
 	c := NewClient(srv.URL, "", "")
 	a := &anchor.Anchor{Version: anchor.Version, Kind: anchor.KindMessage, BurnDeadline: 12345}
-	txid, err := c.PostAnchor(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", a, 0)
+	txid, err := c.PostAnchor(context.Background(), "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4", a, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestPostAnchorWireShape(t *testing.T) {
 	if tr["amount"].(float64) != 1 {
 		t.Fatalf("amount = %v, want 1 (minimum postage; 0 never surfaces to recipient)", tr["amount"])
 	}
-	if tr["destination"].(string) != "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq" {
+	if tr["destination"].(string) != "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4" {
 		t.Fatalf("destination = %v", tr["destination"])
 	}
 	// ringsize=0 delegates to the wallet's configured R153 default.
@@ -129,7 +129,7 @@ func TestPostPayloadAmountWithRingValidatesR153Ring(t *testing.T) {
 	c := NewClient("http://127.0.0.1:1", "", "")
 	args := anchor.Arguments{{Name: "W", DataType: anchor.DataUint64, Value: uint64(1)}}
 	for _, ring := range []uint64{1, 3, 129} {
-		if _, err := c.PostPayloadAmountWithRing(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", args, 1, ring); err == nil {
+		if _, err := c.PostPayloadAmountWithRing(context.Background(), "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4", args, 1, ring); err == nil {
 			t.Fatalf("ringsize %d was accepted", ring)
 		}
 	}

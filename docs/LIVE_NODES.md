@@ -2,7 +2,7 @@
 
 m³ EVM and Solana backends are **live-verified**; XMR is still mock-verified.
 This spec tracks the live nodes that prove each for real, on the Hetzner box
-(65.108.140.19) where the DERO node already lives.
+(YOUR-NODE-HOST) where the DERO node already lives.
 
 ## Goals / status at a glance
 1. **EVM** — ✅ **live-verified** on a local anvil node (below).
@@ -32,7 +32,7 @@ RPC** (`transfer`, `get_transfers`, `get_height`, `get_address`), which needs a
 local `monerod` (daemon) synced to the chain + a wallet. Both must run on the
 box.
 
-### Requirements on 65.108.140.19
+### Requirements on YOUR-NODE-HOST
 - **monerod** (daemon) + **monero-wallet-rpc** binaries.
   - Source build (needs the FULL monero source — the local `~/monero` is a
     partial checkout with no `src/wallet`) OR a prebuilt release binary.

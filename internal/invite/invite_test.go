@@ -20,15 +20,17 @@ func encodeRaw(raw []byte) string {
 }
 
 var (
-	// A real, on-chain mainnet address (the same one the payload corpus pins).
-	mainnetAddr = "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"
-	// otherAddr is a SECOND, fully valid mainnet-format address — version 1,
-	// on-curve x = 2, correct checksum. It must pass ValidateAddress, because
-	// the tamper test has to isolate the SIGNATURE: if this were malformed,
-	// address validation would reject it first and the test would pass for the
-	// wrong reason, hiding whether the signature covers the address at all.
-	// TestOtherAddrIsValid keeps this honest.
-	otherAddr = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4"
+	// Two SYNTHETIC mainnet-format addresses: genuine bech32, version 1,
+	// on-curve with tiny x, valid checksum — but trivially derived, so no
+	// meaningful private key exists and nobody is identifiable. Never put a
+	// real wallet address in a fixture.
+	mainnetAddr = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4" // x = 2
+	// otherAddr is a SECOND such address. It must differ from the control and
+	// must itself pass ValidateAddress, because the tamper test has to isolate
+	// the SIGNATURE: if it were malformed, address validation would reject it
+	// first and the test would pass for the wrong reason, hiding whether the
+	// signature covers the address at all. TestOtherAddrIsValid keeps this honest.
+	otherAddr = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv" // x = 3
 )
 
 // TestOtherAddrIsValid guards the tamper fixture. If otherAddr ever stops being

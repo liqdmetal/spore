@@ -106,7 +106,7 @@ there are three postures:
 |---|---|---|---|
 | **Home node** (default, encouraged) | `http://127.0.0.1:8080` | your mailbox (step 2 above) | your mailbox serves `GET /prekey` |
 | **Serverless** | `nostr://relay.damus.io,nos.lol` | **nothing** | manual bundle exchange only |
-| **Hosted** (Model B) | `https://spore.mycoid.net` | nothing — you pay | the operator's mailbox |
+| **Hosted** (Model B) | `https://mailbox.example.net` | nothing — you pay | the operator's mailbox |
 
 **Hosted** is the cleanest first-message path for a beta user who does not want to run a node: the operator runs a blind courier for you. See the hosted-beta flow below and [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
 
@@ -166,7 +166,7 @@ If you do not want to run a node or mailbox yourself, an operator can run it for
 
 What the operator gives you:
 
-- a mailbox route, e.g. `https://spore.mycoid.net/u/<name>`
+- a mailbox route, e.g. `https://mailbox.example.net/u/<name>`
 - a bearer token for that route
 - (optionally) a private ntfy topic for arrival alerts
 
@@ -180,9 +180,9 @@ spore init
 
 ```bash
 spore prekeybatch push -in ~/.spore/batch.json \
-  -mailbox https://spore.mycoid.net/u/<name> \
+  -mailbox https://mailbox.example.net/u/<name> \
   -token [REDACTED]
-spore prekeybatch status -mailbox https://spore.mycoid.net/u/<name> \
+spore prekeybatch status -mailbox https://mailbox.example.net/u/<name> \
   -token [REDACTED]
 ```
 
@@ -191,7 +191,7 @@ Each `GET /prekey` pops one single-use bundle. Refill before it runs low:
 ```bash
 spore prekeybatch gen -out ~/.spore/batch2.json -n 50
 spore prekeybatch push -in ~/.spore/batch2.json \
-  -mailbox https://spore.mycoid.net/u/<name> \
+  -mailbox https://mailbox.example.net/u/<name> \
   -token [REDACTED]
 ```
 
@@ -201,14 +201,14 @@ spore prekeybatch push -in ~/.spore/batch2.json \
 spore msg recv-e2 \
   -identity ~/.spore/identity.json \
   -spk ~/.spore/spk.json \
-  -store https://spore.mycoid.net/u/<name> \
+  -store https://mailbox.example.net/u/<name> \
   -store-token [REDACTED] \
   -state-dir ~/.spore/state \
   -state-key ~/.spore/state.key \
   -auto-ack \
   -maildb ~/.spore/mail.json \
   -out-dir ~/inbox \
-  -ntfy https://notify.mycoid.net/<secret-topic>
+  -ntfy https://notify.example.net/<secret-topic>
 # SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]  in the process environment, not on the command line
 ```
 
@@ -221,7 +221,7 @@ The ntfy topic URL and bearer token are credentials; never paste them into the c
 ```bash
 echo "hello" | spore msg send-e2 \
   -to dero1q…their-address… \
-  -bundle-url https://spore.mycoid.net/u/their-name/prekey \
+  -bundle-url https://mailbox.example.net/u/their-name/prekey \
   -pinned-sig THEIR_PINNED_SIG_HEX
 ```
 
@@ -245,7 +245,7 @@ spore msg recv-e2
 #     -auto-ack        reply "delivered" on the same session (delivery receipts)
 #     -maildb ~/.spore/mail.json   index into local contacts/threads/search
 #     -out-dir ~/inbox             save each body to a file (attachments)
-#     -ntfy https://notify.mycoid.net/<secret-topic>   metadata-only ntfy alert (hosted beta)
+#     -ntfy https://notify.example.net/<secret-topic>   metadata-only ntfy alert (hosted beta)
 #     SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]             ntfy auth (process environment, not argv)
 #     -notify-email you@example.com -notify-smtp-host smtp.example.com -notify-smtp-from spore@example.com
 #     -notify-sms +155****4567 -notify-twilio-sid AC... -notify-twilio-from +155****4321

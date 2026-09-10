@@ -12,7 +12,7 @@ The recipient still opens a Spore client to fetch and decrypt the body locally. 
 
 ## Hosted beta (private ntfy server)
 
-The hosted beta runs its own private ntfy server at `https://notify.mycoid.net`. It is **not** the public `ntfy.sh` service — topics are unlisted and the publisher authenticates with a bearer token, so a stranger cannot subscribe or poll your alert topic.
+The hosted beta runs its own private ntfy server at `https://notify.example.net`. It is **not** the public `ntfy.sh` service — topics are unlisted and the publisher authenticates with a bearer token, so a stranger cannot subscribe or poll your alert topic.
 
 There are **two separate notification paths**, and both are metadata-only:
 
@@ -23,7 +23,7 @@ The operator provisions each user's notification route in a non-secret JSON map,
 ```json
 {
   "alice": {
-    "webhook": "https://notify.mycoid.net/spore-alice"
+    "webhook": "https://notify.example.net/spore-alice"
   }
 }
 ```
@@ -48,7 +48,7 @@ The publisher authenticates to ntfy with a bearer token loaded from the service 
 SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]
 ```
 
-When an authenticated ciphertext body is PUT to `/u/alice/put/<cid>`, the mailbox host enqueues a durable metadata-only event (`txid`, `subject`, `received_at`) to an at-least-once outbox, and the outbox POSTs it to `https://notify.mycoid.net/spore-alice` with `Authorization: Bearer [REDACTED]`. The ntfy message body is something like:
+When an authenticated ciphertext body is PUT to `/u/alice/put/<cid>`, the mailbox host enqueues a durable metadata-only event (`txid`, `subject`, `received_at`) to an at-least-once outbox, and the outbox POSTs it to `https://notify.example.net/spore-alice` with `Authorization: Bearer [REDACTED]`. The ntfy message body is something like:
 
 - topic: `spore-alice`
 - payload: `{"event":"message.available","txid":"...","subject":"Spore private message pending","received_at":"..."}`
@@ -63,14 +63,14 @@ If you run `recv-e2` on a phone, desktop, or small home service and want the **c
 spore msg recv-e2 \
   -identity ~/.spore/identity.json \
   -spk ~/.spore/spk.json \
-  -store https://spore.mycoid.net/u/<name> \
+  -store https://mailbox.example.net/u/<name> \
   -store-token [REDACTED] \
   -state-dir ~/.spore/state \
   -state-key ~/.spore/state.key \
   -auto-ack \
   -maildb ~/.spore/mail.json \
   -out-dir ~/inbox \
-  -ntfy https://notify.mycoid.net/<secret-topic>
+  -ntfy https://notify.example.net/<secret-topic>
 # SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]  in the process environment, not on the command line
 ```
 
@@ -82,7 +82,7 @@ An operator who does not want to use the public service can run their own. The H
 
 ```bash
 # /etc/ntfy/server.yml — illustrative; redact secrets before deploying
-base-url: "https://notify.mycoid.net"
+base-url: "https://notify.example.net"
 listen-http: "127.0.0.1:2586"
 cache-file: "/var/cache/ntfy/cache.db"
 auth-file: "/var/lib/ntfy/user.db"
@@ -116,7 +116,7 @@ The existing `-ntfy` flag is a generic POST webhook alias. Use a secret topic UR
 
 ```text
 spore msg recv-e2 ... \
-  -ntfy https://notify.mycoid.net/<secret-topic>
+  -ntfy https://notify.example.net/<secret-topic>
 ```
 
 An optional bearer token is read from `SPORE_NOTIFY_WEBHOOK_TOKEN`; it is never placed in argv:

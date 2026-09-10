@@ -874,13 +874,15 @@ func demo() {
 }
 
 // defaultDonateRegistry builds the operator's per-chain donation addresses.
-// Replace with real addresses before publishing; these are the user's known
-// rails.
+//
+// It ships with NO addresses: an operator fills these in at deploy time. A
+// wallet address in source is personal data, and baking one in also guarantees
+// that every fork of this repo donates to the same place.
 func defaultDonateRegistry() *donate.Registry {
 	r := donate.New()
 	r.Register(donate.Entry{
 		Chain:   "dero",
-		Address: "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", // spore dev (DERO)
+		Address: "", // TODO: the operator's own DERO address
 		Note:    "DERO mainnet",
 	})
 	r.Register(donate.Entry{

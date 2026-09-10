@@ -24,7 +24,7 @@ func TestPostPayloadAmountAttachesValue(t *testing.T) {
 
 	c := NewClient(srv.URL, "", "")
 	args := anchor.Arguments{{Name: "W", DataType: anchor.DataUint64, Value: uint64(0xE220)}}
-	txid, err := c.PostPayloadAmount(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", args, 550000) // 5.5 DERO
+	txid, err := c.PostPayloadAmount(context.Background(), "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4", args, 550000) // 5.5 DERO
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestPostPayloadAmountAttachesValue(t *testing.T) {
 	if tr["amount"].(float64) != 550000 {
 		t.Fatalf("amount = %v, want 550000 (5.5 DERO attached to the message tx)", tr["amount"])
 	}
-	if tr["destination"].(string) != "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq" {
+	if tr["destination"].(string) != "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4" {
 		t.Fatalf("destination = %v", tr["destination"])
 	}
 	if _, ok := tr["payload_rpc"]; !ok {

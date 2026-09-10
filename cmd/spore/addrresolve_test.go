@@ -11,7 +11,7 @@ import (
 
 func TestLooksLikeAddress(t *testing.T) {
 	yes := []string{
-		"dero1qywrzl2mc2juju4ryqassffu47pmevmns909jnrq9jurdpveyvh27qgke8uqz",
+		"dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv",
 		"0x1234567890abcdef1234567890abcdef12345678",
 		"npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m",
 		"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
@@ -33,7 +33,7 @@ func TestLooksLikeAddress(t *testing.T) {
 }
 
 func TestResolveToPassesAddressThrough(t *testing.T) {
-	addr := "dero1qywrzl2mc2juju4ryqassffu47pmevmns909jnrq9jurdpveyvh27qgke8uqz"
+	addr := "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv"
 	got, pinned, err := resolveTo(context.Background(), addr, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestResolveToNicknameSuppliesAddressAndPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := "dero1qywrzl2mc2juju4ryqassffu47pmevmns909jnrq9jurdpveyvh27qgke8uqz"
+	addr := "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv"
 	if err := db.UpsertContact(maildb.Contact{Address: addr, Nickname: "Alice", Pinned: "aabbccdd"}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestResolveToUnreadableMaildbFallsThrough(t *testing.T) {
 	if _, err := maildb.Open(bad); err != nil {
 		t.Fatal(err)
 	}
-	addr := "dero1qywrzl2mc2juju4ryqassffu47pmevmns909jnrq9jurdpveyvh27qgke8uqz"
+	addr := "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv"
 	got, _, err := resolveTo(context.Background(), addr, bad, "")
 	if err != nil || got != addr {
 		t.Fatalf("address pass-through broke: %q %v", got, err)
@@ -116,7 +116,7 @@ func TestContactByNicknameNoFuzzyMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := "dero1qywrzl2mc2juju4ryqassffu47pmevmns909jnrq9jurdpveyvh27qgke8uqz"
+	addr := "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxqqnmrhlv"
 	if err := db.UpsertContact(maildb.Contact{Address: addr, Nickname: "Alice"}); err != nil {
 		t.Fatal(err)
 	}

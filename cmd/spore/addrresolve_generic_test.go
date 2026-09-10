@@ -42,7 +42,7 @@ func TestLooksLikeAddressGenericChainAddresses(t *testing.T) {
 	}
 	// Human nicknames must still NOT match — these are what the address book
 	// is for. Short, or containing spaces/punctuation.
-	no := []string{"alice", "bob", "My Friend", "driftpile-cfo", "a", strings.Repeat("a", 31), "hello.world", "acct@bank"}
+	no := []string{"alice", "bob", "My Friend", "night-shift", "a", strings.Repeat("a", 31), "hello.world", "acct@bank"}
 	for _, s := range no {
 		if looksLikeStructuralAddress(s) {
 			t.Errorf("looksLikeStructuralAddress(%q) = true; a human nickname must fall through to the address book", s)

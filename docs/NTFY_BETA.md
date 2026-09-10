@@ -1,6 +1,6 @@
 # Private ntfy for the Spore hosted beta
 
-The hosted beta runs its own private ntfy server at `https://notify.mycoid.net` so arrival alerts do not go through the public `ntfy.sh` service. Topics are unlisted and the publisher authenticates with a bearer token, so a stranger cannot subscribe or poll an alert topic.
+The hosted beta runs its own private ntfy server at `https://notify.example.net` so arrival alerts do not go through the public `ntfy.sh` service. Topics are unlisted and the publisher authenticates with a bearer token, so a stranger cannot subscribe or poll an alert topic.
 
 This doc describes the **actual** deployment on Hetzner and the **actual** Spore notification paths. It does not invent flags. If a flag or env var is not in the code, it is not supported.
 
@@ -13,10 +13,10 @@ The operator puts each user's alert route in a non-secret JSON map used by `mail
 ```json
 {
   "alice": {
-    "webhook": "https://notify.mycoid.net/spore-alice"
+    "webhook": "https://notify.example.net/spore-alice"
   },
   "bob": {
-    "webhook": "https://notify.mycoid.net/spore-bob"
+    "webhook": "https://notify.example.net/spore-bob"
   }
 }
 ```
@@ -73,14 +73,14 @@ If you run `recv-e2` on a phone, desktop, or small home service, you can have **
 spore msg recv-e2 \
   -identity ~/.spore/identity.json \
   -spk ~/.spore/spk.json \
-  -store https://spore.mycoid.net/u/<name> \
+  -store https://mailbox.example.net/u/<name> \
   -store-token [REDACTED] \
   -state-dir ~/.spore/state \
   -state-key ~/.spore/state.key \
   -auto-ack \
   -maildb ~/.spore/mail.json \
   -out-dir ~/inbox \
-  -ntfy https://notify.mycoid.net/<secret-topic>
+  -ntfy https://notify.example.net/<secret-topic>
 # SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]  in the process environment, not on the command line
 ```
 
@@ -92,7 +92,7 @@ An operator who does not want to use any public service can run their own. The H
 
 ```yaml
 # /etc/ntfy/server.yml — illustrative; redact before deploying
-base-url: "https://notify.mycoid.net"
+base-url: "https://notify.example.net"
 listen-http: "127.0.0.1:2586"
 cache-file: "/var/cache/ntfy/cache.db"
 auth-file: "/var/lib/ntfy/user.db"
@@ -130,8 +130,8 @@ Do **not** expose an unauthenticated ntfy topic to the open internet for Spore a
 
 ## What is live right now
 
-- `https://notify.mycoid.net` serves the private ntfy instance.
-- `https://spore.mycoid.net` serves the hosted mailbox.
+- `https://notify.example.net` serves the private ntfy instance.
+- `https://mailbox.example.net` serves the hosted mailbox.
 - `ntfy serve` runs under systemd as the `ntfy` user with a deny-all auth policy.
 - `spore mailbox host` runs under systemd as the `spore` user with `-privacy`, a shared wallet RPC login from an env file, and a `-notify-file` map pointing each user at a private ntfy topic.
 - The publisher bearer token lives in `/etc/spore/ntfy-publisher.env` and is never in the repo.

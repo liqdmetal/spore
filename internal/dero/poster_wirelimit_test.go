@@ -20,7 +20,7 @@ func TestPostPayloadRejectsR153OversizeBeforeRPC(t *testing.T) {
 	defer srv.Close()
 
 	payload := anchor.Arguments{{Name: "T", DataType: anchor.DataString, Value: string(make([]byte, 200))}}
-	_, err := NewClient(srv.URL, "", "").PostPayloadAmountWithRing(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", payload, 1, 2)
+	_, err := NewClient(srv.URL, "", "").PostPayloadAmountWithRing(context.Background(), "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4", payload, 1, 2)
 	if err == nil {
 		t.Fatal("accepted payload that exceeds R153 packed limit")
 	}
@@ -41,7 +41,7 @@ func TestPostPayloadAcceptsR153SizedPayload(t *testing.T) {
 	defer srv.Close()
 
 	payload := anchor.Arguments{{Name: "T", DataType: anchor.DataString, Value: "ok"}}
-	got, err := NewClient(srv.URL, "", "").PostPayloadAmountWithRing(context.Background(), "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq", payload, 1, 2)
+	got, err := NewClient(srv.URL, "", "").PostPayloadAmountWithRing(context.Background(), "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4", payload, 1, 2)
 	if err != nil || got != "ok" {
 		t.Fatalf("got txid=%q err=%v", got, err)
 	}

@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateAddress(t *testing.T) {
-	valid := "dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"
+	valid := "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4"
 	if got, err := ValidateAddress(valid); err != nil || got != valid {
 		t.Fatalf("valid address: got %q err=%v", got, err)
 	}
