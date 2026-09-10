@@ -202,13 +202,17 @@ type GetTransfersParams struct {
 // Entry is the subset of rpc.Entry we read.
 type Entry struct {
 	// Height is the block height used by R153 get_transfers min_height.
-	Height     uint64           `json:"height"`
-	TopoHeight int64            `json:"topoheight"`
-	Incoming   bool             `json:"incoming"`
-	TXID       string           `json:"txid"`
-	Sender     string           `json:"sender"`
-	Amount     uint64           `json:"amount"` // atomic DERO (1 DERO = 100000)
-	PayloadRPC anchor.Arguments `json:"payload_rpc"`
+	Height uint64 `json:"height"`
+	// TransactionPos and Pos are R153's block and transaction coordinates.
+	// They distinguish multiple transfer records sharing one TXID.
+	TransactionPos int64            `json:"tpos"`
+	Pos            int64            `json:"pos"`
+	TopoHeight     int64            `json:"topoheight"`
+	Incoming       bool             `json:"incoming"`
+	TXID           string           `json:"txid"`
+	Sender         string           `json:"sender"`
+	Amount         uint64           `json:"amount"` // atomic DERO (1 DERO = 100000)
+	PayloadRPC     anchor.Arguments `json:"payload_rpc"`
 	// Data is the raw payload bytes as base64 (wallets like Engram that fail
 	// the CBOR parse of padded payloads still return this).
 	Data []byte `json:"data"`
@@ -261,9 +265,9 @@ type AnchorEvent struct {
 
 // IncomingAnchors polls get_transfers (in:true, min_height) and returns
 // events whose payload parses as a compost anchor. Non-anchor transfers are
-// skipped silently. Delivered txids are tracked so an anchor is emitted
-// exactly once (the wallet's min_height filter is >=, so a cursor at the
-// anchor's own height would otherwise re-match it every poll). Polls every
+// skipped silently. Delivered entry identities are tracked so an anchor is
+// emitted exactly once (the wallet's min_height filter is >=, so a cursor at
+// the anchor's own height would otherwise re-match it every poll). Polls every
 // interval until ctx is cancelled.
 func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval time.Duration) (<-chan AnchorEvent, <-chan error) {
 	ch := make(chan AnchorEvent)
@@ -290,12 +294,13 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				if e.TXID == "" {
 					continue
 				}
-				if seen[e.TXID] {
-					continue
-				}
 				raw, err := EntryPayload(e)
 				if err != nil {
 					continue // malformed or undecodable payload — skip
+				}
+				id := EntryIdentity(e, raw)
+				if id == "" || seen[id] {
+					continue
 				}
 				args, err := PayloadToArgs(raw)
 				if err != nil {
@@ -307,9 +312,7 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 				}
 				select {
 				case ch <- AnchorEvent{TXID: e.TXID, TopoHeight: e.TopoHeight, Anchor: a}:
-					if e.TXID != "" {
-						seen[e.TXID] = true
-					}
+					seen[id] = true
 				case <-ctx.Done():
 					return
 				}

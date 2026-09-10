@@ -450,8 +450,8 @@ func RecvChain(ctx context.Context, c chain.Chain, codec Codec, opts chain.Watch
 }
 
 // Recv polls get_transfers (in:true) for incoming whispers and delivers each as
-// it confirms. Delivered txids are deduped so a whisper fires once. Non-whisper
-// incoming transfers are skipped.
+// it confirms. Delivered entry identities are deduped so a whisper fires once.
+// Non-whisper incoming transfers are skipped.
 func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval time.Duration) (<-chan Msg, <-chan error) {
 	ch := make(chan Msg)
 	errc := make(chan error, 1)
@@ -473,9 +473,6 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				if e.TXID == "" {
 					continue
 				}
-				if seen[e.TXID] {
-					continue
-				}
 				// DERO R153 get_transfers uses block height for min_height;
 				// topoheight is a different DAG coordinate and must not drive
 				// this cursor.
@@ -486,6 +483,10 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				if err != nil {
 					continue // malformed or undecodable payload — skip
 				}
+				id := dero.EntryIdentity(e, raw)
+				if id == "" || seen[id] {
+					continue
+				}
 				args, err := dero.PayloadToArgs(raw)
 				if err != nil {
 					continue // malformed typed payload — skip
@@ -494,9 +495,7 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 				if isWhisper {
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender, Text: text}:
-						if e.TXID != "" {
-							seen[e.TXID] = true
-						}
+						seen[id] = true
 					case <-ctx.Done():
 						return
 					}
@@ -507,9 +506,7 @@ func Recv(ctx context.Context, client *dero.Client, minHeight uint64, interval t
 					select {
 					case ch <- Msg{TXID: e.TXID, TopoHeight: e.TopoHeight, Sender: e.Sender,
 						HasPointer: true, EphPub: eph, BodyCID: cid}:
-						if e.TXID != "" {
-							seen[e.TXID] = true
-						}
+						seen[id] = true
 					case <-ctx.Done():
 						return
 					}
