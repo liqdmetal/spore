@@ -117,13 +117,13 @@ func PayloadToArgs(p chain.Payload) (anchor.Arguments, error) {
 		if len(a.N) == 0 || len(a.N) > maxPayloadName || strings.TrimSpace(a.N) != a.N {
 			return nil, fmt.Errorf("dero: invalid argument name")
 		}
+		if !validDataType(a.T) {
+			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.T)
+		}
 		if _, ok := seen[a.N+a.T]; ok {
 			return nil, fmt.Errorf("dero: duplicate argument %q", a.N+a.T)
 		}
 		seen[a.N+a.T] = struct{}{}
-		if !validDataType(a.T) {
-			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.T)
-		}
 		if len(a.V) > maxPayloadValue {
 			return nil, fmt.Errorf("dero: argument %q value too large", a.N)
 		}
@@ -159,10 +159,6 @@ func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
 		if !validDataType(a.DataType) {
 			return nil, fmt.Errorf("dero: unsupported argument datatype %q", a.DataType)
 		}
-		if _, ok := seen[a.Name+string(a.DataType)]; ok {
-			return nil, fmt.Errorf("dero: duplicate argument %q", a.Name+string(a.DataType))
-		}
-		seen[a.Name+string(a.DataType)] = struct{}{}
 		ja := argJSON{N: a.Name, T: string(a.DataType)}
 		switch v := a.Value.(type) {
 		case uint64:
@@ -199,6 +195,11 @@ func ArgsToPayload(args anchor.Arguments) (chain.Payload, error) {
 		default:
 			return nil, fmt.Errorf("dero: unsupported argument value type %T", a.Value)
 		}
+		wireKey := ja.N + ja.T
+		if _, ok := seen[wireKey]; ok {
+			return nil, fmt.Errorf("dero: duplicate argument %q", wireKey)
+		}
+		seen[wireKey] = struct{}{}
 		if len(ja.V) > maxPayloadValue {
 			return nil, fmt.Errorf("dero: argument %q value too large", a.Name)
 		}
