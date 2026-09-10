@@ -35,6 +35,20 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	return chain.PostResult{TxID: txid}, nil
 }
 
+func entryPayload(e Entry) (chain.Payload, error) {
+	if len(e.PayloadRPC) > 0 {
+		return ArgsToPayload(e.PayloadRPC)
+	}
+	if len(e.Data) > 0 {
+		args, err := RawPayloadToArgs(e.Data)
+		if err != nil {
+			return nil, err
+		}
+		return ArgsToPayload(args)
+	}
+	return nil, fmt.Errorf("dero: transfer %s has no payload", e.TXID)
+}
+
 func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.Incoming, error) {
 	entries, err := b.client.GetTransfers(ctx, GetTransfersParams{In: true, MinHeight: minHeight})
 	if err != nil {
