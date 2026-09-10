@@ -52,7 +52,7 @@ type rpcRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
 	ID      string      `json:"id"`
 	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	Params  interface{} `json:"params"`
 }
 
 type rpcResponse struct {
@@ -68,6 +68,8 @@ type rpcError struct {
 }
 
 // call performs one JSON-RPC request and decodes result into out (if non-nil).
+// The wallet RPC rejects an ABSENT "params" key and an empty object ({}); it
+// accepts params:null for parameterless methods. Pass nil for those.
 func (c *Client) call(ctx context.Context, method string, params, out interface{}) error {
 	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: "0", Method: method, Params: params})
 	if err != nil {
@@ -245,7 +247,7 @@ func (c *Client) GetAddress(ctx context.Context) (string, error) {
 	var out struct {
 		Address string `json:"address"`
 	}
-	if err := c.call(ctx, "getaddress", struct{}{}, &out); err != nil {
+	if err := c.call(ctx, "getaddress", nil, &out); err != nil {
 		return "", err
 	}
 	return out.Address, nil
@@ -256,7 +258,7 @@ func (c *Client) GetHeight(ctx context.Context) (uint64, error) {
 	var out struct {
 		Height uint64 `json:"height"`
 	}
-	if err := c.call(ctx, "getheight", struct{}{}, &out); err != nil {
+	if err := c.call(ctx, "getheight", nil, &out); err != nil {
 		return 0, err
 	}
 	return out.Height, nil
