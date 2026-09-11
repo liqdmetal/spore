@@ -18,6 +18,8 @@ remaining; it does not re-state live status.*
 - **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`, `0xE2`):
   forward-private, post-compromise healing, AAD-bound to the session, ratchet
   rollback on failed decrypt. Interop vectors in `docs/`.
+- **Multi-device sync** (`e2-device`): encrypted state export/import, durable
+  device ledger, collision detection, and fail-closed sends on flagged sessions.
 
 ### Compostability
 - Off-chain TTL body store (`internal/store`), crash-safe write ordering.
@@ -59,17 +61,16 @@ remaining; it does not re-state live status.*
 | # | Item | Why it's gated / what it needs |
 |---|---|---|
 | 1 | **Serverless bodies over `spore-peer`** | E2 off-chain bodies ride the HTTP mailbox today. Wiring E2 frame fetch to the P2P peer transport removes the last always-on-server dependency for body delivery. The peer repo (`liqdmetal/spore-peer`, Rust) predates E2 and carries no ratchet — needs an E2 body-fetch adapter. |
-| 2 | **Multi-device sync (Tier 3)** | Mailbox as always-on node + per-device X3DH sessions (same identity, fresh session per device; forward secrecy stays device-bound). Cross-device catch-up rides the chain pointer. Biggest UX leap; medium-high effort. |
-| 3 | **Escrow + swap in chat** | Wire `msg` to the live sap escrow / relay-dex HTLC contracts (SC-call seam in the CLI). Contracts are mainnet-live; this is integration, not new crypto. Enables settlement rake (docs/BUSINESS.md line 2). |
-| 4 | **Tokenized search** | maildb search is substring + AND/NOT/phrase/scope today. A real inverted index (AND/OR, phrase, sender-scoped) is the next depth. |
-| 5 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
-| 6 | **Deploy `MyceliumMailbox.sol`** | Written + backend proven; needs a funded EVM account on a real chain. |
-| 7 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
-| 8 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
-| 9 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
-| 10 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p). |
-| 11 | **More chains** (Zcash / ARRR / Decred / Verge) | Each a `chain.Chain` backend reusing the envelope/relay pattern. |
-| 12 | **Cross-chain identity proof** (DERO↔EVM) | Research crypto — the hard piece. Gates true interchain messaging. |
+| 2 | **Escrow + swap in chat** | Wire `msg` to the live sap escrow / relay-dex HTLC contracts (SC-call seam in the CLI). Contracts are mainnet-live; this is integration, not new crypto. Enables settlement rake (docs/BUSINESS.md line 2). |
+| 3 | **Tokenized search** | maildb search is substring + AND/NOT/phrase/scope today. A real inverted index (AND/OR, phrase, sender-scoped) is the next depth. |
+| 4 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
+| 5 | **Deploy `MyceliumMailbox.sol`** | Written + backend proven; needs a funded EVM account on a real chain. |
+| 6 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
+| 7 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
+| 8 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
+| 9 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh (Waku/Iroh/libp2p). |
+| 10 | **More chains** (Zcash / ARRR / Decred / Verge) | Each a `chain.Chain` backend reusing the envelope/relay pattern. |
+| 11 | **Cross-chain identity proof** (DERO↔EVM) | Research crypto — the hard piece. Gates true interchain messaging. |
 
 ## Honest notes
 - Items #1–3 are the real product leaps (no-server bodies, multi-device,

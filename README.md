@@ -69,8 +69,8 @@ transaction — so Spore never pretends to. What it guarantees:
 | Carrier | Backend | Pointer transport | Compost | Status |
 |---|---|---|---|---|
 | **DERO** | `internal/dero` | native tx payload | body TTL | **live, mainnet** |
-| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (anvil); deploy pending |
-| **Solana** | `internal/solana` | inbox PDA (program v3) | `burn(idx)` after delivery | **live, mainnet** |
+| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (local Anvil); deployment pending |
+| **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
 | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
 | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
 | **Cosmos SDK** | `internal/cosmos` | configurable memo field | chain-specific | configurable seam |
@@ -194,8 +194,9 @@ forever-free.
 See [`ROADMAP.md`](ROADMAP.md). Shipped recently: E2 (0xE2) forward-private
 transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
 (contacts/threads/search), offline compose queue, single-use prekey batches,
-one-shot onboarding, panic wipe. Next: serverless bodies over `spore-peer`,
-multi-device sync, tokenized search.
+one-shot onboarding, panic wipe, and multi-device state sync via
+`e2-device`. Next: serverless bodies over `spore-peer`, tokenized search, and
+real-chain EVM deployment.
 
 ## License
 

@@ -1,13 +1,12 @@
 # Spore Ratchet — X3DH + Double Ratchet
 
-*Status: crypto/session implementation landed; wire integration is still
-pending. Closes the last big T1/T4 gap: forward secrecy. Today a stolen device
-key decrypts every message encrypted to it that still exists — the DERO native
-payload, the 0xE1 public-chain envelope, and the one-shot long-body path all
-need their ratcheted conversation adapter before they get the stronger claim.
-This design makes compromise-of-key ≠ compromise-of-history. Companion docs:
+*Status: the 0xE2 ratcheted path and CLI integration are shipped and tested;
+legacy 0xE1/whisper paths remain compatibility-only. The multi-device state
+bundle and collision guard are also shipped, but concurrent sending from two
+unsynced devices is still unsafe by design. This design makes
+compromise-of-key ≠ compromise-of-history on the ratcheted path. Companion docs:
 `SENDER_AUTH.md` (identity/authenticity, unchanged), `WIRE_SPEC.md` (0xE1
-legacy envelope; 0xE2 ratchet envelope proposed).*
+legacy envelope; 0xE2 ratchet envelope shipped).*
 
 ---
 
@@ -193,27 +192,24 @@ becomes genuinely blind, which was always the README's claim.
 
 ## 11. Implementation status and remaining wire work
 
-1. **Crypto/session layer landed:** `internal/ratchet` now contains X3DH,
-   Double Ratchet, bounded skipped-key storage, compromise simulation,
-   post-compromise healing, header-AAD authentication, export/import, and
-   deterministic vectors. This is not the messenger integration by itself.
-2. **Still required before the privacy claim is shipped:**
-   - a versioned 0xE2 envelope adapter carrying the ratchet handshake/message
-     bytes through `chain.Payload`;
-   - recipient prekey-bundle publication and one-time-prekey consumption;
-   - protected, TTL-bound session-state persistence on the endpoint, with no
-     ratchet private state in a blind mailbox or relay;
-   - chain-agnostic `SendRatchet`/`RecvRatchet` APIs and CLI selection;
-   - end-to-end tests through DERO, EVM, Solana, and XMR's off-chain signal/
-     rendezvous path, including restart, replay, out-of-order, tamper, and
-     later-device-key compromise.
-3. **Feature flag:** keep the current path as legacy only. Enable ratchet mode
-   explicitly until the complete matrix passes. A chain carrier MUST be
-   treated as an opaque record; it never gets a ratchet key.
-4. **Golden requirement:** skipping message keys then receiving 2,3,1 must
+1. **Shipped:** `internal/ratchet` contains X3DH, Double Ratchet, bounded
+   skipped-key storage, compromise simulation, post-compromise healing,
+   header-AAD authentication, export/import, and deterministic vectors.
+2. **Shipped integration:** the CLI has `send-e2`/`recv-e2`, prekey-bundle
+   publication and consumption, durable encrypted endpoint state, TTL-bound
+   body storage, chain-agnostic pointer carriers, restart/replay/out-of-order
+   tests, and the `e2-device` encrypted state-sync commands.
+3. **Still gated:** real-chain coverage remains carrier-specific. DERO is
+   mainnet-verified; Solana is self-messaging mainnet-verified; EVM is local
+   Anvil-verified with deployment pending; XMR remains mock-verified and is
+   refused for E2 pointers because its native seam is only eight bytes.
+4. **Feature boundary:** legacy 0xE1/whisper paths remain compatibility-only
+   and are not forward-private. A chain carrier MUST be treated as an opaque
+   record; it never gets a ratchet key.
+5. **Golden invariant:** skipping message keys then receiving 2,3,1 must
    deliver 2,3,1 with 1's key from the skipped store; after delivery + TTL the
-   store must contain zero skipped keys. Repeat the invariant through every
-   carrier, not only an in-memory fake.
+   store must contain zero skipped keys. The current test matrix covers this
+   at the ratchet/wire boundary; real-carrier repetition remains open.
 
 ## 12. Open questions
 

@@ -84,10 +84,11 @@ regulated firm needs — without giving up the compostable, self-hosted model.
 
 Built on what already exists (`maildb`, threads, search, allowlist, panic):
 
-- **Team maildb + multi-device sync** (Tier 3): mailbox as the always-on node,
-  per-device X3DH sessions (same identity, fresh session per device — forward
-  secrecy stays device-bound, like Signal). Cross-device catch-up rides the
-  chain pointer, no separate sync server.
+- **Team maildb + multi-device sync** (Tier 3): shipped encrypted device-state
+  export/import with a local collision guard. The mailbox remains the always-on
+  node; forward secrecy stays device-bound. Cross-device catch-up is explicit:
+  sync before sending, and replace any session flagged as collided; no separate
+  sync server is required.
 - **Retention policy controls:** per-thread keep-forever vs. compost, `purge`
   scheduling, panic-wipe for the whole org.
 - **Audit log** (optional, local): who messaged whom, hashed — enough for a

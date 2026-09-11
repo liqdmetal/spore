@@ -51,8 +51,10 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
 
 ## What's real and shipped (v0.3.0)
 - **Multi-chain** `spore msg send/recv/send-long/keygen -chain dero|evm|xmr|solana`
-- **DERO** live mainnet · **Solana** live mainnet (v3, cross-wallet) · **EVM**
-  anvil + MyceliumMailbox contract · **XMR** node synced (content off-chain, B1)
+- **DERO** live mainnet · **Solana** live mainnet (v2, self-messaging) · **EVM**
+  anvil + MyceliumMailbox contract · **XMR** mock-verified only (content off-chain, B1)
+- **Multi-device sync**: encrypted `e2-device` export/import with a local
+  collision guard; conflicted sessions fail closed until replaced.
 - **Home/hosted mailbox**: `spore mailbox host` — always-on shared ciphertext
   and prekey service, `-privacy` (no sender in hosted log), per-user tokens,
   TLS at the edge, body padding; `spore msg recv-e2` decrypts on the device
