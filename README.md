@@ -124,6 +124,13 @@ spore status | doctor          # health HUD + preflight
 
 # Compostability as a user feature:
 spore panic [-home ~/.spore] [-confirm]   # verifiable local wipe of keys/state/maildb/spool
+
+# Explicit continuity vault (no automatic fund movement):
+spore continuity create -owner-key FILE -recipient-pub HEX[,HEX,...] -file PAYLOAD -out VAULT
+spore continuity check-in -vault VAULT -owner-key FILE
+spore continuity status -vault VAULT [-at UNIX]
+spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
+spore continuity verify -vault VAULT
 ```
 
 Plaintext is **never** an argv flag (shell history, `ps`, and crash reports

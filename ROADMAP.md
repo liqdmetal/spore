@@ -27,6 +27,16 @@ remaining; it does not re-state live status.*
   auto-burn.
 - Durable encrypted local ratchet state with append-only anti-rollback log.
 - `maildb` purge + `spore panic` verifiable local wipe.
+- **Continuity vault v1:** encrypted recipient-wrapped payload, signed check-in
+  chain, deterministic missed-deadline evaluation, and explicit local release.
+  See [`docs/CONTINUITY.md`](docs/CONTINUITY.md). No automatic fund movement.
+
+### Continuity vault — next protocol slices
+- Observer/check-in transport that publishes only signed liveness metadata.
+- N-of-M recipient or observer release, with independent operators.
+- Optional chain commitment for policy/deadline anchoring.
+- Notification and recovery UX without handing plaintext or keys to a service.
+- No automatic wallet spending or irreversible account actions.
 
 ### Carriers (all carry the same opaque 74-byte pointer, no downgrade)
 - **Nostr** (signed events, NIP-09 best-effort delete), **Bitcoin**
