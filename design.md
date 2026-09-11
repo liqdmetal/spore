@@ -32,22 +32,20 @@ goes on-chain at all. Every layer below obeys both.
 DERO encrypts every tx payload **point-to-point** to the recipient's wallet —
 there is no stock "group reads off the mempool." So the architecture is:
 
-### 1. Whisper — short, no-infra signal (the on-chain seam)
-A short line rides the payload (measured: ~95 ASCII chars max, one sentence).
-Real tx, propagates P2P, confirms in ~1 block. No box, no relay, no exposed IP —
-each party talks only to its own wallet+node. On DERO it is point-to-point
-encrypted natively. `internal/whisper` turns this into a chain-agnostic codec
-(kind byte 0x01 text / 0x02 pointer, length-prefixed) shared by every backend.
+### 1. DERO E2 message — short or long
+Every new DERO message uses the same `0xE2` pointer/body path. X3DH
+establishes the session and Double Ratchet encrypts the body with evolving
+message keys. The body is stored off-chain under a TTL; DERO receives only the
+opaque pointer and minimum postage in a ring-16 transaction by default (ring 8
+is optional). The carrier never receives plaintext or ratchet ciphertext.
 
-### 2. Long message — nobody but sender & receiver (rendezvous)
-Bulk content never rides a whisper. Sender encrypts it to the recipient's
-long-term key under a fresh ephemeral, stores the ciphertext **on their own
-node**, and sends a whisper/anchor carrying only a **pointer** (sender ephemeral
-pub + body CID + deadline). When the recipient is available they fetch the body
-peer-to-peer (over the node's existing P2P channel — no new open port), verify
-the CID, decrypt, then both sides rotate + erase keys. Nobody but sender and
-receiver ever holds the bytes or the key, and after fetch the body + key are
-gone. The on-chain record is a dead pointer.
+Historical native whispers and one-shot long-body records remain receive-only
+compatibility data. They are not forward-private and are not the new-send path.
+
+### 2. Other chains — same E2 body, different pointer carrier
+The same ratcheted body/store is used across supported carriers. The carrier
+gets only the canonical pointer; unsupported carriers refuse rather than
+silently downgrading to a legacy envelope.
 
 ### 3. Public compostable chans (IRC-style)
 Channel box relays TTL-bounded lines; public rooms readable live by anyone,
@@ -125,17 +123,16 @@ inboxes that store envelopes; the program/contract never holds a key.
 See `README.md` (authoritative chain-status table) and `WHISPER.md` (the
 no-relay unicast architecture) for details.
 
-## Live end-to-end verified (2026-09-05, DERO mainnet)
+## Live carrier evidence and current send policy
 
-Full nobody-but-us long-message path proven live on the node:
-1. Alice `whisper keygen` + `whisper send-long` → body encrypted to Bob's key,
-   held on Alice's node (disk 0600), pointer-whisper (C cid + K ephemeral) mined
-   on-chain.
-2. Alice runs `spore-peer serve` on her reachable node.
-3. Bob `whisper recv -key bob.key -peer-addr alice:port` → saw the pointer,
-   fetched the body over the peer transport, decrypted with his key → printed
-   the message. Nobody but Alice and Bob ever held it.
+The DERO carrier and wallet RPC wire shape have been live-verified. The current
+new-send policy is stricter than the historical smoke path:
 
-CLI: `spore whisper {send|send-long|recv|keygen}` + the Rust `spore-peer`
-transport (derohe-rs); the multi-chain `spore msg ... -chain` path is the
-same model on EVM/Solana/XMR.
+- new short and long DERO command names enter canonical `0xE2`;
+- the body is off-chain and ratcheted; DERO carries only the pointer;
+- DERO message posts default to ring size 16 and accept only 8 or 16;
+- old native/`0xE1`/one-shot records remain receive-only compatibility data.
+
+Parser, backend, full-suite, vet, build, and browser checks prove this routing
+and policy. A newly mined live transaction should still be treated as a
+separate carrier round-trip check, not inferred from unit tests.

@@ -115,7 +115,7 @@ t.join("#somewhere").then(async () => {
   document.getElementById("wMsg").value = "hello";
   await t.whisperSend();
   ok(calls.some(c => c.url.endsWith("/e2/send")), "whisperSend posts to /e2/send (forward-private), not /whisper/send");
-  ok(!calls.some(c => c.url.includes("/whisper/send")), "the legacy /whisper/send endpoint is gone from the UI");
+  ok(!calls.some(c => c.url.includes("/whisper/send")), "the browser never calls the compatibility /whisper/send alias directly");
 
   calls.length = 0;
   global.fetch = async (url) => { calls.push({ url: String(url), opts: null }); return { ok: true, text: async () => JSON.stringify([{ txid: "aabbcc", text: "hi" }]) }; };

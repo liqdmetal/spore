@@ -137,7 +137,7 @@
     <button id="wSend">send →</button>
     <div class="rail-section">Inbox</div>
     <div id="wInbox" class="inbox"></div>
-    <div class="wlegacyhint">legacy whispers from before this policy: `spore whisper recv`</div>
+    <div class="wlegacyhint">old native whispers from before E2: bare `spore whisper recv`</div>
   </div>
 </div>
 <div id="main">
@@ -164,8 +164,8 @@
         <p><b>Bodies</b> ride your own mailbox; only an opaque pointer rides the
         chain. <b>First contact</b> needs the recipient's prekey and pinned sig,
         saved once with <code>spore msg mail add</code>.</p>
-        <p class="wnote">Legacy whispers (stateless X25519) are receive-only: they
-        are not forward-private, so new sends are refused.</p>
+        <p class="wnote">Old native whispers (stateless X25519) remain receive-only.
+        New DERO sends through the familiar whisper names use this E2 path.</p>
       </div>
     </div>
     <div class="wfoot">

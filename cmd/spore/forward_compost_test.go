@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// TestLegacySendRefusal pins the refusal contract: every blocked legacy send
-// path must name the 0xE2 replacement and say why. The message is all a user
-// of those paths ever sees, so it must stay accurate and actionable.
+// TestLegacySendRefusal keeps the refusal contract for non-DERO legacy
+// carriers. DERO aliases are upgraded to E2 and must not use this path.
 func TestLegacySendRefusal(t *testing.T) {
-	for _, cmd := range []string{"whisper send", "whisper send-long", "msg send", "msg send-long"} {
+	for _, cmd := range []string{"msg send on evm", "msg send on xmr", "msg send on solana"} {
 		err := legacySendRefusal(cmd)
 		if err == nil {
 			t.Fatalf("%s: refusal is nil", cmd)
@@ -19,14 +18,19 @@ func TestLegacySendRefusal(t *testing.T) {
 		if !strings.HasPrefix(msg, cmd+": REFUSED") {
 			t.Errorf("%s: message does not say REFUSED: %q", cmd, msg)
 		}
-		if !strings.Contains(msg, "not forward-private") {
-			t.Errorf("%s: message does not say why: %q", cmd, msg)
+		if !strings.Contains(msg, "not forward-private") || !strings.Contains(msg, "send-e2") {
+			t.Errorf("%s: refusal lacks E2 explanation: %q", cmd, msg)
 		}
-		if !strings.Contains(msg, "send-e2") {
-			t.Errorf("%s: message does not point at the replacement: %q", cmd, msg)
-		}
-		if !strings.Contains(msg, "X3DH") {
-			t.Errorf("%s: message does not name the mechanism: %q", cmd, msg)
+	}
+}
+
+func TestDeroAliasesAreNotLegacyRefusals(t *testing.T) {
+	for _, args := range [][]string{
+		{"-to", "dest", "-identity", "identity.key"},
+		{"-to", "dest", "-identity", "identity.key", "-file", "body.bin"},
+	} {
+		if deroCompatChain(args) != true {
+			t.Fatalf("DERO alias not selected: %v", args)
 		}
 	}
 }
@@ -57,5 +61,15 @@ func TestWebE2LoadsRealKit(t *testing.T) {
 	}
 	if e.store == nil {
 		t.Fatal("body store not built")
+	}
+	if e.ringSize != 16 {
+		t.Fatalf("web E2 default ring = %d, want 16", e.ringSize)
+	}
+	e8, err := newWebE2(dir, "http://127.0.0.1:1", "", 8)
+	if err != nil || e8.ringSize != 8 {
+		t.Fatalf("web E2 ring 8: endpoint=%v err=%v", e8, err)
+	}
+	if _, err := newWebE2(dir, "http://127.0.0.1:1", "", 32); err == nil {
+		t.Fatal("web E2 accepted unsupported ring 32")
 	}
 }

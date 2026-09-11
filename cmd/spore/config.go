@@ -25,6 +25,7 @@ type Config struct {
 	Store      string `json:"store,omitempty"`
 	StoreToken string `json:"store_token,omitempty"`
 	Chain      string `json:"chain,omitempty"`
+	RingSize   string `json:"ringsize,omitempty"`
 	Maildb     string `json:"maildb,omitempty"`
 	RPC        string `json:"rpc,omitempty"`
 	RPCLogin   string `json:"rpc_login,omitempty"`
@@ -99,6 +100,7 @@ func (c *Config) flagValues() map[string]string {
 		"store":       c.Store,
 		"store-token": c.StoreToken,
 		"chain":       c.Chain,
+		"ringsize":    c.RingSize,
 		"maildb":      c.Maildb,
 		"rpc":         c.RPC,
 		"rpc-login":   c.RPCLogin,

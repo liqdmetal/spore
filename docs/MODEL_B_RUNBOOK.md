@@ -13,13 +13,18 @@ uses the shipped spore binary (v0.2.x) on a Linux box like the Hetzner node.*
 Phone commands once provisioned:
 ```
 # on the phone (Termux):
-spore msg send -chain dero -rpc https://<your-host>:<port>/json_rpc \
-  -to <friend-dero1...> -msg "hi"
+printf 'hi\n' | spore msg send -chain dero -rpc https://<your-host>:<port>/json_rpc \
+  -to <friend-dero1...> -identity ~/mb/identity.key \
+  -bundle ./friend-bundle.json -pinned-sig FRIEND_SIGNING_KEY_HEX \
+  -store https://<your-host>/u/<user> -state-dir ~/mb/state -state-key ~/mb/state.key \
+  -ringsize 16
 spore msg recv-e2 -chain dero -rpc <your-rpc> -rpc-login <user:pass> \
   -store https://<your-host>/u/<user> -store-token <user-token> \
   -identity ~/mb/identity.key -spk ~/mb/spk.key -opk-pool ~/mb/opk-pool.json \
   -state-dir ~/mb/state -state-key ~/mb/state.key   # decrypt locally, secure
 ```
+
+Use `-ringsize 8` instead when you want smaller DERO message transactions; Spore accepts only 8 or 16.
 
 ## 1. Provision a user (operator side)
 ```bash

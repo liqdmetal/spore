@@ -76,4 +76,4 @@ true DERO↔Solana↔EVM delivery. The pager becomes a network.
 
 ## Repos
 - **Spore**: `github.com/liqdmetal/spore` (public) — this codebase.
-- Rhizome / Obscura architecture is a separate private effort.
+- Other chain(s) and relay architecture are separate efforts.

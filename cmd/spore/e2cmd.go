@@ -14,12 +14,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/backend"
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/nostr"
 	"github.com/liqdmetal/spore/internal/notify"
@@ -120,12 +122,34 @@ func e2Store(url, token, keyFile string) (ratchetwire.BodyStore, error) {
 	}
 	return store.NewHTTPStoreWithToken(url, token)
 }
+func deroRingSizeFromFlags(fs *flag.FlagSet, chainName string) (uint64, error) {
+	if !strings.EqualFold(chainName, "dero") {
+		return 0, nil
+	}
+	value := "16"
+	if f := fs.Lookup("ringsize"); f != nil && f.Value.String() != "" {
+		value = f.Value.String()
+	}
+	ringSize, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("-ringsize must be 8 or 16: %w", err)
+	}
+	if err := dero.ValidateSporeRingSize(ringSize); err != nil {
+		return 0, err
+	}
+	return ringSize, nil
+}
+
 func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
 	value := func(name string) string {
 		if f := fs.Lookup(name); f != nil {
 			return f.Value.String()
 		}
 		return ""
+	}
+	ringSize, err := deroRingSizeFromFlags(fs, value("chain"))
+	if err != nil {
+		return ratchetwire.ChainCarrier{}, err
 	}
 	privateKey := value("private-key")
 	if path := value("private-key-file"); path != "" {
@@ -147,6 +171,15 @@ func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
 	c, err := backend.Build(context.Background(), cfg)
 	if err != nil {
 		return ratchetwire.ChainCarrier{}, err
+	}
+	if strings.EqualFold(value("chain"), "dero") {
+		d, ok := c.(*dero.Backend)
+		if !ok {
+			return ratchetwire.ChainCarrier{}, errors.New("dero carrier did not build a DERO backend")
+		}
+		if err := d.SetSporeRingSize(ringSize); err != nil {
+			return ratchetwire.ChainCarrier{}, err
+		}
 	}
 	var codec ratchetwire.ChainPayloadCodec
 	switch strings.ToLower(c.Name()) {
@@ -313,6 +346,7 @@ func trimTrailingNewline(b []byte) []byte {
 func e2Common(fs *flag.FlagSet) {
 	fs.String("config", "", "config file path (default ~/.spore/config.json or $SPORE_CONFIG)")
 	fs.String("chain", "dero", "pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton (xmr unsupported)")
+	fs.String("ringsize", "16", "DERO Spore ring size: 8 or 16 (default 16; DERO only)")
 	fs.String("rpc", "", "chain RPC")
 	fs.String("rpc-login", "", "RPC user:pass")
 	fs.String("from", "", "sender chain address")

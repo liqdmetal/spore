@@ -52,12 +52,20 @@ top of existing crates. Non-onerous because the heavy crypto is already done and
 licensed clean. `internal/daemon` (Go) already provides the pool-watch/dedupe +
 the `decode_as_json` fetch seam the Rust tool or a Go bridge can reuse.
 
-## CLI (built, green)
+## Current CLI and send policy
+
+New DERO messages use the canonical `0xE2` X3DH + Double Ratchet path:
 
 ```
-spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   # no-relay
-spore whisper recv -rpc URL [-rpc-login u:p] [-interval 3s]       # mined catch
+printf 'text\n' | spore whisper send -to ADDR -identity F -bundle B \
+  -pinned-sig SIG -store URL -state-dir D -state-key K [-ringsize 8|16]
+spore whisper recv -rpc URL -identity F -spk F -opk-pool F \
+  -store URL -state-dir D -state-key K
 ```
+
+The default ring is 16; Spore accepts only 8 or 16. Bare `whisper recv` remains
+for old native records. Historical native sends and one-shot long-body sends are
+not forward-private and are no longer new-send paths.
 
 ## Remaining (not built)
 - **B / L1**: Rust pool-scanner (derohe-rs) for ~1-2s catch. See above.

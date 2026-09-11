@@ -172,10 +172,9 @@ type TransferResult struct {
 // postage is 1 atomic unit (0.00001 DERO), which flips the recipient's
 // balance enough to trigger the incoming-detection path.
 //
-// Ringsize: a plain minimum-postage message transfer does not use SIGNER(),
-// so any valid ringsize works; 2 is the minimum and cheapest, larger
-// obscures the sender better. A zero ringsize delegates to the wallet's
-// configured R153 default.
+// Ringsize: a plain minimum-postage message transfer does not use SIGNER().
+// Spore's E2 backend constrains new message posts to ring size 8 or 16 and
+// defaults to 16. This low-level client remains generic for non-Spore callers.
 func (c *Client) PostAnchor(ctx context.Context, recipientAddr string, a *anchor.Anchor, ringsize uint64) (string, error) {
 	return c.PostPayload(ctx, recipientAddr, a.ToArguments(), ringsize)
 }
@@ -184,7 +183,8 @@ func (c *Client) PostAnchor(ctx context.Context, recipientAddr string, a *anchor
 // payload Arguments to recipientAddr and returns the txid. It is the shared
 // primitive under PostAnchor and the whisper transport. See PostAnchor for the
 // non-zero-postage rule. ringsize=0 means use the wallet's configured default;
-// nonzero values must be a R153-valid power of two in [2,128].
+// nonzero values must be a R153-valid power of two in [2,128]. Spore callers
+// should use Backend.SetSporeRingSize instead of this generic primitive.
 func (c *Client) PostPayload(ctx context.Context, recipientAddr string, payload anchor.Arguments, ringsize uint64) (string, error) {
 	return c.PostPayloadAmountWithRing(ctx, recipientAddr, payload, 1, ringsize)
 }

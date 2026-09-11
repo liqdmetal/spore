@@ -9,22 +9,25 @@ forward-secrecy layer), and `FULL_PICTURE.md` (the deployment shapes).*
 
 ## 0. The whole model in one table
 
-| | **Short whisper** | **Long body** |
-|---|---|---|
-| Content size | ≤ ~90 ASCII chars | any size |
-| Where content lives | **in the tx**, on-chain | **on the sender's own node**, off-chain |
-| What rides the chain | the line itself | a **pointer** (32B eph pub + 32B CID) |
-| Encrypted by (DERO) | DERO native (wallet E2E) | spore X25519, body-side |
-| Encrypted by (EVM/Solana/XMR) | spore 0xE1 envelope | spore X25519, body-side |
-| Decrypted by | recipient's wallet / spore key | recipient's spore long-term key |
-| Rot / future-decrypt risk | see §4 — this is the honest part | keys erased + body reaped at deadline |
-| Codec | `internal/whisper/canonical.go`, `dero/chain.go` | `internal/longmsg/longmsg.go` |
+|| | **Short E2 message** | **Long E2 body** |
+||---|---|---|
+|| Content size | normal message body | any size |
+|| Where content lives | off-chain body store | off-chain body store |
+|| What rides the chain | canonical opaque E2 pointer | canonical opaque E2 pointer |
+|| Encrypted by | X3DH + Double Ratchet | X3DH + Double Ratchet |
+|| Decrypted by | recipient's E2 endpoint | recipient's E2 endpoint |
+|| Rot / future-decrypt risk | consumed message key erased | consumed message key erased + body reaped at deadline |
+|| Codec | `internal/ratchetwire` + chain codec | `internal/ratchetwire` + chain codec |
 
 ---
 
-## 1. Short whisper — the on-chain line
+## 1. Historical native whisper — receive-only compatibility
 
-### 1.1 Sender side
+> This section documents old `W`/`T` records so existing mail remains
+> decodable. It is **not** a new-send protocol. All new DERO short and long
+> commands enter the E2 pointer/body section below.
+
+### 1.1 Historical sender record
 
 **Step 1 — build the canonical payload** (`whisper.BuildArgs`,
 `internal/whisper/whisper.go`):
@@ -142,71 +145,52 @@ encryption is the trusted secrecy layer.
 
 ---
 
-## 3. Long body — the off-chain message (`internal/longmsg`)
+## 3. E2 body and pointer — short or long (`internal/ratchetwire`)
 
-Bulk content **never** rides a block. It lives only on the sender's own node,
-encrypted, and is fetched peer-to-peer. The chain carries just a pointer.
+New DERO messages of any size use the same forward-private path. The body is
+sealed by X3DH + Double Ratchet, placed in the configured off-chain store, and
+represented on DERO by an opaque pointer. The old native whisper and one-shot
+long-body decoders remain only for records created before this upgrade.
 
-### 3.1 Sender (`Endpoint.SendBody`, `internal/longmsg/longmsg.go`)
+### 3.1 Sender (`ratchetwire.DurableEndpoint.SendFirstSession` / `SendNext`)
 
-1. **Pad** the plaintext to a 1024-byte bucket (`padBody`: 8-byte length prefix
-   + content + `0x00` pad to the next multiple of `BodyPaddingBucket = 1024`).
-   All ciphertext bodies are now indistinguishable by size → defeats
-   size-based fingerprinting of message length.
-2. **Fresh ephemeral keypair**, `crypto.GenerateKey()`.
-3. **ECDH** `secret = X25519(eph_priv, recipient_longterm_pub)`.
-4. **Bound keys** `key = DeriveKeyBound(secret, eph_pub, recipient_pub)` and
-   `nonce = DeriveNonceBound(...)` — same transcript, both HKDF-derived.
-5. **Seal** `ciphertext = XChaCha20-Poly1305(key, nonce, padded_plaintext)`.
-6. **CID** `= sha256(ciphertext)` (`crypto.CID`) — the content address doubles
-   as the on-chain commitment and the off-chain retrieval key.
-7. **Store** the ciphertext in the sender's own disk store, keyed by CID, with
-   a **burn deadline** (`store.Put(cid, ct, now+ttl)`). Default TTL 24h.
-8. **Erase the ephemeral secret** (`crypto.Zero(eph.Priv)`). From this moment,
-   the only key that can decrypt is the recipient's long-term key.
-9. Return a **pointer**: `{eph_pub(32), CID(32), burn_deadline}`.
+1. Read the short body from stdin or `-msg-file`; read a long body from `-file`.
+2. X3DH establishes the first session against the pinned recipient bundle;
+   subsequent messages use the durable Double Ratchet session.
+3. Derive a one-time message key, seal the frame with ratchet-header AAD, and
+   advance the sending chain. Consumed keys are erased.
+4. Store the encrypted frame by CID with a deadline. The body store never gets
+   plaintext.
+5. Give the DERO carrier only the canonical opaque E2 pointer. The wallet posts
+   that pointer as the transaction payload.
 
 ### 3.2 The pointer on-chain
 
-The pointer rides a whisper as a **kind-0x02 pointer** (`whisper.BuildPointerArgs`):
-```
-Arg "W" uint64 = PointerV1 (0x5710)
-Arg "K" hash   = sender ephemeral X25519 pub  (32B)
-Arg "C" hash   = body CID = sha256(ciphertext) (32B)
-```
-Or, for the compost-anchor form (`internal/anchor`), four typed args
-(measured **91 bytes CBOR**, inside the 111-byte budget):
-```
-K (hash) = sender ephemeral X25519 pub   → ECDH handle
-C (hash) = body CID (sha256 of ct)       → retrieval key + commitment
-D (uint) = burn deadline (unix seconds)
-F (uint) = meta: version | kind<<8 | flags<<16
-```
-**The on-chain record carries NO plaintext, NO ciphertext, NO long-term key
-material.** On DERO it rides inside DERO's native E2E encryption anyway.
+The pointer is encoded by `ratchetwire.DeroChainCodec`. It carries routing,
+version, CID, and expiry metadata only — never plaintext, ratchet ciphertext,
+or long-term key material. DERO's wallet wraps that pointer in its normal
+confidential transaction transport.
 
-### 3.3 Receiver (`Endpoint.ReceiveBody`)
+### 3.3 Receiver (`ratchetwire.DurableEndpoint.ReceiveFirst` / `ReceiveNext`)
 
-1. Parse the pointer from the whisper / anchor (`whisper.ParsePointer`).
-2. **Deadline check** — past the burn deadline → refuse (`"message burned"`).
-3. **Fetch** the body by CID. On the home-node path the sender pushes to the
-   receiver's mailbox (`/put/<cid>`, `mailboxcmd.go`); otherwise the receiver
-   pulls peer-to-peer over **spore-peer** (`internal/peer` shells out to the
-   Rust `spore-peer` binary; `rendezvous.FetchByCID`).
-4. **Verify CID** — `sha256(fetched) == requested CID` or reject. A tampered
-   or hostile peer can never hand you bytes you didn't ask for
-   (spore-peer returns `500 cid mismatch`; `rendezvous.go` re-checks).
-5. **ECDH** `secret = X25519(our_longterm_priv, eph_pub)`.
-6. Derive key+nonce (same bound transcript), **open**, unpad → plaintext.
+1. Scan the recipient wallet and accept only valid E2 pointers for the ratchet
+   receiver; the bare legacy receiver handles old native payloads separately.
+2. Fetch the encrypted body by CID, verify its content address and deadline.
+3. X3DH consumes the recipient prekey for a first message; later messages use
+   the durable Double Ratchet session.
+4. Open with the one-time message key, advance the receive chain, erase the
+   consumed key, and return plaintext locally.
 
-### 3.4 Rot (the erase side of long bodies)
+### 3.4 Rot (the erase side of E2 bodies)
 
-- **Sender:** after the recipient fetches, both sides can erase. The stored
-  ciphertext is reaped once its deadline passes (`store.Reap`).
-- **Retention is bounded:** a body is gone after TTL by design — nobody (not
-  even the sender) keeps it indefinitely.
-- The **ephemeral** was already zeroed at send; only the recipient's long-term
-  key ever decrypts, and the body dies at the deadline regardless.
+- The off-chain ciphertext is reaped at its deadline.
+- Consumed message keys and old DH state are erased during ratchet advancement.
+- A copied ciphertext without the consumed ratchet key is inert after a later
+  device-key compromise; the immutable DERO record contains only the pointer.
+
+---
+
+## 4. Compostability — why it is NOT "on chain forever, decryptable one day"
 
 ---
 
@@ -224,13 +208,13 @@ the ciphertext itself was never written there, and the one node that held it
 deletes it at the deadline. **Off-chain rot**: file deleted, ephemeral key
 already erased, nobody retains it.
 
-### 4.2 The current short-message paths do **not** have forward secrecy
+### 4.2 Old records versus new E2 sends
 
-Short whispers DO live on the chain permanently, but as ciphertext. That makes
-them private from a passive chain observer today; it does **not** make them
-forward-secret.
+Old native whispers, 0xE1 envelopes, and one-shot long-body ciphertexts remain
+on receive-only compatibility paths. Those records do **not** have forward
+secrecy and must not be described as E2.
 
-**On public chains (EVM/Solana/XMR), the current spore 0xE1 envelope:**
+**On public chains, old spore 0xE1 records:**
 
 - The sender uses a fresh ephemeral key per message and erases the ephemeral
   scalar after sealing. That prevents the sender-side ephemeral from becoming a
@@ -239,55 +223,64 @@ forward-secret.
   every historical ECDH exchange. Anyone who records the 0xE1 ciphertexts and
   later steals that recipient key can recompute each historical shared secret
   from the public `eph_pub` in the envelope and decrypt the history.
-- Therefore 0xE1 provides **confidentiality and sender authentication**, not
-  forward secrecy. The same is true for the current one-shot long-body
-  encryption if an attacker copies the off-chain ciphertext before its TTL
-  expires and later obtains the recipient's long-term key.
+- Therefore old 0xE1 provides **confidentiality and sender authentication**, not
+  forward secrecy. Old one-shot long-body ciphertexts have the same limitation
+  if copied before their TTL expires.
 
-**On DERO:** DERO's wallet encrypts the payload for the transaction's intended
-recipient, and the recipient wallet can decode it. The derohe source also
-supports the sender-side derivation for its own sent-transfer view. A passive
-chain observer cannot decode it without the relevant wallet secret, but the
-native payload scheme is still a long-term-key scheme: a later compromise of
-the wallet key can expose recorded historical payloads. DERO's ring privacy
+New sends on the DERO command aliases do not use either old construction: they
+enter the 0xE2 X3DH + Double Ratchet path described in §5.
+
+**On DERO, old native records:** DERO's wallet encrypts the payload for the
+transaction's intended recipient, and the recipient wallet can decode it. A
+passive chain observer cannot decode it without the relevant wallet secret, but
+the native payload scheme is still a long-term-key scheme: a later compromise
+of the wallet key can expose recorded historical payloads. DERO's ring privacy
 hides transaction relationships; it does not erase message bytes or add
-forward secrecy to the payload.
+forward secrecy to old native payloads.
+
+**On DERO, new records:** the wallet carries only the canonical E2 pointer;
+X3DH + Double Ratchet protects the off-chain body. The native wallet envelope
+is a transport wrapper, not the message encryption protocol.
 
 ### 4.3 What is genuinely still decryptable, and by whom — the honest row
 
 | Record | Lives forever on-chain? | If the recipient key leaks later |
 |---|---:|---|
-| Long-body **pointer** (K/C/D/F) | yes | pointer only; no plaintext or ciphertext is there |
-| Long-body **ciphertext** | no — off-chain, reaped at deadline | decryptable if an adversary copied it before reap; otherwise no body remains at the honest store |
-| Short whisper on DERO | **yes** | recorded payloads can be retro-decrypted with the relevant wallet secret |
-| Short whisper 0xE1 (public chains) | **yes** | recorded envelopes can be retro-decrypted with the recipient's long-term spore key |
-| Ratcheted content (0xE2) | pointer only (chain); ciphertext off-chain, reaped at deadline | past consumed message keys are erased — a later device-key compromise does NOT unlock old 0xE2 history (forward secrecy holds) |
+| Old native whisper on DERO | **yes** | recorded payloads can be retro-decrypted with the relevant wallet secret |
+| Old 0xE1 / one-shot body | chain pointer or off-chain copy | old recipient-key compromise can expose the recorded construction |
+| New DERO E2 pointer | yes | pointer only; no plaintext or ratchet ciphertext is there |
+| New DERO E2 body | no — off-chain, reaped at deadline | past consumed message keys are erased — a later device-key compromise does NOT unlock old 0xE2 history (forward secrecy holds) |
 
 So the promise is **not** "deleted from the chain" — DERO/EVM blocks are
 append-only and permanent. The accurate current promise is:
 
-> **Legacy paths (whisper, 0xE1, one-shot long body):** passive observers
-> cannot read encrypted payloads without a key; long bodies are kept off-chain
-> and expire; but short on-chain messages remain recoverable if the
-> recipient's long-term key is later compromised.
+> **Legacy receive paths (0xE1, old native payloads, old one-shot bodies):**
+> passive observers cannot read encrypted payloads without a key, but a later
+> recipient-key compromise can expose recorded history. They remain receive-only
+> compatibility paths.
+>
+> **DERO command aliases:** `spore whisper send`, `whisper send-long`, and
+> `msg send -chain dero`/`msg send-long` now invoke the canonical 0xE2
+> X3DH + Double Ratchet sender. Their familiar names select the DERO pointer
+> carrier; they do not select the old native or one-shot crypto.
 >
 > **The 0xE2 path (shipped):** consumed per-message keys are erased and the
 > ratchet ciphertext lives off-chain under a TTL, so a later device-key
 > compromise cannot unlock the old ratcheted conversation history. The chain
-> keeps only a dead pointer. This is the forward-private path — use it.
+> keeps only a dead pointer. This is the forward-private path used by every
+> new send.
 
-### 4.4 Why erasure is not enough without a ratchet
+## 4.4 Why erasure is not enough without a ratchet
 
 `crypto.Zero` overwrites secrets in memory (best-effort in a GC'd language —
-process death is the true erasure, see the docstring in `crypto.go`). Erasing a
-sender's one-shot ephemeral prevents that particular scalar from being an
-archive key, but it does **not** erase the recipient's long-term private key.
-That is why the current 0xE1 and long-body paths are not forward-secret.
+process death is the true erasure, see the docstring in `crypto.go`). For old
+records, erasing a one-shot ephemeral does **not** erase the recipient's
+long-term private key; those records remain non-forward-private.
 
-The load-bearing fix is the ratchet: derive each message key from a rotating
-chain, advance the chain, and erase consumed keys and old DH state. The chain
-record may remain forever; without the erased per-message key it is intended to
-be computationally inert.
+The load-bearing fix used by every new DERO send is the ratchet: derive each
+message key from a rotating chain, advance the chain, and erase consumed keys
+and old DH state. The chain record may remain forever; without the erased
+per-message key it is intended to be computationally inert.
 
 ---
 
@@ -319,16 +312,14 @@ encrypted session state, and an off-chain TTL body store. The chain carries the
 opaque pointer only; substantive content is the ratcheted off-chain body.
 
 **Forward-compostability policy (2026-09):** every NEW message must be 0xE2.
-The legacy sends — `spore whisper send`, `whisper send-long`, `msg send`,
-`msg send-long`, and the browser `/whisper/send` — are REFUSED at the CLI and
-the web route, because stateless X25519 / the 0xE1 envelope has no key
-evolution and cannot be made forward-secret in place (forward secrecy is a
-property of the ratchet, and the ratchet requires session state those paths
-deliberately do not have). Legacy RECEIVE remains supported so mail sent
-before the policy stays readable (`whisper recv`, `msg recv`, `/whisper/recv`),
-and is marked as not forward-private everywhere it is still offered. The
+The DERO command names `spore whisper send`, `whisper send-long`, `msg send
+-chain dero`, and `msg send-long` are now compatibility aliases for the
+canonical X3DH + Double Ratchet pointer/body path. Their carrier is DERO; their
+cryptographic format is E2. The old native whisper, 0xE1 envelope, and
+one-shot long-body records remain receive-only compatibility paths. The
 browser UI sends and receives through `/e2/send` + `/e2/recv` (server holds
-the account's ratchet state; the server is your own).
+the account's ratchet state; the server is your own). Non-DERO legacy send
+aliases remain refused rather than silently downgraded.
 
 ---
 
@@ -336,15 +327,13 @@ the account's ratchet state; the server is your own).
 
 | Where | Function | Primitive |
 |---|---|---|
-| DERO tx payload encrypt | DERO wallet (derohe), native | cryptonote confidential tx |
-| DERO payload decode | `dero/chain.go` `ListIncoming` | wallet scan, `get_transfers` |
-| Envelope send | `secure/secure.go` `Encrypt`→`sealWith` | X25519 + HKDF-SHA256 + XChaCha20-Poly1305 + Ed25519 |
-| Envelope receive | `secure/secure.go` `Open`→`openSigned` | sig verify → ECDH → HKDF → AEAD open |
-| Long body send | `longmsg/longmsg.go` `SendBody` | pad → X25519 → bound HKDF → XChaCha20 → CID → store+deadline |
-| Long body receive | `longmsg/longmsg.go` `ReceiveBody` | deadline → CID check → ECDH → bound HKDF → open → unpad |
+| DERO tx payload encrypt | DERO wallet (derohe), transport wrapper | cryptonote confidential tx around opaque pointer |
+| DERO pointer decode | `dero/chain.go` + `ratchetwire` | wallet scan, `get_transfers`, strict E2 pointer decode |
+| E2 send | `ratchetwire` `SendFirstSession`/`SendNext` | X3DH + Double Ratchet + XChaCha20 AAD |
+| E2 receive | `ratchetwire` `ReceiveFirst`/`ReceiveNext` | prekey verification → ratchet advance → AEAD open |
+| E2 body store | `ratchetwire` body store | ciphertext by CID + TTL/reaping |
 | Content address | `crypto/crypto.go` `CID` | sha256(ciphertext) |
 | Secret erase | `crypto/crypto.go` `Zero` | overwrite |
-| Ratchet (future) | `ratchet/ratchet.go` | X3DH + HKDF/HMAC double ratchet + XChaCha20 AAD |
 
 *Companion files: `WIRE_SPEC.md` (exact byte formats + golden vectors),
 `RATCHET.md` (forward-secrecy design), `SENDER_AUTH.md` (attribution/pinning).*

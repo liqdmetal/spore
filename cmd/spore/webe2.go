@@ -38,6 +38,10 @@ type webE2 struct {
 	maildb *maildb.MailDB
 	store  ratchetwire.BodyStore
 
+	// DERO ring policy for browser E2 posts. Receive does not need it, but
+	// keeping it on the endpoint makes the send policy explicit and testable.
+	ringSize uint64
+
 	// Recv cursor. Persisted so the browser inbox resumes where it left off
 	// across server restarts instead of replaying the whole history.
 	cursor     uint64
@@ -45,7 +49,7 @@ type webE2 struct {
 	seen       map[string]bool // delivered identity keys, this process
 }
 
-func newWebE2(dir, storeURL, storeTok string) (*webE2, error) {
+func newWebE2(dir, storeURL, storeTok string, ringsize ...uint64) (*webE2, error) {
 	if dir == "" {
 		return nil, errors.New("-e2-dir is empty")
 	}
@@ -87,11 +91,22 @@ func newWebE2(dir, storeURL, storeTok string) (*webE2, error) {
 	if err != nil {
 		return nil, err
 	}
+	ringSize := dero.DefaultSporeRingSize
+	if len(ringsize) > 1 {
+		return nil, errors.New("web E2 accepts at most one DERO ringsize")
+	}
+	if len(ringsize) == 1 {
+		ringSize = ringsize[0]
+	}
+	if err := dero.ValidateSporeRingSize(ringSize); err != nil {
+		return nil, err
+	}
 	e := &webE2{
 		dir: dir, identity: id, spk: sk, stateKey: stateKey,
 		states: states, pool: pool, maildb: mdb, store: st,
 		cursorFile: filepath.Join(dir, "recv-cursor"),
 		seen:       map[string]bool{},
+		ringSize:   ringSize,
 	}
 	// Resume the cursor.
 	if b, err := os.ReadFile(e.cursorFile); err == nil {
@@ -132,8 +147,12 @@ func (e *webE2) send(ctx context.Context, to, msg string, wrc, wlogin string) (t
 		return "", "", err
 	}
 	u, p := parseLogin(wlogin)
+	deroBackend := dero.NewBackend(dero.NewClient(wrc, u, p))
+	if err := deroBackend.SetSporeRingSize(e.ringSize); err != nil {
+		return "", "", err
+	}
 	carrier := ratchetwire.ChainCarrier{
-		Chain: dero.NewBackend(dero.NewClient(wrc, u, p)),
+		Chain: deroBackend,
 		Codec: ratchetwire.DeroChainCodec{},
 	}
 	ep, err := ratchetwire.NewDurableEndpoint(e.store, e.states, time.Now())
@@ -175,8 +194,12 @@ func (e *webE2) recvOnce(ctx context.Context, wrc, wlogin string) ([]webMsg, err
 	if err != nil {
 		return nil, err
 	}
+	deroBackend := dero.NewBackend(client)
+	if err := deroBackend.SetSporeRingSize(e.ringSize); err != nil {
+		return nil, err
+	}
 	carrier := ratchetwire.ChainCarrier{
-		Chain: dero.NewBackend(client),
+		Chain: deroBackend,
 		Codec: ratchetwire.DeroChainCodec{},
 	}
 	ep, err := ratchetwire.NewDurableEndpoint(e.store, e.states, time.Now())

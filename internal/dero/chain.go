@@ -16,12 +16,41 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 )
 
-type Backend struct{ client *Client }
+const DefaultSporeRingSize uint64 = 16
 
-func NewBackend(client *Client) *Backend                       { return &Backend{client: client} }
+// ValidateSporeRingSize constrains Spore's DERO privacy policy to the two
+// supported choices. DERO itself supports more values, but Spore deliberately
+// exposes only 8 and 16 so users cannot accidentally publish a ring-2 message.
+func ValidateSporeRingSize(ringsize uint64) error {
+	if ringsize != 8 && ringsize != 16 {
+		return fmt.Errorf("dero: Spore ringsize must be 8 or 16, got %d", ringsize)
+	}
+	return nil
+}
+
+type Backend struct {
+	client   *Client
+	ringSize uint64 // E2/Spore message posts: constrained to 8 or 16
+}
+
+func NewBackend(client *Client) *Backend { return &Backend{client: client} }
+
+// SetSporeRingSize applies the constrained ring policy to this backend. It is
+// intentionally explicit instead of changing NewBackend's generic behavior:
+// ordinary DERO wallet operations retain their existing wallet-default path.
+func (b *Backend) SetSporeRingSize(ringsize uint64) error {
+	if err := ValidateSporeRingSize(ringsize); err != nil {
+		return err
+	}
+	b.ringSize = ringsize
+	return nil
+}
+
 func (b *Backend) Name() string                                { return "dero" }
 func (b *Backend) Address(ctx context.Context) (string, error) { return b.client.GetAddress(ctx) }
 func (b *Backend) Height(ctx context.Context) (uint64, error)  { return b.client.GetHeight(ctx) }
+
+func (b *Backend) RingSize() uint64 { return b.ringSize }
 
 func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain.Payload, amountHint uint64) (chain.PostResult, error) {
 	args, err := PayloadToArgs(p)
@@ -31,7 +60,11 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	if amountHint == 0 {
 		amountHint = 1
 	}
-	txid, err := b.client.PostPayloadAmount(ctx, recipientAddr, args, amountHint)
+	ringsize := b.ringSize
+	if ringsize == 0 {
+		ringsize = DefaultSporeRingSize
+	}
+	txid, err := b.client.PostPayloadAmountWithRing(ctx, recipientAddr, args, amountHint, ringsize)
 	if err != nil {
 		return chain.PostResult{}, err
 	}

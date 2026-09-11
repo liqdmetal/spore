@@ -24,7 +24,7 @@
 
 <!-- ===================== TITLE ===================== -->
 <text x="950" y="54" text-anchor="middle" font-size="40" font-weight="800" fill="url(#titleGrad)" style="letter-spacing:1px">SPORE MESSENGER — HOW ONE MESSAGE REACHES YOU</text>
-<text x="950" y="86" text-anchor="middle" font-size="14" fill="#8FA3BF">your home node is the pager base station · your phone is the pager · the chain is the airwaves · spore-peer carries the long bodies off-chain</text>
+<text x="950" y="86" text-anchor="middle" font-size="14" fill="#8FA3BF">your home node is the pager base station · your phone is the pager · the chain carries the opaque pointer · encrypted bodies live in the E2 store</text>
 
 <!-- ===================== ZONE: SENDER ===================== -->
 <!-- zone A -->
@@ -39,7 +39,7 @@
 <rect x="70" y="200" width="560" height="120" rx="12" fill="#18233D" stroke="#38BDF8" stroke-opacity="0.65" stroke-width="1.2"/>
 <text x="350" y="226" text-anchor="middle" font-size="12.5" font-weight="700" fill="#38BDF8">📱 ALICE'S PHONE / LAPTOP — THE KEYS</text>
 <text x="350" y="252" text-anchor="middle" font-size="10.5" fill="#8FA3BF">holds the long-term key · signs &amp; decrypts LOCALLY, never uploads it</text>
-<text x="350" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore msg send / send-long · whisper send`  →  E2E envelope (X25519+HKDF+XChaCha20)</text>
+<text x="350" y="270" text-anchor="middle" font-size="10.5" fill="#8FA3BF">`spore msg send-e2 / whisper send`  →  0xE2 X3DH + Double Ratchet</text>
 <text x="350" y="288" text-anchor="middle" font-size="10.5" fill="#8FA3BF">Dials home over TLS+token for chain access + receive when she sleeps</text>
 <text x="350" y="308" text-anchor="middle" font-size="10" fill="#5B6B7A">short text rides the chain · long bodies never touch a block</text>
 
@@ -64,8 +64,8 @@
 
 <!-- chain chips column -->
 <rect x="725" y="202" width="450" height="58" rx="12" fill="#18233D" stroke="#A78BFA" stroke-opacity="0.65" stroke-width="1.2"/>
-<text x="950" y="228" text-anchor="middle" font-size="12" font-weight="700" fill="#A78BFA">DERO — native end-to-end encryption</text>
-<text x="950" y="248" text-anchor="middle" font-size="10" fill="#8FA3BF">short msg in the tx payload (PAYLOAD0 ~95 chars) · ~1 block confirm · live mainnet</text>
+<text x="950" y="228" text-anchor="middle" font-size="12" font-weight="700" fill="#A78BFA">DERO — opaque E2 pointer + ring 16 default</text>
+<text x="950" y="248" text-anchor="middle" font-size="10" fill="#8FA3BF">X3DH + Double Ratchet body off-chain · ring 8 optional · ~1 block confirm · live mainnet</text>
 
 <rect x="725" y="272" width="450" height="58" rx="12" fill="#18233D" stroke="#F472B6" stroke-opacity="0.7" stroke-width="1.2"/>
 <text x="950" y="298" text-anchor="middle" font-size="12" font-weight="700" fill="#F472B6">SOLANA · EVM — public, so the E2E envelope rides them</text>
@@ -113,7 +113,7 @@
 <circle cx="80" cy="652" r="20" fill="#FBBF24" stroke="#0B1220" stroke-width="2"/>
 <text x="80" y="659" text-anchor="middle" font-size="20" font-weight="800" fill="#FFFFFF">1</text>
 <text x="114" y="658" font-size="17" font-weight="700" fill="#FBBF24">THE FLOW — TWO KINDS OF MESSAGE</text>
-<text x="114" y="680" font-size="11" fill="#8FA3BF">Short whispers ride the chain (kind 0x01 text / 0x02 pointer). Long bodies go off-chain over spore-peer — the chain only carries a pointer.</text>
+<text x="114" y="680" font-size="11" fill="#8FA3BF">Every new message uses 0xE2: X3DH + Double Ratchet encrypts the body off-chain; the chain carries only an opaque pointer.</text>
 
 <!-- Sub-header row -->
 <text x="70" y="712" font-size="12.5" font-weight="700" fill="#FBBF24">① SHORT — the pager tap (whisper, on-chain)</text>

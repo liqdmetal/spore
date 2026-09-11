@@ -53,8 +53,11 @@ for chain access and ciphertext/prekey delivery. It decrypts locally with
 
 ```bash
 # SEND — route the tx through your home node (TLS + basic auth):
-spore msg send -chain dero -rpc https://<home>:<port>/json_rpc \
-  -rpc-login user:pass -to <friend-dero1...> -msg "hi"
+printf 'hi\n' | spore msg send -chain dero -rpc https://<home>:<port>/json_rpc \
+  -rpc-login user:pass -to <friend-dero1...> -identity ~/mb/identity.key \
+  -bundle ./friend-bundle.json -pinned-sig FRIEND_SIGNING_KEY_HEX \
+  -store https://<home>/u/<user> -state-dir ~/mb/state -state-key ~/mb/state.key \
+  -ringsize 16
 
 # RECEIVE — the phone scans the chain and decrypts locally; the hosted/home
 # mailbox is only the ciphertext + prekey store:

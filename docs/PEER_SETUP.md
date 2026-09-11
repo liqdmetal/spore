@@ -50,14 +50,24 @@ by default.
 In a second terminal:
 
 ```bash
-# your wallet RPC is on 20209 (spore's default, so -rpc is optional).
-# SEND a whisper (<=80 chars)
+# New DERO sends use the E2 kit and default to ring size 16. Spore accepts only 8 or 16.
+# SEND a forward-private E2 whisper; stdin keeps plaintext out of argv
 spore-windows-amd64.exe whisper send \
   -to dero1q...friend-address... \
-  -msg "hey from spore"
+  -identity ~/.spore/identity.key \
+  -bundle ./friend-bundle.json \
+  -pinned-sig FRIEND_SIGNING_KEY_HEX \
+  -store https://your-mailbox.example \
+  -state-dir ~/.spore/state -state-key ~/.spore/state.key \
+  -ringsize 16
 
 # RECEIVE (keep running to watch for messages)
-spore-windows-amd64.exe whisper recv
+spore-windows-amd64.exe whisper recv \
+  -identity ~/.spore/identity.key \
+  -spk ~/.spore/spk.key \
+  -opk-pool ~/.spore/opk-pool.json \
+  -store https://your-mailbox.example \
+  -state-dir ~/.spore/state -state-key ~/.spore/state.key
 ```
 
 When a message arrives you'll see:
@@ -73,19 +83,17 @@ but the two of you.
 
 ## How privacy actually works (so you trust it)
 
-- A whisper is a **real DERO transaction** carrying an encrypted payload.
-  DERO encrypts every tx payload point-to-point, so only the recipient's key
-  reads it.
-- **No body sits on-chain.** Long messages ride a peer-to-peer body store and
-  rot after a TTL; the on-chain anchor holds only a hash and a burn deadline.
-- **Current path limitation (legacy paths only):** one-shot body encryption is
-  confidential but not forward-secret; a later compromise of the recipient's
-  long-term key can decrypt a copied ciphertext before it expires.
-- **0xE2 is shipped:** X3DH + Double Ratchet is wired end-to-end via
-  `spore msg send-e2` / `recv-e2` (`internal/ratchetwire`). Ratcheted
-  per-message keys are erased after use, so copied historical ciphertext
-  becomes undecryptable after key compromise. Use the E2 path for anything
-  you care about; the direct whisper path remains compatibility-only.
+- A new whisper is a **real DERO transaction** carrying an opaque 0xE2
+  pointer. DERO carries the pointer; X3DH + Double Ratchet encrypts the body.
+- **No body sits on-chain.** Long messages ride the configured off-chain body
+  store and rot after a TTL; the on-chain anchor holds only the pointer.
+- **New DERO sends are forward-private:** `whisper send`, `whisper send-long`,
+  `msg send -chain dero`, and `msg send-long` are compatibility names for the
+  canonical X3DH + Double Ratchet path. The DERO transaction carries only the
+  opaque E2 pointer; the body remains off-chain.
+- **Old records remain legacy:** native DERO payloads, 0xE1 envelopes, and
+  one-shot long-body records are receive-only compatibility data and are not
+  forward-private after a long-term-key compromise.
 
 ## What's NOT live yet (honest)
 
@@ -93,10 +101,9 @@ but the two of you.
   messaging yet — it needs live-node verification (a `monero-wallet-rpc`) once
   the syncing node catches up. EVM and Solana backends are live-verified; see
   `README.md` for their precise status.
-- A friend must run their **own** wallet + `whisper recv`. This is the privacy
-  model: no shared box to subpoena, no operator. The cost is that "just chat in
-  a browser with no setup" isn't the experience — use `spore web`
-  (shared-key rooms) for that instead.
+- A friend must run their **own** wallet + E2 receiver (`whisper recv` with
+  the E2 kit, or `msg recv-e2`). This is the privacy model: no shared box to
+  subpoena, no operator. Bare `whisper recv` remains only for old native mail.
 
 ## Dev / power-user
 

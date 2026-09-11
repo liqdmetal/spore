@@ -324,7 +324,9 @@ func Send(ctx context.Context, client *dero.Client, recipientAddr, text string) 
 	if err != nil {
 		return "", err
 	}
-	return client.PostPayload(ctx, recipientAddr, args, 2)
+	// Historical native sends are compatibility-only, but when this low-level
+	// helper is used Spore still avoids the ring-2 default.
+	return client.PostPayload(ctx, recipientAddr, args, dero.DefaultSporeRingSize)
 }
 
 // Codec renders/parses spore payloads into a chain.Chain's native form.

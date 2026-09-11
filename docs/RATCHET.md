@@ -1,7 +1,8 @@
 # Spore Ratchet — X3DH + Double Ratchet
 
 *Status: the 0xE2 ratcheted path and CLI integration are shipped and tested;
-legacy 0xE1/whisper paths remain compatibility-only. The multi-device state
+new DERO whisper/long-body command names route through E2, while old 0xE1 and
+native records remain receive-only compatibility data. The multi-device state
 bundle and collision guard are also shipped, but concurrent sending from two
 unsynced devices is still unsafe by design. This design makes
 compromise-of-key ≠ compromise-of-history on the ratcheted path. Companion docs:
@@ -130,11 +131,11 @@ Bounds, strictly enforced:
   SPK_sig, so a 64-byte per-message sig is redundant). Sender attribution
   stays: the session's X3DH bound both pinned identities.
 - **Short DERO whispers** (111-byte payload0): a full ratchet header does
-  not fit alongside routing args. Decision: short whispers remain 0xE1
-  (authenticated, no FS — they are ≤80 bytes of low-value signal), and any
-  substantive content MUST go the 0xE2 body path. The whisper stays the
-  knock; the ratchet carries the conversation. This keeps the L1 1–2s
-  mempool-catch path intact.
+  not fit alongside routing args. Decision: DERO short command names use the
+  0xE2 pointer/body path too; the native wallet payload carries only the
+  opaque pointer. There is no new plaintext short-whisper format. The ratchet
+  carries both short and long content while the DERO transaction remains the
+  carrier.
 - **Body storage**: ciphertexts under MK-encryption are stored by CID as
   today; because MK is erased after decryption, an archived body becomes
   inert after first read even if the store leaks. `messages.log` must NOT
@@ -203,9 +204,11 @@ becomes genuinely blind, which was always the README's claim.
    mainnet-verified; Solana is self-messaging mainnet-verified; EVM is local
    Anvil-verified with deployment pending; XMR remains mock-verified and is
    refused for E2 pointers because its native seam is only eight bytes.
-4. **Feature boundary:** legacy 0xE1/whisper paths remain compatibility-only
-   and are not forward-private. A chain carrier MUST be treated as an opaque
-   record; it never gets a ratchet key.
+4. **Feature boundary:** old 0xE1/native whisper records remain
+   receive-only compatibility data and are not forward-private. The DERO
+   command names `whisper send`, `whisper send-long`, `msg send -chain dero`,
+   and `msg send-long` now enter the canonical E2 pointer/body path. A chain
+   carrier MUST be treated as an opaque record; it never gets a ratchet key.
 5. **Golden invariant:** skipping message keys then receiving 2,3,1 must
    deliver 2,3,1 with 1's key from the skipped store; after delivery + TTL the
    store must contain zero skipped keys. The current test matrix covers this
@@ -220,6 +223,6 @@ becomes genuinely blind, which was always the README's claim.
 - Q3: Sealed-sender for the pointer (hide recipient on-chain) — separate
   design; ratchet does not depend on it.
 - Q4: **Resolved** — 0xE2 (X3DH + Double Ratchet) has shipped and is the
-  forward-private path. The DERO-native `0xE1` whisper path stays as-is (no
-  ratchet) and is documented as compatibility-only / not forward-private:
-  whispers are knocks. New conversations use `0xE2`.
+  forward-private path. New DERO sends, including the historical whisper and
+  long-body command names, enter E2. Old native/0xE1 records remain
+  receive-only compatibility data and are not forward-private.

@@ -32,8 +32,10 @@ one-shot message.
 5. A delete/burn operation is not claimed unless the underlying transport has
    a real deletion primitive. Best-effort relay deletion is not the same as
    chain erasure.
-6. Every new conversation uses E2. DERO-native short whispers, E1, and the
-   old one-shot long-body path remain compatibility modes only.
+6. Every new conversation uses E2. DERO-native short-whisper and long-body
+   command names are compatibility aliases for the E2 pointer/body path; the
+   old E1/native payloads remain receive-only compatibility modes; DERO's
+   familiar whisper and long-body names are E2 aliases.
 
 ## Deployment order
 

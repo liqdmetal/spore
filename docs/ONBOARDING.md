@@ -358,9 +358,10 @@ history. We don't pretend otherwise.
 
 ## Privacy model (honest limits)
 
-- **Forward-private + compostable** on the `*-e2` path. Legacy
-  `whisper`/`msg send`/`0xE1`/one-shot long-body are **compatibility only** and
-  are **not** forward-private after a long-term-key compromise.
+- **Forward-private + compostable** on every NEW send. The DERO command names
+  `whisper send`, `whisper send-long`, `msg send -chain dero`, and
+  `msg send-long` are compatibility aliases for the canonical `*-e2` path;
+  their old native/0xE1 records remain receive-only and are not forward-private.
 - **Metadata is visible**: "a tx happened at ~time" is chain-wide public. DERO's
   ring sigs hide the sender; EVM/Solana/Bitcoin/TON expose tx metadata (content
   stays private via the off-chain ratchet body). ntfy sees "you got a message" +
@@ -376,20 +377,12 @@ self-hosting: [`HOME_NODE.md`](HOME_NODE.md).
 
 ---
 
-## Appendix — legacy DERO quick path (compatibility, not forward-private)
+## Appendix — old native DERO records (receive-only compatibility)
 
-For a no-setup DERO-only short message (native encryption, but permanent
-on-chain payload — no forward secrecy):
-
-```bash
-# terminal 1 — your DERO endpoint (wallet RPC on 20209):
-dero-wallet-cli --wallet-file mywallet.db --rpc-server --rpc-bind 127.0.0.1:20209
-#   first run: `register` then `address` inside the wallet prompt
-
-# terminal 2 — send / receive:
-spore whisper send -to dero1q…friend… -msg "hi"
-spore whisper recv
-```
+Old native DERO records can still be received with the bare compatibility
+receiver, but new sends must use the E2 kit above. New DERO posts default to
+ring size 16; pass `-ringsize 8` to trade some transaction size for lower cost.
+Spore accepts only ring sizes 8 and 16.
 
 Prefer the E2 path above for anything you care about. Donations:
 `spore donate --all`.

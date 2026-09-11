@@ -135,17 +135,19 @@ func usage() {
   spore channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
   spore chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
-  spore web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-e2-dir DIR] [-store URL] [-dir D]  (browser chat; -e2-dir enables forward-private E2 send/recv)
-  spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (REFUSED — not forward-private; use msg send-e2)
-  spore whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]  (REFUSED — use msg send-e2)
-  spore whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]  (legacy receive only)
+  spore web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-e2-dir DIR] [-store URL] [-ringsize 8|16] [-dir D]  (browser chat; -e2-dir enables forward-private E2 send/recv)
+  spore whisper send -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-msg-file F|-] ...   (DERO carrier; canonical forward-private E2; default ring 16)
+  spore whisper send-long -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F [-ringsize 8|16] ...   (DERO carrier; canonical forward-private E2 long body; default ring 16)
+  spore whisper recv -rpc URL -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; omit E2 flags only to read old native mail)
   spore whisper keygen [-key KFILE]
   spore donate [chain] | --all                          (per-chain donation rail)
-  spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (REFUSED — not forward-private; use msg send-e2)
-  spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv; legacy)
+  spore msg send -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-msg-file F|-] ...   (DERO alias for canonical forward-private E2; default ring 16)
+  spore msg send -chain evm|xmr|solana ...                         (REFUSED — use msg send-e2 explicitly)
+  spore msg recv -chain dero -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; bare form reads old native mail)
+  spore msg recv -chain evm|xmr|solana ...                              (legacy receive compatibility)
   spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
   spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
-             [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] -store URL
+             [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] [-ringsize 8|16] -store URL
              -state-dir D -state-key F [-msg-file F|-]   (forward-private E2 send; plaintext NEVER on argv)
   spore msg recv-e2 -identity F -spk F [-opk-pool F] -store URL -state-dir D -state-key F
              [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL] [-notify-email ADDRESS|-notify-sms E164]   (metadata-only arrival notifications)
@@ -179,7 +181,7 @@ func usage() {
   spore prekeybatch status -mailbox URL   (is the mailbox serving prekey material? consumes one bundle)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
-  spore msg send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-xmr XMRADDR] [-out-dir D] [-rpc URL] [-daemon URL] [-ttl 24h]   (long body; pointer rides DERO whisper; XMR = identity tag)
+  spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)
   spore msg keygen [-out FILE]           (identity keypair for E2E encryption)
   spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
   spore msg recv ... -key HEX                   (decrypt E2E with our priv)
@@ -329,9 +331,12 @@ func send(args []string) {
 	inbox := fs.String("peer-inbox", "", "recipient mailbox base URL (e.g. http://host:19191)")
 	msg := fs.String("msg", "", "message text")
 	ttl := fs.Duration("ttl", time.Hour, "time-to-live before the body burns")
-	ringsize := fs.Uint64("ringsize", 2, "DERO ringsize")
+	ringsize := fs.Uint64("ringsize", dero.DefaultSporeRingSize, "DERO Spore ring size: 8 or 16 (default 16)")
 	addRPCFlags(fs)
 	_ = fs.Parse(args)
+	if err := dero.ValidateSporeRingSize(*ringsize); err != nil {
+		check(err)
+	}
 
 	if *to == "" || *peerPub == "" || *inbox == "" || *msg == "" {
 		fmt.Fprintln(os.Stderr, "send: -to, -peer-pub, -peer-inbox, -msg required")
@@ -426,6 +431,7 @@ func webchat(args []string) {
 	// the user's own. Disabled unless -e2-dir is given.
 	e2dir := fs.String("e2-dir", "", "spore E2 state dir (identity.key, spk.key, state.key, state/, opk-pool.json, mail.json — see `spore init -dir`): enables /e2/send + /e2/recv (forward-private browser messaging)")
 	storeURL := fs.String("store", "", "body store URL for E2 bodies (your mailbox)")
+	ringSize := fs.Uint64("ringsize", dero.DefaultSporeRingSize, "DERO E2 ring size: 8 or 16 (default 16)")
 	_ = fs.Parse(args)
 
 	if err := safehttp.CheckBind(*listen, *webToken, "web"); err != nil {
@@ -463,7 +469,10 @@ func webchat(args []string) {
 	// a UI whose send button then errors on every click.
 	var e2 *webE2
 	if *e2dir != "" {
-		loaded, err := newWebE2(*e2dir, *storeURL, "")
+		if err := dero.ValidateSporeRingSize(*ringSize); err != nil {
+			log.Fatalf("web: %v", err)
+		}
+		loaded, err := newWebE2(*e2dir, *storeURL, "", *ringSize)
 		if err != nil {
 			log.Fatalf("web: e2: %v", err)
 		}
@@ -505,12 +514,15 @@ func webchat(args []string) {
 				webE2Recv(w, r, e2, *wrc, *wlogin)
 				return
 			}
-			// Legacy whisper SEND is refused: stateless X25519 has no key
-			// evolution, so a recorded ciphertext decrypts with the long-term
-			// key. New messages must ride the ratcheted path. RECEIVE stays
-			// for mail already sent.
+			// Compatibility route: the old browser whisper URL now uses the
+			// canonical E2 sender. It is a name-preserving alias, not a
+			// stateless DERO whisper fallback.
 			if r.URL.Path == "/whisper/send" && r.Method == "POST" {
-				writeJSON(w, map[string]string{"error": "legacy whisper send refused — not forward-private (stateless X25519). Use /e2/send (X3DH + Double Ratchet). Legacy receive still works for old mail."})
+				if e2 == nil {
+					writeJSON(w, map[string]string{"error": "E2 disabled — start `spore web` with -e2-dir"})
+					return
+				}
+				webE2Send(w, r, e2, *wrc, *wlogin)
 				return
 			}
 			if r.URL.Path == "/whisper/recv" && r.Method == "GET" {
@@ -678,11 +690,12 @@ func chat(args []string) {
 	}
 }
 
-// whisper is the no-relay unicast messenger: a short line rides the tx payload,
-// encrypted to the recipient by DERO natively. No box, no store, no relay.
+// whisper is the DERO carrier compatibility surface. New sends use the
+// canonical 0xE2 X3DH + Double Ratchet pointer/body path; only old native
+// payloads are decoded by the bare legacy receiver.
 //
-//	whisper send  -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT
-//	whisper recv  -rpc URL [-rpc-login u:p] [-interval 3s]
+//	whisper send  -to ADDR -identity F ...
+//	whisper recv  -rpc URL -identity F -spk F -store URL -state-dir D -state-key F ...
 func whispercmd(args []string) {
 	if len(args) < 1 {
 		usage()
@@ -719,96 +732,36 @@ func whisperKeygen(args []string) {
 	fmt.Printf("give senders this spore long-term pubkey:\n%s\n", hex.EncodeToString(e.PublicKey()))
 }
 
-// legacySendRefusal is the message shared by every blocked legacy send path.
-// Kept as a function so the refusal contract is testable — the message is the
-// only thing a user of these paths sees, so it must stay accurate.
+// legacySendRefusal is the message shared by blocked non-DERO legacy sends.
+// DERO command names are upgraded aliases and do not use this path.
 func legacySendRefusal(cmd string) error {
-	return fmt.Errorf("%s: REFUSED — not forward-private. This legacy path uses stateless X25519 / the 0xE1 envelope: a recorded ciphertext can be decrypted retroactively with the recipient's long-term key. Spore policy: every NEW message is 0xE2 (X3DH + Double Ratchet — forward-secret, post-compromise healing). Use `spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -state-dir D -state-key F -store URL -msg-file F`", cmd)
+	return fmt.Errorf("%s: REFUSED — this non-DERO legacy carrier is not forward-private. Use `spore msg send-e2` with its supported E2 carrier", cmd)
 }
 
-// refuseLegacySend prints why a send path is refused and exits. Every legacy
-// (non-ratcheted) send funnels through here.
+// refuseLegacySend prints why a non-DERO legacy send path is refused. DERO
+// whisper and long-body names are routed to the canonical E2 sender instead.
 //
 // Forward compostability policy: stateless X25519 / the 0xE1 envelope has NO
 // key evolution, so a ciphertext recorded today can be decrypted retroactively
-// with the recipient's long-term key. That cannot be fixed in place — forward
-// secrecy is a property of the ratchet, and the ratchet requires session state,
-// which these paths deliberately do not have. New sends are therefore refused
-// and point at the 0xE2 path. Receiving mail already sent on them keeps working.
+// with the recipient's long-term key. This refusal applies only to unsupported
+// non-DERO legacy carriers; DERO command names route through the E2 path.
+// Receiving mail already sent on legacy paths keeps working.
 func refuseLegacySend(cmd string) {
 	fmt.Fprintln(os.Stderr, legacySendRefusal(cmd))
 	fmt.Fprintln(os.Stderr, "  Legacy RECEIVE remains supported for mail already sent.")
 	os.Exit(2)
 }
 
-// whisperSendLong encrypts a long body to the recipient's spore pubkey, holds
-// it locally, and posts a pointer-whisper. Body never rides a block. The sender
-// must run `spore-peer serve` so the recipient can fetch the body.
+// whisperSendLong is a compatibility command name. It now sends a canonical
+// 0xE2 frame whose body is off-chain; it never uses the old one-shot endpoint.
 func whisperSendLong(args []string) {
-	refuseLegacySend("whisper send-long")
-	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
-	to := fs.String("to", "", "recipient DERO address or dero-name")
-	recipPubHex := fs.String("recipient-pub", "", "recipient spore long-term pubkey (hex)")
-	file := fs.String("file", "", "file whose contents to send")
-	msg := fs.String("msg", "", "or literal message text (long)")
-	outDir := fs.String("out-dir", "spore-outbox", "dir to hold the outbound body")
-	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
-	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
-	addRPCFlags(fs)
-	_ = fs.Parse(args)
-
-	if *to == "" || *recipPubHex == "" || (*file == "" && *msg == "") {
-		fmt.Fprintln(os.Stderr, "whisper send-long: -to, -recipient-pub, and -file or -msg required")
-		os.Exit(2)
-	}
-	var plaintext []byte
-	var err error
-	if *file != "" {
-		plaintext, err = os.ReadFile(*file)
-	} else {
-		plaintext = []byte(*msg)
-	}
-	check(err)
-	recipPub, err := hex.DecodeString(*recipPubHex)
-	check(err)
-
-	// Sender holds its own outbound body in a disk store.
-	st, err := store.NewDiskStore(*outDir)
-	check(err)
-	e, err := longmsg.NewEndpoint(st)
-	check(err)
-	ptr, err := e.SendBody(recipPub, plaintext, *ttl)
-	check(err)
-
-	// Post a pointer-whisper to the DERO address.
-	client := makeClient(fs)
-	dest, err := resolveDest(context.Background(), *daemonURL, *to)
-	check(err)
-	txid, err := client.PostPayload(context.Background(), dest, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
-	check(err)
-	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
-	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
-	fmt.Println("recipient needs your reachable node; run:  spore-peer serve --dir " + *outDir)
+	sendDeroE2(args, "whisper send-long", true)
 }
 
+// whisperSend is a compatibility command name. It now sends a canonical 0xE2
+// frame over DERO, with X3DH + Double Ratchet state and an opaque pointer.
 func whisperSend(args []string) {
-	refuseLegacySend("whisper send")
-	fs := flag.NewFlagSet("whisper send", flag.ExitOnError)
-	to := fs.String("to", "", "recipient DERO address or dero-name")
-	msg := fs.String("msg", "", "message text (<=80 bytes)")
-	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
-	addRPCFlags(fs)
-	_ = fs.Parse(args)
-	if *to == "" || *msg == "" {
-		fmt.Fprintln(os.Stderr, "whisper send: -to and -msg required")
-		os.Exit(2)
-	}
-	client := makeClient(fs)
-	dest, err := resolveDest(context.Background(), *daemonURL, *to)
-	check(err)
-	txid, err := whisper.Send(context.Background(), client, dest, *msg)
-	check(err)
-	fmt.Printf("whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
+	sendDeroE2(args, "whisper send", false)
 }
 
 // resolveDest turns a user-supplied destination (a dero-name or a bech32
@@ -826,6 +779,10 @@ func resolveDest(ctx context.Context, daemonURL, dest string) (string, error) {
 }
 
 func whisperRecv(args []string) {
+	if deroE2ReceiveArgs(args) {
+		msgRecvE2(append([]string{"-chain", "dero"}, args...))
+		return
+	}
 	fs := flag.NewFlagSet("whisper recv", flag.ExitOnError)
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	statePath := fs.String("state", "", "file persisting the recv cursor and delivered set across restarts; without it every restart replays the wallet's full history")
@@ -1065,35 +1022,22 @@ func msgBackend(fs *flag.FlagSet) chain.Chain {
 }
 
 func msgSend(args []string) {
+	// DERO's historical `msg send` alias is now a canonical E2 send. Other
+	// carriers retain the old command only as a receive-compatible surface;
+	// they must use `msg send-e2` explicitly so nobody mistakes a legacy
+	// envelope for forward-private traffic.
+	if deroCompatChain(args) {
+		sendDeroE2(args, "msg send", false)
+		return
+	}
 	refuseLegacySend("msg send")
-	fs := flag.NewFlagSet("msg send", flag.ExitOnError)
-	to := fs.String("to", "", "recipient address on that chain")
-	msg := fs.String("msg", "", "message text")
-	fs.String("chain", "dero", "chain backend: dero|evm|xmr|solana")
-	fs.Bool("xmr-unverified", false, "allow the NOT live-verified XMR backend (experimental)")
-	fs.String("rpc", "", "wallet/daemon JSON-RPC endpoint")
-	fs.String("rpc-login", "", "RPC basic auth user:pass (dero)")
-	fs.String("from", "", "our address (evm)")
-	fs.String("key", "", "our spore priv key (64 hex) for E2E encryption")
-	fs.String("peer-pub", "", "recipient spore pub key (64 hex) for E2E encryption")
-	fs.String("keyfile", "", "solana signer keypair JSON path")
-	fs.String("program", "", "solana mailbox program id (default mainnet)")
-	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (log-based delivery)")
-	_ = fs.Parse(args)
-	if *to == "" || *msg == "" {
-		fmt.Fprintln(os.Stderr, "msg send: -to and -msg required")
-		os.Exit(2)
-	}
-	c := msgBackend(fs)
-	codec := secureSendCodec(fs, c.Name())
-	txid, err := whisper.SendChain(context.Background(), c, codec, *to, *msg)
-	if err != nil {
-		log.Fatalf("msg send on %s: %v", c.Name(), err)
-	}
-	fmt.Printf("sent on %s to %s, txid %s\n", c.Name(), *to, txid)
 }
 
 func msgRecv(args []string) {
+	if deroE2ReceiveArgsForChain(args) {
+		msgRecvE2(args)
+		return
+	}
 	fs := flag.NewFlagSet("msg recv", flag.ExitOnError)
 	interval := fs.Duration("interval", 3*time.Second, "poll interval")
 	minHeight := fs.Uint64("min-height", 0, "scan from height")
@@ -1231,71 +1175,10 @@ func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
 //
 // Only the DERO chain is wired for the pointer whisper today; any other -chain
 // is rejected.
+// msgSendLong remains a compatibility command name for the old DERO long-body
+// command. It now uses the canonical 0xE2 frame and DERO pointer carrier.
 func msgSendLong(args []string) {
-	refuseLegacySend("msg send-long")
-	fs := flag.NewFlagSet("msg send-long", flag.ExitOnError)
-	fs.String("chain", "dero", "delivery chain for the pointer whisper (only dero is wired for long bodies)")
-	to := fs.String("to", "", "recipient DERO delivery address (receives the pointer whisper)")
-	recipPubHex := fs.String("recipient-pub", "", "recipient spore X25519 pubkey (64 hex) to encrypt the body to")
-	file := fs.String("file", "", "file whose contents to send")
-	msg := fs.String("msg", "", "or literal message text (long)")
-	outDir := fs.String("out-dir", "spore-outbox", "dir to hold the outbound body")
-	daemonURL := fs.String("daemon", "http://127.0.0.1:10102/json_rpc", "daemon RPC for name resolution")
-	ttl := fs.Duration("ttl", 24*time.Hour, "body retention")
-	xmrAddr := fs.String("xmr", "", "recipient XMR address to tag the body with (identity metadata; prepended as a header line)")
-	addRPCFlags(fs)
-	_ = fs.Parse(args)
-
-	if !strings.EqualFold(fs.Lookup("chain").Value.String(), "dero") {
-		fmt.Fprintf(os.Stderr, "msg send-long: -chain %s unsupported for long bodies — only 'dero' is wired (the DERO pointer whisper is the long-body carrier)\n", fs.Lookup("chain").Value.String())
-		os.Exit(2)
-	}
-	if *to == "" || *recipPubHex == "" || (*file == "" && *msg == "") {
-		fmt.Fprintln(os.Stderr, "msg send-long: -to, -recipient-pub, and -file or -msg required")
-		os.Exit(2)
-	}
-	var plaintext []byte
-	var err error
-	if *file != "" {
-		plaintext, err = os.ReadFile(*file)
-	} else {
-		plaintext = []byte(*msg)
-	}
-	check(err)
-	recipPub, err := hex.DecodeString(*recipPubHex)
-	check(err)
-	if len(recipPub) != 32 {
-		fmt.Fprintln(os.Stderr, "msg send-long: -recipient-pub must be 64 hex chars (32 bytes)")
-		os.Exit(2)
-	}
-	// B1: tag the body with the recipient's XMR identity as a plaintext header
-	// line (metadata). It is encrypted with the rest of the body, so only the
-	// recipient ever sees it, and it needs no change to the pointer/codec.
-	if *xmrAddr != "" {
-		plaintext = xmrTagBody(*xmrAddr, plaintext)
-	}
-
-	// Sender holds its own outbound body in a disk store; the body never rides
-	// a block or a shared/third-party store.
-	st, err := store.NewDiskStore(*outDir)
-	check(err)
-	e, err := longmsg.NewEndpoint(st)
-	check(err)
-	ptr, err := e.SendBody(recipPub, plaintext, *ttl)
-	check(err)
-
-	// Post the pointer as a DERO whisper to the delivery address.
-	client := makeClient(fs)
-	dest, err := resolveDest(context.Background(), *daemonURL, *to)
-	check(err)
-	txid, err := client.PostPayload(context.Background(), dest, whisper.BuildPointerArgs(ptr.EphemeralPub, ptr.CID), 2)
-	check(err)
-	fmt.Printf("long body held in %s (cid %s)\n", *outDir, hex.EncodeToString(ptr.CID[:]))
-	if *xmrAddr != "" {
-		fmt.Printf("  tagged for XMR recipient %s\n", *xmrAddr)
-	}
-	fmt.Printf("pointer-whisper sent to %s (%s), txid %s\n", *to, dest[:14]+"…", txid)
-	fmt.Println("recipient needs your reachable node + their whisper recv to fetch+decrypt; run:  spore msg recv -chain dero")
+	sendDeroE2(args, "msg send-long", true)
 }
 
 // xmrTagBody prefixes an "xmr:<address>\n" header line onto a body so the

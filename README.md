@@ -68,7 +68,7 @@ transaction — so Spore never pretends to. What it guarantees:
 
 | Carrier | Backend | Pointer transport | Compost | Status |
 |---|---|---|---|---|
-| **DERO** | `internal/dero` | native tx payload | body TTL | **live, mainnet** |
+| **DERO** | `internal/dero` | native encrypted tx payload carrying opaque E2 pointer | body TTL | **live, mainnet** |
 | **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (local Anvil); deployment pending |
 | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
 | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
@@ -100,7 +100,7 @@ spore init                     # one-shot onboarding: identity kit + config.json
 spore demo                     # see it work — no chain, no wallet
 
 # Forward-private E2 (the real messenger):
-spore msg send-e2   -to ADDR (-bundle F | -bundle-url URL) -pinned-sig HEX [-amount 5.5dero] [-msg-file F|-]
+spore msg send-e2   -to ADDR (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-amount 5.5dero] [-msg-file F|-]
 spore msg recv-e2   [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL]
 spore msg reply-e2  -to ADDR -session HEX      # continue a thread
 spore msg forward-e2 -to ADDR -file F …        # new session, same body
@@ -131,7 +131,7 @@ read argv) — use `-msg-file` or stdin. Run `spore` with no args for full usage
 
 ## Privacy model (honest limits)
 
-- **Forward-private + compostable** on the E2 path; legacy paths are not.
+- **Forward-private + compostable** on the E2 path; legacy paths are not. DERO E2 posts accept only `-ringsize 8` or `-ringsize 16`, defaulting to 16.
 - **No relay**: a whisper is a real tx that P2P-fans to the recipient's node.
 - **Metadata is visible**: "a tx happened at ~time" is chain-wide public.
   DERO's ring sigs hide the sender; EVM/Solana/Bitcoin/TON expose tx metadata
