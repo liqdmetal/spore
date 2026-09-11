@@ -40,10 +40,20 @@ func continuitycmd(args []string) {
 		continuityObserve(args[1:])
 	case "verify-notice":
 		continuityVerifyNotice(args[1:])
+	case "quorum-create":
+		continuityQuorumCreate(args[1:])
+	case "attest":
+		continuityAttest(args[1:])
+	case "quorum":
+		continuityQuorum(args[1:])
+	case "verify-quorum":
+		continuityVerifyQuorum(args[1:])
+	case "release-quorum":
+		continuityReleaseQuorum(args[1:])
 	case "-h", "--help":
 		continuityUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice)\n", args[0])
+		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|quorum-create|attest|quorum|verify-quorum|release-quorum)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -59,6 +69,11 @@ func continuityUsage() {
   spore continuity observer-keygen -out OBSERVER_KEY
   spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
+  spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY
+  spore continuity attest -vault VAULT -policy POLICY -observer-key KEY -out ATTESTATION [-at UNIX]
+  spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM
+  spore continuity verify-quorum -quorum QUORUM [-vault VAULT]
+  spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
 
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
 no plaintext or private key is written into it. Check-in must occur strictly

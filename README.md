@@ -131,6 +131,13 @@ spore continuity check-in -vault VAULT -owner-key FILE
 spore continuity status -vault VAULT [-at UNIX]
 spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
 spore continuity verify -vault VAULT
+
+# N-of-M independent observer release:
+spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY
+spore continuity attest -vault VAULT -policy POLICY -observer-key KEY -out ATTESTATION [-at UNIX]
+spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM
+spore continuity verify-quorum -quorum QUORUM [-vault VAULT]
+spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
 ```
 
 Plaintext is **never** an argv flag (shell history, `ps`, and crash reports

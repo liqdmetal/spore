@@ -33,9 +33,11 @@ remaining; it does not re-state live status.*
 - **Continuity observer v1:** independent Ed25519 observer keys and signed
   release-ready notices bound to an exact vault state. Observers see no plaintext,
   recipient keys, or wallet authority.
+- **Continuity quorum v1:** thresholded N-of-M independent attestations bound to
+  the exact check-in epoch; quorum-gated recipient release remains explicit and
+  non-custodial.
 
 ### Continuity vault — next protocol slices
-- N-of-M recipient or observer release, with independent operators.
 - Optional chain commitment for policy/deadline anchoring.
 - Notification and recovery UX without handing plaintext or keys to a service.
 - No automatic wallet spending or irreversible account actions.

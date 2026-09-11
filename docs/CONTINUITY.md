@@ -100,6 +100,49 @@ plaintext, or wallet authority. The notice is a signed fact that the observer
 saw a particular vault deadline pass; it is not proof of death or incapacity,
 and it does not release the payload by itself.
 
-The next safe extension is N-of-M observer/recipient release with independent
-operators. It must preserve the same boundary: no observer gets plaintext,
-recipient private keys, or automatic spending authority.
+## N-of-M observer release
+
+The quorum layer is now available. Create a policy listing approved observer
+public keys and a threshold, then collect independent attestations:
+
+```sh
+spore continuity quorum-create \
+  -vault ./continuity-vault.json \
+  -threshold 2 \
+  -attester-pub OBSERVER_A_PUB,OBSERVER_B_PUB,OBSERVER_C_PUB \
+  -out ./quorum-policy.json
+
+spore continuity attest \
+  -vault ./continuity-vault.json \
+  -policy ./quorum-policy.json \
+  -observer-key ./observer-a.key \
+  -out ./attestation-a.json
+
+spore continuity quorum \
+  -policy ./quorum-policy.json \
+  -attestations ./attestation-a.json,./attestation-b.json \
+  -out ./quorum-release.json
+
+spore continuity verify-quorum \
+  -quorum ./quorum-release.json \
+  -vault ./continuity-vault.json
+
+spore continuity release-quorum \
+  -vault ./continuity-vault.json \
+  -quorum ./quorum-release.json \
+  -recipient-key ./recipient.key \
+  -out ./released-instructions.txt
+```
+
+A quorum policy binds the exact vault ID, payload commitment, owner signing key,
+check-in sequence, and deadline. A later owner check-in makes the policy stale;
+old attestations cannot be replayed. The quorum bundle contains notices and
+signatures only—never plaintext, recipient private keys, or wallet authority.
+Release remains explicit and local.
+
+No observer can release alone, and this still does not prove death or incapacity.
+It proves only that the threshold of independent observers signed the same
+missed-deadline epoch.
+
+The next protocol extension is optional chain anchoring of the policy/deadline;
+it must preserve the same no-plaintext/no-key/no-automatic-spending boundary.
