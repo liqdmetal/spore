@@ -38,7 +38,9 @@ remaining; it does not re-state live status.*
   non-custodial.
 
 ### Continuity vault — next protocol slices
-- Optional chain commitment for policy/deadline anchoring.
+- **Continuity chain anchor v1:** optional DERO commitment to the exact vault,
+  quorum policy, check-in sequence, and deadline. Posting is explicit and
+  re-verifies state immediately before the wallet call; no automatic action.
 - Notification and recovery UX without handing plaintext or keys to a service.
 - No automatic wallet spending or irreversible account actions.
 

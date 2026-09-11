@@ -138,6 +138,11 @@ spore continuity attest -vault VAULT -policy POLICY -observer-key KEY -out ATTES
 spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM
 spore continuity verify-quorum -quorum QUORUM [-vault VAULT]
 spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
+
+# Optional chain commitment (opaque IDs only; posting is explicit):
+spore continuity anchor-create -vault VAULT -policy POLICY -out ANCHOR
+spore continuity anchor-verify -anchor ANCHOR -vault VAULT -policy POLICY
+spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-login u:p] [-ringsize 8|16]
 ```
 
 Plaintext is **never** an argv flag (shell history, `ps`, and crash reports

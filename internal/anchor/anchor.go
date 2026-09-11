@@ -47,10 +47,17 @@ const Version byte = 1
 type Kind byte
 
 const (
-	KindMessage   Kind = 0x01 // body ciphertext exists off-chain
-	KindAck       Kind = 0x02 // receipt for a message
-	KindKeyRotate Kind = 0x03 // recipient advertises a new medium-term pubkey
-)
+	KindMessage    Kind = 0x01 // body ciphertext exists off-chain
+	KindAck        Kind = 0x02 // receipt for a message
+	KindKeyRotate  Kind = 0x03 // recipient advertises a new medium-term pubkey
+	KindContinuity Kind = 0x04 // continuity vault/quorum commitment
+) //nolint:revive // wire names are protocol constants
+
+const maxContinuitySeq uint64 = (1 << 40) - 1
+
+// ContinuitySeq is encoded in the high 40 bits of the F metadata word when
+// KindContinuity is used. The four-argument wire shape stays within DERO's
+// payload limit while committing the exact signed check-in epoch.
 
 // Flags bits.
 const (
@@ -76,12 +83,23 @@ type Anchor struct {
 	CID          [32]byte
 	BurnDeadline uint64 // unix seconds
 	Flags        byte
+	// ContinuitySeq is used only by KindContinuity and is encoded in the
+	// otherwise-unused high 40 bits of the F metadata word.
+	ContinuitySeq uint64
+} /*nolint:revive // wire-facing protocol record */
+
+func (a *Anchor) metadata() uint64 {
+	meta := uint64(a.Version) | uint64(a.Kind)<<8 | uint64(a.Flags)<<16
+	if a.Kind == KindContinuity {
+		meta |= a.ContinuitySeq << 24
+	}
+	return meta
 }
 
 // ToArguments renders the anchor as the typed argument list that the wallet
 // RPC packs into the on-chain message field.
 func (a *Anchor) ToArguments() Arguments {
-	meta := uint64(a.Version) | uint64(a.Kind)<<8 | uint64(a.Flags)<<16
+	meta := a.metadata()
 	return Arguments{
 		{Name: "K", DataType: DataHash, Value: hex.EncodeToString(a.EphemeralPub[:])},
 		{Name: "C", DataType: DataHash, Value: hex.EncodeToString(a.CID[:])},
@@ -137,6 +155,12 @@ func FromArguments(args Arguments) (*Anchor, error) {
 	a.Flags = byte(meta >> 16)
 	if a.Version != Version {
 		return nil, fmt.Errorf("anchor: unsupported version %d", a.Version)
+	}
+	if a.Kind == KindContinuity {
+		a.ContinuitySeq = meta >> 24
+		if a.ContinuitySeq > maxContinuitySeq {
+			return nil, errors.New("anchor: invalid continuity check-in sequence")
+		}
 	}
 	return a, nil
 }

@@ -144,5 +144,45 @@ No observer can release alone, and this still does not prove death or incapacity
 It proves only that the threshold of independent observers signed the same
 missed-deadline epoch.
 
-The next protocol extension is optional chain anchoring of the policy/deadline;
-it must preserve the same no-plaintext/no-key/no-automatic-spending boundary.
+## Optional chain anchoring
+
+A policy/deadline commitment can be created and checked without network access:
+
+```sh
+spore continuity anchor-create \
+  -vault ./continuity-vault.json \
+  -policy ./quorum-policy.json \
+  -out ./continuity-anchor.json
+
+spore continuity anchor-verify \
+  -anchor ./continuity-anchor.json \
+  -vault ./continuity-vault.json \
+  -policy ./quorum-policy.json
+```
+
+The anchor commits to the vault ID, quorum-policy ID, signed check-in sequence,
+and deadline. The DERO wire form carries only the two opaque 32-byte IDs plus
+the deadline and sequence metadata; it contains no plaintext, ciphertext,
+recipient key, or wallet authority. A later owner check-in makes the anchor
+invalid against the current vault.
+
+Posting is deliberately separate and explicit:
+
+```sh
+spore continuity anchor-post \
+  -anchor ./continuity-anchor.json \
+  -vault ./continuity-vault.json \
+  -policy ./quorum-policy.json \
+  -to DERO_DESTINATION \
+  -rpc http://127.0.0.1:20209/json_rpc \
+  -ringsize 16
+```
+
+`anchor-post` is the only command in this slice that contacts a wallet. It
+re-verifies the anchor against the current vault and policy immediately before
+posting, uses minimum postage, and never runs automatically during observation,
+quorum assembly, or release. It does not move the continuity payload or release
+funds.
+
+The chain remains an optional timestamp/commitment carrier, not a liveness
+oracle and not proof of death or incapacity.

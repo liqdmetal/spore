@@ -50,10 +50,16 @@ func continuitycmd(args []string) {
 		continuityVerifyQuorum(args[1:])
 	case "release-quorum":
 		continuityReleaseQuorum(args[1:])
+	case "anchor-create":
+		continuityAnchorCreate(args[1:])
+	case "anchor-verify":
+		continuityAnchorVerify(args[1:])
+	case "anchor-post":
+		continuityAnchorPost(args[1:])
 	case "-h", "--help":
 		continuityUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|quorum-create|attest|quorum|verify-quorum|release-quorum)\n", args[0])
+		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|quorum-create|attest|quorum|verify-quorum|release-quorum|anchor-create|anchor-verify|anchor-post)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -74,6 +80,9 @@ func continuityUsage() {
   spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM
   spore continuity verify-quorum -quorum QUORUM [-vault VAULT]
   spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
+  spore continuity anchor-create -vault VAULT -policy POLICY -out ANCHOR
+  spore continuity anchor-verify -anchor ANCHOR -vault VAULT -policy POLICY
+  spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-login u:p] [-ringsize 8|16]
 
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
 no plaintext or private key is written into it. Check-in must occur strictly

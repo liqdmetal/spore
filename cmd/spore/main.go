@@ -162,7 +162,7 @@ func usage() {
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
   spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
-  spore continuity create|check-in|status|release|verify|observe|quorum ... (encrypted continuity vault; signed N-of-M release; no automatic funds)
+  spore continuity create|check-in|status|release|verify|observe|quorum|anchor ... (encrypted continuity vault; signed N-of-M release; explicit optional chain commitment)
   spore e2-device id|status|export|import [-state-dir D] [-state-key F]   (multi-device ratchet state sync)
   spore sign doc -identity FILE -file DOC -statement "I agree" [-out SIG]   (detached, third-party-verifiable document signature)
   spore sign verify -file DOC -sig SIG [-pinned-sig HEX]                    (verify; -pinned-sig binds it to a known signer)
