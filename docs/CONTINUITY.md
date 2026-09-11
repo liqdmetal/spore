@@ -72,6 +72,34 @@ This slice intentionally does not claim:
 - automatic key rotation, credential revocation, or wallet actions;
 - legal proof of death, incapacity, or succession.
 
-Those are separate protocol and operational features. The next safe extension is
-an observer that verifies the signed vault and publishes only a release-ready
-notice; it must not receive private keys or plaintext.
+Those are separate protocol and operational features.
+
+## Observer slice
+
+The observer layer is now available:
+
+```sh
+# generate an independent observer signing key
+spore continuity observer-keygen -out ./observer.key
+
+# inspect the public vault and emit a signed release-ready notice after due time
+spore continuity observe \
+  -vault ./continuity-vault.json \
+  -observer-key ./observer.key \
+  -out ./release-notice.json
+
+# verify the notice signature and bind it to the exact vault state
+spore continuity verify-notice \
+  -notice ./release-notice.json \
+  -vault ./continuity-vault.json
+```
+
+The observer sees the public vault metadata, ciphertext, commitments, and signed
+check-in chain. It does **not** receive recipient private keys, payload
+plaintext, or wallet authority. The notice is a signed fact that the observer
+saw a particular vault deadline pass; it is not proof of death or incapacity,
+and it does not release the payload by itself.
+
+The next safe extension is N-of-M observer/recipient release with independent
+operators. It must preserve the same boundary: no observer gets plaintext,
+recipient private keys, or automatic spending authority.

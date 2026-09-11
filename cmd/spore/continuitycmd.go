@@ -34,10 +34,16 @@ func continuitycmd(args []string) {
 		continuityRelease(args[1:])
 	case "verify":
 		continuityVerify(args[1:])
+	case "observer-keygen":
+		continuityObserverKeygen(args[1:])
+	case "observe":
+		continuityObserve(args[1:])
+	case "verify-notice":
+		continuityVerifyNotice(args[1:])
 	case "-h", "--help":
 		continuityUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify)\n", args[0])
+		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -50,6 +56,9 @@ func continuityUsage() {
   spore continuity status -vault VAULT [-at UNIX]
   spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
   spore continuity verify -vault VAULT
+  spore continuity observer-keygen -out OBSERVER_KEY
+  spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
+  spore continuity verify-notice -notice NOTICE [-vault VAULT]
 
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
 no plaintext or private key is written into it. Check-in must occur strictly

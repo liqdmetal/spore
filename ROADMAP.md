@@ -30,9 +30,11 @@ remaining; it does not re-state live status.*
 - **Continuity vault v1:** encrypted recipient-wrapped payload, signed check-in
   chain, deterministic missed-deadline evaluation, and explicit local release.
   See [`docs/CONTINUITY.md`](docs/CONTINUITY.md). No automatic fund movement.
+- **Continuity observer v1:** independent Ed25519 observer keys and signed
+  release-ready notices bound to an exact vault state. Observers see no plaintext,
+  recipient keys, or wallet authority.
 
 ### Continuity vault — next protocol slices
-- Observer/check-in transport that publishes only signed liveness metadata.
 - N-of-M recipient or observer release, with independent operators.
 - Optional chain commitment for policy/deadline anchoring.
 - Notification and recovery UX without handing plaintext or keys to a service.
