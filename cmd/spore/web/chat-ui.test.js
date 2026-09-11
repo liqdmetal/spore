@@ -56,7 +56,7 @@ global.crypto = { getRandomValues: a => { for (let i = 0; i < a.length; i++) a[i
 
 // capture exported-for-test handles by appending a probe to the script
 const probe = `
-;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join };
+;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join, whisperSend, whisperRecv };
 `;
 const runner = new Function("globalThis", m[1] + probe);
 let failed = 0;
@@ -101,9 +101,28 @@ ok(els.get("compose").style.display === "flex", "hideWelcome restores the compos
 
 // The important one: entering a room by ANY path must dismiss onboarding.
 t.showWelcome();
-t.join("#somewhere").then(() => {
+t.join("#somewhere").then(async () => {
   ok(els.get("welcome").style.display === "none",
      "join() dismisses the onboarding panel (clicking a room works, not just the buttons)");
+
+  console.log("forward-compostable messaging (E2 endpoints)");
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    calls.push({ url: String(url), opts });
+    return { ok: true, text: async () => "{}" };
+  };
+  document.getElementById("wTo").value = "dero1qyfriend";
+  document.getElementById("wMsg").value = "hello";
+  await t.whisperSend();
+  ok(calls.some(c => c.url.endsWith("/e2/send")), "whisperSend posts to /e2/send (forward-private), not /whisper/send");
+  ok(!calls.some(c => c.url.includes("/whisper/send")), "the legacy /whisper/send endpoint is gone from the UI");
+
+  calls.length = 0;
+  global.fetch = async (url) => { calls.push({ url: String(url), opts: null }); return { ok: true, text: async () => JSON.stringify([{ txid: "aabbcc", text: "hi" }]) }; };
+  await t.whisperRecv();
+  ok(calls.some(c => c.url.endsWith("/e2/recv")), "inbox polls /e2/recv (decrypted bodies), not /whisper/recv");
+  ok(els.get("wInbox").children.length > 0, "inbox renders a delivered E2 message");
+
   console.log(failed ? `\n${failed} check(s) FAILED` : "\nall checks passed");
   process.exit(failed ? 1 : 0);
 }).catch(e => { console.error("join threw:", e.message); process.exit(1); });

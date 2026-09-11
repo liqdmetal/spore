@@ -135,14 +135,14 @@ func usage() {
   spore channel -listen :PORT [-linettl 7d] [-presencettl 1m] [-dir D]   (run an IRC box; rooms rot after linettl)
   spore chat -box URL -channel NAME -nick X [-key HEX] [-interval 3s]
              [-say "text"] [-online]
-  spore web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-dir D]  (browser chat)
-  spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (no-relay short)
-  spore whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]
-  spore whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]
+  spore web -listen :PORT [-wallet-rpc URL -wallet-login u:p] [-e2-dir DIR] [-store URL] [-dir D]  (browser chat; -e2-dir enables forward-private E2 send/recv)
+  spore whisper send -rpc URL [-rpc-login u:p] -to ADDR -msg TEXT   (REFUSED — not forward-private; use msg send-e2)
+  spore whisper send-long -to ADDR -recipient-pub HEX -file F|-msg TEXT [-out-dir D] [-rpc URL]  (REFUSED — use msg send-e2)
+  spore whisper recv -rpc URL [-rpc-login u:p] [-key KFILE] [-peer-addr host:port] [-peer-bin B]  (legacy receive only)
   spore whisper keygen [-key KFILE]
   spore donate [chain] | --all                          (per-chain donation rail)
-  spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (chain-agnostic send)
-  spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv)
+  spore msg send -chain dero|evm|xmr|solana -to ADDR -msg TEXT ...   (REFUSED — not forward-private; use msg send-e2)
+  spore msg recv -chain dero|evm|xmr|solana ...                       (chain-agnostic recv; legacy)
   spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
   spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
              [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] -store URL
@@ -158,6 +158,7 @@ func usage() {
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
   spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
+  spore e2-device id|status|export|import [-state-dir D] [-state-key F]   (multi-device ratchet state sync)
   spore sign doc -identity FILE -file DOC -statement "I agree" [-out SIG]   (detached, third-party-verifiable document signature)
   spore sign verify -file DOC -sig SIG [-pinned-sig HEX]                    (verify; -pinned-sig binds it to a known signer)
   spore sign sheet -file DOC -sigs A.sig,B.sig [-required HEX,HEX]          (multi-party contract: who signed, who has not)
@@ -419,6 +420,12 @@ func webchat(args []string) {
 	allowSpend := fs.Bool("allow-browser-spend", false, "enable the /whisper/send + /whisper/recv browser proxy (UNSAFE: wallet spend + inbox read; requires -token on non-loopback binds)")
 	webToken := fs.String("token", "", "shared secret; require `Authorization: Bearer <token>` on the whisper proxy routes")
 	dir := fs.String("dir", "", "persist rooms to this dir (survives restart); empty = in-memory")
+	// E2 browser messaging: the server holds the account's ratchet state so
+	// the browser can send and receive forward-private messages without
+	// holding keys. Same trust model as the whisper proxy — the server is
+	// the user's own. Disabled unless -e2-dir is given.
+	e2dir := fs.String("e2-dir", "", "spore E2 state dir (identity.key, spk.key, state.key, state/, opk-pool.json, mail.json — see `spore init -dir`): enables /e2/send + /e2/recv (forward-private browser messaging)")
+	storeURL := fs.String("store", "", "body store URL for E2 bodies (your mailbox)")
 	_ = fs.Parse(args)
 
 	if err := safehttp.CheckBind(*listen, *webToken, "web"); err != nil {
@@ -451,6 +458,19 @@ func webchat(args []string) {
 	}
 	api := channel.WithCORS(channel.BoxRoutes(b))
 
+	// E2 browser messaging, when the server holds an identity kit. Loaded
+	// once at startup so a broken -e2-dir fails loudly instead of half-serving
+	// a UI whose send button then errors on every click.
+	var e2 *webE2
+	if *e2dir != "" {
+		loaded, err := newWebE2(*e2dir, *storeURL, "")
+		if err != nil {
+			log.Fatalf("web: e2: %v", err)
+		}
+		e2 = loaded
+		log.Printf("web: E2 browser messaging enabled (dir %s)", *e2dir)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/chat" || r.URL.Path == "/index.html" {
@@ -458,8 +478,7 @@ func webchat(args []string) {
 			_, _ = w.Write(chatHTML)
 			return
 		}
-		// Whisper endpoints: proxy send/recv to the wallet so the browser can
-		// post no-relay messages without holding keys itself.
+		// Wallet-proxied routes: the browser posts/reads without holding keys.
 		if *wrc != "" && *allowSpend {
 			// Token gate when configured (mandatory on non-loopback binds).
 			if *webToken != "" {
@@ -470,8 +489,28 @@ func webchat(args []string) {
 					return
 				}
 			}
+			if r.URL.Path == "/e2/send" && r.Method == "POST" {
+				if e2 == nil {
+					writeJSON(w, map[string]string{"error": "E2 disabled — start `spore web` with -e2-dir"})
+					return
+				}
+				webE2Send(w, r, e2, *wrc, *wlogin)
+				return
+			}
+			if r.URL.Path == "/e2/recv" && r.Method == "GET" {
+				if e2 == nil {
+					writeJSON(w, map[string]string{"error": "E2 disabled — start `spore web` with -e2-dir"})
+					return
+				}
+				webE2Recv(w, r, e2, *wrc, *wlogin)
+				return
+			}
+			// Legacy whisper SEND is refused: stateless X25519 has no key
+			// evolution, so a recorded ciphertext decrypts with the long-term
+			// key. New messages must ride the ratcheted path. RECEIVE stays
+			// for mail already sent.
 			if r.URL.Path == "/whisper/send" && r.Method == "POST" {
-				webWhisperSend(w, r, *wrc, *wlogin)
+				writeJSON(w, map[string]string{"error": "legacy whisper send refused — not forward-private (stateless X25519). Use /e2/send (X3DH + Double Ratchet). Legacy receive still works for old mail."})
 				return
 			}
 			if r.URL.Path == "/whisper/recv" && r.Method == "GET" {
@@ -490,11 +529,10 @@ func webchat(args []string) {
 	log.Fatal(srv.ListenAndServe())
 }
 
-// webWhisperSend posts a whisper through the daemon's wallet RPC (the browser
-// can't sign txs itself). Body: {"to":addr,"msg":text}.
-func webWhisperSend(w http.ResponseWriter, r *http.Request, wrc, wlogin string) {
-	u, p := parseLogin(wlogin)
-	client := dero.NewClient(wrc, u, p)
+// webE2Send delivers one forward-private message on behalf of the browser.
+// Body: {"to": addr-or-nick, "msg": text}. The pinned sig and prekey route
+// come from the recipient's maildb contact (saved with `spore msg mail add`).
+func webE2Send(w http.ResponseWriter, r *http.Request, e2 *webE2, wrc, wlogin string) {
 	var req struct {
 		To  string `json:"to"`
 		Msg string `json:"msg"`
@@ -503,15 +541,31 @@ func webWhisperSend(w http.ResponseWriter, r *http.Request, wrc, wlogin string) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	txid, err := whisper.Send(r.Context(), client, req.To, req.Msg)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	txid, session, err := e2.send(ctx, req.To, req.Msg, wrc, wlogin)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeJSON(w, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, map[string]string{"txid": txid})
+	writeJSON(w, map[string]string{"txid": txid, "session": session})
+}
+
+// webE2Recv performs one inbox scan and returns newly delivered messages.
+func webE2Recv(w http.ResponseWriter, r *http.Request, e2 *webE2, wrc, wlogin string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	msgs, err := e2.recvOnce(ctx, wrc, wlogin)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, msgs)
 }
 
 // webWhisperRecv polls the wallet for incoming whispers and returns them.
+// Kept for reading mail sent BEFORE the forward-compostability policy; new
+// mail arrives via /e2/recv.
 func webWhisperRecv(w http.ResponseWriter, r *http.Request, wrc, wlogin string) {
 	u, p := parseLogin(wlogin)
 	client := dero.NewClient(wrc, u, p)
@@ -665,10 +719,33 @@ func whisperKeygen(args []string) {
 	fmt.Printf("give senders this spore long-term pubkey:\n%s\n", hex.EncodeToString(e.PublicKey()))
 }
 
+// legacySendRefusal is the message shared by every blocked legacy send path.
+// Kept as a function so the refusal contract is testable — the message is the
+// only thing a user of these paths sees, so it must stay accurate.
+func legacySendRefusal(cmd string) error {
+	return fmt.Errorf("%s: REFUSED — not forward-private. This legacy path uses stateless X25519 / the 0xE1 envelope: a recorded ciphertext can be decrypted retroactively with the recipient's long-term key. Spore policy: every NEW message is 0xE2 (X3DH + Double Ratchet — forward-secret, post-compromise healing). Use `spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -state-dir D -state-key F -store URL -msg-file F`", cmd)
+}
+
+// refuseLegacySend prints why a send path is refused and exits. Every legacy
+// (non-ratcheted) send funnels through here.
+//
+// Forward compostability policy: stateless X25519 / the 0xE1 envelope has NO
+// key evolution, so a ciphertext recorded today can be decrypted retroactively
+// with the recipient's long-term key. That cannot be fixed in place — forward
+// secrecy is a property of the ratchet, and the ratchet requires session state,
+// which these paths deliberately do not have. New sends are therefore refused
+// and point at the 0xE2 path. Receiving mail already sent on them keeps working.
+func refuseLegacySend(cmd string) {
+	fmt.Fprintln(os.Stderr, legacySendRefusal(cmd))
+	fmt.Fprintln(os.Stderr, "  Legacy RECEIVE remains supported for mail already sent.")
+	os.Exit(2)
+}
+
 // whisperSendLong encrypts a long body to the recipient's spore pubkey, holds
 // it locally, and posts a pointer-whisper. Body never rides a block. The sender
 // must run `spore-peer serve` so the recipient can fetch the body.
 func whisperSendLong(args []string) {
+	refuseLegacySend("whisper send-long")
 	fs := flag.NewFlagSet("whisper send-long", flag.ExitOnError)
 	to := fs.String("to", "", "recipient DERO address or dero-name")
 	recipPubHex := fs.String("recipient-pub", "", "recipient spore long-term pubkey (hex)")
@@ -715,6 +792,7 @@ func whisperSendLong(args []string) {
 }
 
 func whisperSend(args []string) {
+	refuseLegacySend("whisper send")
 	fs := flag.NewFlagSet("whisper send", flag.ExitOnError)
 	to := fs.String("to", "", "recipient DERO address or dero-name")
 	msg := fs.String("msg", "", "message text (<=80 bytes)")
@@ -987,6 +1065,7 @@ func msgBackend(fs *flag.FlagSet) chain.Chain {
 }
 
 func msgSend(args []string) {
+	refuseLegacySend("msg send")
 	fs := flag.NewFlagSet("msg send", flag.ExitOnError)
 	to := fs.String("to", "", "recipient address on that chain")
 	msg := fs.String("msg", "", "message text")
@@ -1153,6 +1232,7 @@ func secureRecvCodec(fs *flag.FlagSet, chainType string) whisper.Codec {
 // Only the DERO chain is wired for the pointer whisper today; any other -chain
 // is rejected.
 func msgSendLong(args []string) {
+	refuseLegacySend("msg send-long")
 	fs := flag.NewFlagSet("msg send-long", flag.ExitOnError)
 	fs.String("chain", "dero", "delivery chain for the pointer whisper (only dero is wired for long bodies)")
 	to := fs.String("to", "", "recipient DERO delivery address (receives the pointer whisper)")

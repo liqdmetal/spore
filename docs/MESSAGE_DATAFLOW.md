@@ -316,9 +316,19 @@ deterministic-vector conformance suite), **and wired**: `spore msg send-e2` /
 `recv-e2` / `reply-e2` / `forward-e2` drive `internal/ratchetwire` end to end,
 with mailbox prekey discovery (`GET /prekey`, single-use batch pops), durable
 encrypted session state, and an off-chain TTL body store. The chain carries the
-opaque pointer only; substantive content is the ratcheted off-chain body. The
-0xE1 envelope and DERO-native whisper remain available as compatibility
-"knocks" — they are NOT forward-secret and the docs say so everywhere.
+opaque pointer only; substantive content is the ratcheted off-chain body.
+
+**Forward-compostability policy (2026-09):** every NEW message must be 0xE2.
+The legacy sends — `spore whisper send`, `whisper send-long`, `msg send`,
+`msg send-long`, and the browser `/whisper/send` — are REFUSED at the CLI and
+the web route, because stateless X25519 / the 0xE1 envelope has no key
+evolution and cannot be made forward-secret in place (forward secrecy is a
+property of the ratchet, and the ratchet requires session state those paths
+deliberately do not have). Legacy RECEIVE remains supported so mail sent
+before the policy stays readable (`whisper recv`, `msg recv`, `/whisper/recv`),
+and is marked as not forward-private everywhere it is still offered. The
+browser UI sends and receives through `/e2/send` + `/e2/recv` (server holds
+the account's ratchet state; the server is your own).
 
 ---
 

@@ -87,6 +87,7 @@
   .inbox .wsender:hover{text-decoration:underline}
   .inbox .wtext{color:var(--fg);word-break:break-word;display:block;margin-top:1px}
   .inbox .wrep{font-size:9px;color:var(--muted);opacity:.8}
+  .wlegacyhint{font-size:9.5px;color:var(--muted);opacity:.75;padding:4px 2px 0;word-break:break-all}
   .inbox .wline.replying{border-left:2px solid var(--accent2);background:var(--panel2)}
   .repInfo{font-size:10px;color:var(--accent2);padding:2px 4px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .contact{display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:12px;border-left:2px solid transparent}
@@ -127,15 +128,16 @@
   <div class="rail-section">Rooms</div>
   <div id="rooms"></div>
   <button id="newroom">+ new room</button>
-  <div class="rail-section">Whisper (1:1, no relay)</div>
+  <div class="rail-section">E2 (1:1, forward-private)</div>
   <div id="contacts" class="contacts"></div>
   <div id="whisperPane">
-    <input id="wTo" placeholder="recipient addr / name">
+    <input id="wTo" placeholder="recipient addr / nick">
     <div class="repInfo" id="repInfo">replying to …</div>
-    <input id="wMsg" placeholder="short msg (~90 chars)" maxlength="90">
-    <button id="wSend">whisper →</button>
+    <input id="wMsg" placeholder="message (E2: body rides your mailbox)">
+    <button id="wSend">send →</button>
     <div class="rail-section">Inbox</div>
     <div id="wInbox" class="inbox"></div>
+    <div class="wlegacyhint">legacy whispers from before this policy: `spore whisper recv`</div>
   </div>
 </div>
 <div id="main">
@@ -155,10 +157,15 @@
         <p><b>Private room</b> — every line is AES-GCM encrypted in your browser. The box stores <i>ciphertext only</i>. Share the key out-of-band; whoever lacks it sees <code>🔒 unreadable line</code>.</p>
       </div>
       <div class="wcard priv">
-        <div class="whead">◇ Whisper <span class="wtag">on-chain, 1:1</span></div>
-        <p><b>No relay, no box.</b> The message rides a DERO transaction payload straight to the recipient. Nobody in the middle holds it.</p>
-        <p><b>Short</b> — about 90 characters (the on-chain payload budget). Long bodies go through the mailbox instead.</p>
-        <p class="wnote">Sending spends real postage per message from the wallet this box is pointed at.</p>
+        <div class="whead">◇ E2 message <span class="wtag">forward-private, 1:1</span></div>
+        <p><b>X3DH + Double Ratchet.</b> Every message ratchets its keys — a recorded
+        ciphertext cannot be decrypted with keys compromised later, and a stolen
+        device heals after the next exchange. No relay, no box in the middle.</p>
+        <p><b>Bodies</b> ride your own mailbox; only an opaque pointer rides the
+        chain. <b>First contact</b> needs the recipient's prekey and pinned sig,
+        saved once with <code>spore msg mail add</code>.</p>
+        <p class="wnote">Legacy whispers (stateless X25519) are receive-only: they
+        are not forward-private, so new sends are refused.</p>
       </div>
     </div>
     <div class="wfoot">
@@ -471,21 +478,22 @@ async function whisperSend(){
   if(!to||!msg){alert("recipient + message");return;}
   $("wMsg").value="";
   try{
-    await j("POST","/whisper/send",{to,msg});
-    sysText(`whisper sent to ${shortAddr(to)}`);
-  }catch(e){alert("whisper send failed: "+e.message);}
+    const r=await j("POST","/e2/send",{to,msg});
+    if(r.error)throw new Error(r.error);
+    sysText(`E2 sent to ${shortAddr(to)} tx ${(r.txid||"").slice(0,12)}…`);
+  }catch(e){alert("E2 send failed: "+e.message);}
 }
 async function whisperRecv(){
   try{
-    const msgs=await j("GET","/whisper/recv");
+    const msgs=await j("GET","/e2/recv");
+    if(msgs.error)return;
     let changed=false;
     for(const m of msgs){
-      addToContacts(m.sender,m.text);changed=true;
+      changed=true;
       if(wseen.has(m.txid))continue;
       wseen.add(m.txid);
       const d=document.createElement("div");d.className="wline";
-      d.innerHTML=`<span class="wsender">${esc(shortAddr(m.sender||"?"))}</span><span class="wtext">${esc(m.text)}</span>`;
-      d.onclick=()=>pickRecipient(m.sender||"");
+      d.innerHTML=`<span class="wsender">${esc((m.txid||"?").slice(0,16))}…</span><span class="wtext">${esc(m.text)}</span>`;
       $("wInbox").prepend(d);
     }
     if(changed)renderContacts();
