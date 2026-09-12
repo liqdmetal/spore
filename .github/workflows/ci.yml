@@ -1,5 +1,9 @@
 name: CI
 
+permissions:
+  contents: read
+
+
 on:
   # Push runs only on main: a bare push trigger fires on every commit twice
   # (push + PR event), which burns private-repo Actions minutes.
@@ -34,6 +38,34 @@ jobs:
         # spore is networky (mailbox host, peers) — race detection is cheap
         # here and catches the cross-goroutine bugs that matter most.
         run: go test -race ./...
+
+  windows:
+    name: Windows build + vet + test (race)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test (race)
+        run: go test -race ./...
+
+  continuity-fuzz-smoke:
+    name: Continuity fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fuzz continuity artifacts
+        run: go test ./internal/continuity -run=^$ -fuzz=FuzzContinuityArtifactParsers -fuzztime=15s
+      - name: Fuzz DERO anchor arguments
+        run: go test ./internal/anchor -run=^$ -fuzz=FuzzFromArguments -fuzztime=15s
 
   gofmt:
     name: gofmt (blocking gate)
