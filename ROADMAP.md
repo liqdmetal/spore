@@ -49,7 +49,7 @@ remaining; it does not re-state live status.*
   identifiers.
 
 ### Continuity vault — remaining production slices
-- Independent recovery drill across machines with protected vault copies.
+- Independent second-machine recovery drill with protected key transfer.
 - Independent cryptographic review and controlled live-chain evidence.
 - Notification deployment hardening beyond the explicit local watch/outbox workflow.
 - No automatic wallet spending or irreversible account actions.

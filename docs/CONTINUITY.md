@@ -254,3 +254,34 @@ again for the new epoch.
 This is an explicit metadata-only workflow, not an unattended hosted service;
 process scheduling, webhook hardening, and operator alerting remain deployment
 responsibilities.
+
+## Recovery bundle and clean-machine restore
+
+Create a bundle from encrypted/signed continuity artifacts. Private keys and any
+released plaintext are deliberately excluded and must be transferred separately
+through the operator's protected key process:
+
+```sh
+spore continuity recovery-create \
+  -vault ./continuity-vault.json \
+  -policy ./quorum-policy.json \
+  -quorum ./quorum-release.json \
+  -anchor ./continuity-anchor.json \
+  -receipt ./continuity-anchor-receipt.json \
+  -watch ./continuity-watch.json \
+  -notice ./continuity-release-notice.json \
+  -out ./continuity-recovery.json
+
+spore continuity recovery-verify -bundle ./continuity-recovery.json
+spore continuity recovery-restore \
+  -bundle ./continuity-recovery.json \
+  -dir ./clean-recovery-dir
+```
+
+The bundle is deterministic by artifact content and includes per-file SHA-256
+hashes. Verification is offline, strict, and checks cross-artifact vault/policy,
+quorum, watch/notice, anchor, and receipt bindings. Restore writes fixed safe
+filenames with mode `0600`, refuses symlinked parent directories, requires a new
+or empty destination, and never overwrites an existing artifact. This proves a
+local clean-directory restore; an independent second-machine drill with
+protected key transfer is still a production evidence gate.

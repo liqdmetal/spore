@@ -13,7 +13,11 @@ import (
 // signed/committed protocol objects; silently accepting ambiguous JSON creates
 // a gap between what an operator inspected and what a verifier consumed.
 func decodeStrict(raw []byte, dst any) error {
-	if len(raw) > MaxArtifactBytes {
+	return decodeStrictLimit(raw, dst, MaxArtifactBytes)
+}
+
+func decodeStrictLimit(raw []byte, dst any, maxBytes int) error {
+	if maxBytes <= 0 || len(raw) > maxBytes {
 		return ErrArtifactTooLarge
 	}
 	if err := validateJSONStructure(raw); err != nil {

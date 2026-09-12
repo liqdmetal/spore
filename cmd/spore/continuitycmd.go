@@ -45,6 +45,12 @@ func continuitycmd(args []string) {
 		continuityWatch(args[1:])
 	case "watch-init":
 		continuityWatchInit(args[1:])
+	case "recovery-create":
+		continuityRecoveryCreate(args[1:])
+	case "recovery-verify":
+		continuityRecoveryVerify(args[1:])
+	case "recovery-restore":
+		continuityRecoveryRestore(args[1:])
 	case "quorum-create":
 		continuityQuorumCreate(args[1:])
 	case "attest":
@@ -66,7 +72,7 @@ func continuitycmd(args []string) {
 	case "-h", "--help":
 		continuityUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|watch-init|watch|quorum-create|attest|quorum|verify-quorum|release-quorum|anchor-create|anchor-verify|anchor-post|anchor-check)\n", args[0])
+		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|watch-init|watch|recovery-create|recovery-verify|recovery-restore|quorum-create|attest|quorum|verify-quorum|release-quorum|anchor-create|anchor-verify|anchor-post|anchor-check)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -83,11 +89,16 @@ func continuityUsage() {
   spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
   spore continuity watch-init -vault VAULT -observer-key OBSERVER_KEY -out WATCH_STATE
-  spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -outbox OUTBOX [-webhook URL] [-at UNIX] [-flush]
+  spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush]
+  spore continuity recovery-create -vault VAULT [-policy POLICY] [-quorum QUORUM] [-anchor ANCHOR] [-receipt RECEIPT] [-watch WATCH_STATE] [-notice NOTICE] -out BUNDLE
+  spore continuity recovery-verify -bundle BUNDLE
+  spore continuity recovery-restore -bundle BUNDLE -dir EMPTY_DIR
 
 Watch is metadata-only. It signs one release-ready observer notice per exact
 check-in epoch and queues a generic wake-up through the durable outbox. Provider
 failure remains queued for retry; delivery is at-least-once, not exactly-once.
+Recovery bundles contain encrypted/signed artifacts only; private keys and
+released plaintext must be transferred separately by the operator.
   spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY
   spore continuity attest -vault VAULT -policy POLICY -observer-key KEY -out ATTESTATION [-at UNIX]
   spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM
@@ -244,8 +255,15 @@ func readContinuityVault(path string) *continuity.Vault {
 }
 
 func readContinuityArtifact(path string) ([]byte, error) {
+	return readContinuityArtifactLimit(path, continuity.MaxArtifactBytes)
+}
+
+func readContinuityArtifactLimit(path string, maxBytes int64) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("continuity: artifact path is required")
+	}
+	if maxBytes <= 0 {
+		return nil, continuity.ErrArtifactTooLarge
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -254,7 +272,7 @@ func readContinuityArtifact(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("continuity: artifact path must be a regular file")
 	}
-	if info.Size() > continuity.MaxArtifactBytes {
+	if info.Size() > maxBytes {
 		return nil, continuity.ErrArtifactTooLarge
 	}
 	f, err := os.Open(path)
@@ -262,7 +280,7 @@ func readContinuityArtifact(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, continuity.MaxArtifactBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
