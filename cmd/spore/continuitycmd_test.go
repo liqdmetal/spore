@@ -65,6 +65,35 @@ func TestContinuityFileRoundTripAndAtomicModes(t *testing.T) {
 	}
 }
 
+func TestAtomicPrivateWriteRejectsUnsafePaths(t *testing.T) {
+	dir := t.TempDir()
+	fileParent := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(fileParent, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBytes(filepath.Join(fileParent, "out"), []byte("secret")); err == nil {
+		t.Fatal("accepted file parent")
+	}
+	linkParent := filepath.Join(dir, "linked-parent")
+	if err := os.Symlink(dir, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := writePrivateBytes(filepath.Join(linkParent, "out"), []byte("secret")); err == nil {
+		t.Fatal("accepted symlink parent")
+	}
+	linkFile := filepath.Join(dir, "linked-file")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, linkFile); err != nil {
+		t.Skipf("file symlinks unavailable: %v", err)
+	}
+	if err := writePrivateBytes(linkFile, []byte("secret")); err == nil {
+		t.Fatal("accepted symlink destination")
+	}
+}
+
 func TestParseRecipientPubsRejectsMalformedAndAcceptsMultiple(t *testing.T) {
 	one := strings.Repeat("ab", 32)
 	pubs, err := parseRecipientPubs(one + "," + strings.Repeat("cd", 32))

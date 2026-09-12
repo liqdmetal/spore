@@ -271,14 +271,48 @@ func writePrivateBytes(path string, body []byte) error {
 	return writeAtomicPrivate(path, body)
 }
 
+func ensurePrivateParent(dir string) error {
+	if dir == "" {
+		dir = "."
+	}
+	clean := filepath.Clean(dir)
+	if err := os.MkdirAll(clean, 0700); err != nil {
+		return err
+	}
+	current := clean
+	for {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("continuity: output parent must contain only real directories")
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return nil
+}
+
 func writeAtomicPrivate(path string, body []byte) error {
 	if path == "" {
 		return errors.New("continuity: output path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil && filepath.Dir(path) != "." {
+	dir := filepath.Dir(path)
+	if err := ensurePrivateParent(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".spore-continuity-*")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("continuity: output path must be a regular non-symlink file")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".spore-continuity-*")
 	if err != nil {
 		return err
 	}
