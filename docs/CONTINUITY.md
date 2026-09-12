@@ -65,18 +65,23 @@ cannot move the deadline forward.
   a v1 convenience boundary; a future v2 can use an independently provisioned
   signing key and threshold release observers.
 
-## Not yet included
+## Explicit v1 boundary
 
-This slice intentionally does not claim:
+The observer, N-of-M quorum, and optional chain-anchor features below are
+implemented, but they remain explicit local workflows. This v1 intentionally
+does not claim:
 
-- an always-on heartbeat observer;
-- threshold/N-of-M recipient release;
-- chain-anchored commitments or deadlines;
-- automatic notifications;
-- automatic key rotation, credential revocation, or wallet actions;
+- an always-on observer scheduler or hosted monitoring service;
+- automatic notifications or recovery orchestration;
+- automatic key rotation, credential revocation, wallet spending, or other
+  irreversible actions;
+- chain finality beyond the chain's own confirmation/reorg behavior;
 - legal proof of death, incapacity, or succession.
 
-Those are separate protocol and operational features.
+A continuity artifact proves only the signed state and deadline it contains. It
+does not prove a person's death or incapacity. Production operation still
+requires independently protected vault copies, observer availability, and a
+human recovery procedure.
 
 ## Observer slice
 

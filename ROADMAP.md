@@ -37,11 +37,18 @@ remaining; it does not re-state live status.*
   the exact check-in epoch; quorum-gated recipient release remains explicit and
   non-custodial.
 
-### Continuity vault — next protocol slices
+### Continuity vault — shipped protocol slices
 - **Continuity chain anchor v1:** optional DERO commitment to the exact vault,
   quorum policy, check-in sequence, and deadline. Posting is explicit and
   re-verifies state immediately before the wallet call; no automatic action.
+- **Strict artifact validation:** versioned continuity JSON rejects unknown and
+  duplicate fields, trailing data, malformed bindings, stale epochs, and null
+  identifiers.
+
+### Continuity vault — remaining production slices
 - Notification and recovery UX without handing plaintext or keys to a service.
+- Independent recovery drill across machines with protected vault copies.
+- Anchor posting receipt and chain readback verification.
 - No automatic wallet spending or irreversible account actions.
 
 ### Carriers (all carry the same opaque 74-byte pointer, no downgrade)
@@ -73,6 +80,20 @@ remaining; it does not re-state live status.*
 - `status` / `doctor` health + preflight.
 
 ## Remaining (honest, rough priority order)
+
+### Production evidence gates before broader feature breadth
+
+| # | Gate | Why it is required |
+|---|---|---|
+| P0 | Independent continuity protocol review | Local tests do not replace external cryptographic review. |
+| P0 | Bounded parsers and filesystem hardening | Malicious or oversized local artifacts must fail closed without resource exhaustion or unsafe writes. |
+| P0 | Windows CI and release provenance | Continuity has platform-specific replacement code; Linux-only CI is insufficient. |
+| P0 | Two-party live E2E and adversarial soak | Mainnet/self-message/local-Anvil evidence is not equivalent to independent-recipient production proof. |
+| P1 | Recovery drill and protected vault-copy runbook | A continuity product must survive operator/device loss, not just decrypt in one test process. |
+| P1 | Anchor receipt and chain readback | Wallet acceptance alone does not prove the intended opaque anchor was included. |
+| P1 | Watch/notification UX | Make explicit observer operation usable without adding custody or automatic spending. |
+
+### Product roadmap after the evidence gates
 
 | # | Item | Why it's gated / what it needs |
 |---|---|---|
