@@ -187,14 +187,30 @@ spore continuity anchor-post \
   -policy ./quorum-policy.json \
   -to DERO_DESTINATION \
   -rpc http://127.0.0.1:20209/json_rpc \
-  -ringsize 16
+  -ringsize 16 \
+  -receipt ./continuity-anchor-receipt.json
 ```
 
 `anchor-post` is the only command in this slice that contacts a wallet. It
 re-verifies the anchor against the current vault and policy immediately before
 posting, uses minimum postage, and never runs automatically during observation,
 quorum assembly, or release. It does not move the continuity payload or release
-funds.
+funds. The optional receipt records the exact txid, anchor identifiers, ring
+size, posting time, and digest of the canonical wire payload; it contains no
+plaintext or private key.
+
+To verify wallet-history readback of the exact payload:
+
+```sh
+spore continuity anchor-check \
+  -receipt ./continuity-anchor-receipt.json \
+  -anchor ./continuity-anchor.json \
+  -rpc http://127.0.0.1:20209/json_rpc
+```
+
+`anchor-check` proves that the wallet history returned the exact continuity
+payload for that txid. It does not prove confirmation depth, finality, or
+absence of future chain reorgs.
 
 The chain remains an optional timestamp/commitment carrier, not a liveness
 oracle and not proof of death or incapacity.

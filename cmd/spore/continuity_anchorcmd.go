@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/continuity"
 	"github.com/liqdmetal/spore/internal/dero"
@@ -64,6 +66,7 @@ func continuityAnchorPost(args []string) {
 	ringsize := fs.Uint64("ringsize", dero.DefaultSporeRingSize, "DERO Spore ring size: 8 or 16 (default 16)")
 	rpc := fs.String("rpc", "http://127.0.0.1:20209/json_rpc", "wallet RPC /json_rpc endpoint")
 	rpcUser := fs.String("rpc-user", "", "wallet RPC basic-auth username (password is prompted securely)")
+	receiptPath := fs.String("receipt", "", "optional private receipt JSON output path")
 	_ = fs.Parse(args)
 	if *anchorPath == "" || *vaultPath == "" || *policyPath == "" || *to == "" {
 		check(errors.New("continuity anchor-post requires -anchor -vault -policy and -to"))
@@ -75,6 +78,8 @@ func continuityAnchorPost(args []string) {
 	check(ca.VerifyAgainst(v, policy))
 	wire, err := ca.ToDEROAnchor()
 	check(err)
+	packed, err := dero.PackArguments(wire.ToArguments())
+	check(err)
 	password := ""
 	if *rpcUser != "" {
 		password, err = promptRPCPassword()
@@ -82,10 +87,44 @@ func continuityAnchorPost(args []string) {
 	}
 	txid, err := dero.NewClient(*rpc, *rpcUser, password).PostAnchor(context.Background(), *to, wire, *ringsize)
 	check(err)
+	if *receiptPath != "" {
+		receipt, err := continuity.NewAnchorReceipt(ca, txid, *to, *ringsize, time.Now().Unix(), continuity.DigestAnchorWire(packed))
+		check(err)
+		raw, err := json.MarshalIndent(receipt, "", "  ")
+		check(err)
+		check(writeAtomicPrivate(*receiptPath, append(raw, '\n')))
+		fmt.Printf("continuity anchor receipt written: %s\n", *receiptPath)
+	}
 	fmt.Printf("continuity chain anchor posted: txid %s\n", txid)
 	fmt.Printf("destination: %s\n", *to)
 	fmt.Printf("ringsize: %d\n", *ringsize)
 	fmt.Println("minimum postage was used; no payload plaintext or recipient key was sent")
+}
+
+func continuityAnchorCheck(args []string) {
+	fs := flag.NewFlagSet("continuity anchor-check", flag.ExitOnError)
+	receiptPath := fs.String("receipt", "", "anchor receipt JSON path")
+	anchorPath := fs.String("anchor", "", "chain anchor JSON path")
+	rpc := fs.String("rpc", "http://127.0.0.1:20209/json_rpc", "wallet RPC /json_rpc endpoint")
+	rpcUser := fs.String("rpc-user", "", "wallet RPC basic-auth username (password is prompted securely)")
+	_ = fs.Parse(args)
+	if *receiptPath == "" || *anchorPath == "" {
+		check(errors.New("continuity anchor-check requires -receipt and -anchor"))
+	}
+	receiptRaw, err := readContinuityArtifact(*receiptPath)
+	check(err)
+	receipt, err := continuity.ParseAnchorReceipt(receiptRaw)
+	check(err)
+	anchor := readChainAnchor(*anchorPath)
+	password := ""
+	if *rpcUser != "" {
+		password, err = promptRPCPassword()
+		check(err)
+	}
+	client := dero.NewClient(*rpc, *rpcUser, password)
+	check(continuity.VerifyAnchorPayload(context.Background(), client, receipt, anchor))
+	fmt.Printf("VALID continuity anchor payload read back for txid %s\n", receipt.TXID)
+	fmt.Println("This verifies wallet history payload equality; it does not claim chain finality.")
 }
 
 func readChainAnchor(path string) *continuity.ChainAnchor {

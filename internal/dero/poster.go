@@ -281,6 +281,35 @@ func (c *Client) GetTransfers(ctx context.Context, params GetTransfersParams) ([
 	return result.Entries, nil
 }
 
+// GetTransferPayloads returns decoded payload bytes for every wallet-history
+// entry carrying the requested transaction ID. Both incoming and outgoing
+// buckets are queried because a posting wallet may index its own transfer as
+// outgoing while the destination wallet indexes it as incoming.
+func (c *Client) GetTransferPayloads(ctx context.Context, txid string) ([][]byte, error) {
+	if strings.TrimSpace(txid) == "" {
+		return nil, errors.New("dero: transaction id is required")
+	}
+	entries, err := c.GetTransfers(ctx, GetTransfersParams{In: true, Out: true, Coinbase: true})
+	if err != nil {
+		return nil, err
+	}
+	payloads := make([][]byte, 0, 1)
+	for _, entry := range entries {
+		if entry.TXID != txid {
+			continue
+		}
+		payload, err := EntryPayload(entry)
+		if err != nil {
+			return nil, fmt.Errorf("dero: transaction %s has undecodable payload: %w", txid, err)
+		}
+		payloads = append(payloads, append([]byte(nil), payload...))
+	}
+	if len(payloads) == 0 {
+		return nil, fmt.Errorf("dero: transaction %s was not found in wallet history", txid)
+	}
+	return payloads, nil
+}
+
 // GetAddress returns the wallet's DERO address.
 func (c *Client) GetAddress(ctx context.Context) (string, error) {
 	var out struct {

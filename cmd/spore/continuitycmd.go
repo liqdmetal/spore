@@ -57,6 +57,8 @@ func continuitycmd(args []string) {
 		continuityAnchorVerify(args[1:])
 	case "anchor-post":
 		continuityAnchorPost(args[1:])
+	case "anchor-check":
+		continuityAnchorCheck(args[1:])
 	case "-h", "--help":
 		continuityUsage()
 	default:
@@ -83,7 +85,8 @@ func continuityUsage() {
   spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
   spore continuity anchor-create -vault VAULT -policy POLICY -out ANCHOR
   spore continuity anchor-verify -anchor ANCHOR -vault VAULT -policy POLICY
-  spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-user USER] [-ringsize 8|16]
+  spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-user USER] [-ringsize 8|16] [-receipt RECEIPT]
+  spore continuity anchor-check -receipt RECEIPT -anchor ANCHOR [-rpc URL] [-rpc-user USER]
     (with -rpc-user, the wallet password is read from a masked terminal prompt)
 
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
