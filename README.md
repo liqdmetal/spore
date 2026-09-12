@@ -142,7 +142,7 @@ spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -
 # Optional chain commitment (opaque IDs only; posting is explicit):
 spore continuity anchor-create -vault VAULT -policy POLICY -out ANCHOR
 spore continuity anchor-verify -anchor ANCHOR -vault VAULT -policy POLICY
-spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-login u:p] [-ringsize 8|16]
+spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-user USER] [-ringsize 8|16]  # password is prompted securely
 ```
 
 Plaintext is **never** an argv flag (shell history, `ps`, and crash reports

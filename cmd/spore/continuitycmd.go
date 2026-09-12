@@ -82,7 +82,8 @@ func continuityUsage() {
   spore continuity release-quorum -vault VAULT -quorum QUORUM -recipient-key KEY -out PAYLOAD [-at UNIX]
   spore continuity anchor-create -vault VAULT -policy POLICY -out ANCHOR
   spore continuity anchor-verify -anchor ANCHOR -vault VAULT -policy POLICY
-  spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-login u:p] [-ringsize 8|16]
+  spore continuity anchor-post -anchor ANCHOR -vault VAULT -policy POLICY -to DERO_ADDR [-rpc URL] [-rpc-user USER] [-ringsize 8|16]
+    (with -rpc-user, the wallet password is read from a masked terminal prompt)
 
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
 no plaintext or private key is written into it. Check-in must occur strictly

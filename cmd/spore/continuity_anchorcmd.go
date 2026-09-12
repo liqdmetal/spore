@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/liqdmetal/spore/internal/continuity"
 	"github.com/liqdmetal/spore/internal/dero"
+	"golang.org/x/term"
 )
 
 // continuityAnchorCreate makes an opaque chain commitment locally. It does not
@@ -60,7 +62,8 @@ func continuityAnchorPost(args []string) {
 	policyPath := fs.String("policy", "", "quorum policy JSON path")
 	to := fs.String("to", "", "DERO destination address for the minimum-postage commitment")
 	ringsize := fs.Uint64("ringsize", dero.DefaultSporeRingSize, "DERO Spore ring size: 8 or 16 (default 16)")
-	addRPCFlags(fs)
+	rpc := fs.String("rpc", "http://127.0.0.1:20209/json_rpc", "wallet RPC /json_rpc endpoint")
+	rpcUser := fs.String("rpc-user", "", "wallet RPC basic-auth username (password is prompted securely)")
 	_ = fs.Parse(args)
 	if *anchorPath == "" || *vaultPath == "" || *policyPath == "" || *to == "" {
 		check(errors.New("continuity anchor-post requires -anchor -vault -policy and -to"))
@@ -72,7 +75,12 @@ func continuityAnchorPost(args []string) {
 	check(ca.VerifyAgainst(v, policy))
 	wire, err := ca.ToDEROAnchor()
 	check(err)
-	txid, err := makeClient(fs).PostAnchor(context.Background(), *to, wire, *ringsize)
+	password := ""
+	if *rpcUser != "" {
+		password, err = promptRPCPassword()
+		check(err)
+	}
+	txid, err := dero.NewClient(*rpc, *rpcUser, password).PostAnchor(context.Background(), *to, wire, *ringsize)
 	check(err)
 	fmt.Printf("continuity chain anchor posted: txid %s\n", txid)
 	fmt.Printf("destination: %s\n", *to)
@@ -86,4 +94,17 @@ func readChainAnchor(path string) *continuity.ChainAnchor {
 	ca, err := continuity.ParseChainAnchor(raw)
 	check(err)
 	return ca
+}
+
+func promptRPCPassword() (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errors.New("continuity anchor-post: wallet password requires an interactive terminal; use a local wallet without RPC auth")
+	}
+	fmt.Fprint(os.Stderr, "Wallet RPC password: ")
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(password), "\r\n"), nil
 }
