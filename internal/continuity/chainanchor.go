@@ -117,7 +117,7 @@ func (a *ChainAnchor) ToDEROAnchor() (*anchor.Anchor, error) {
 // commitment. Only KindContinuity is accepted; message anchors cannot be
 // repurposed as continuity anchors.
 func ParseDEROChainAnchor(w *anchor.Anchor) (*ChainAnchor, error) {
-	if w == nil || w.Version != anchor.Version || w.Kind != anchor.KindContinuity || w.Flags != 0 || w.BurnDeadline > math.MaxInt64 {
+	if w == nil || w.Version != anchor.Version || w.Kind != anchor.KindContinuity || w.Flags != 0 || w.BurnDeadline == 0 || w.BurnDeadline > math.MaxInt64 {
 		return nil, ErrInvalidChainAnchor
 	}
 	a := &ChainAnchor{

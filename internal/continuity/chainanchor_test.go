@@ -139,6 +139,13 @@ func TestParseChainAnchorRejectsUnknownAndTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestParseDEROChainAnchorRejectsZeroDeadline(t *testing.T) {
+	wire := &anchor.Anchor{Version: anchor.Version, Kind: anchor.KindContinuity}
+	if _, err := ParseDEROChainAnchor(wire); !errors.Is(err, ErrInvalidChainAnchor) {
+		t.Fatalf("accepted zero deadline: %v", err)
+	}
+}
+
 func TestChainAnchorRejectsZeroAndWrongType(t *testing.T) {
 	ca := ChainAnchor{
 		Type: chainAnchorType, Version: chainAnchorVersion,

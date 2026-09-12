@@ -177,8 +177,8 @@ func TestExpired(t *testing.T) {
 	if a.Expired(time.Unix(deadline-1, 0)) {
 		t.Fatal("expected not expired before the deadline")
 	}
-	a.BurnDeadline = uint64(time.Now().Add(time.Hour).Unix())
-	if a.Expired(time.Now()) {
-		t.Fatal("expected not expired")
+	a.BurnDeadline = uint64(deadline + 3600)
+	if a.Expired(time.Unix(deadline, 0)) {
+		t.Fatal("expected not expired before future deadline")
 	}
 }
