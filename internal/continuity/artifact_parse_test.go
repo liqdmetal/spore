@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestDecodeStrictRejectsOversizedAndDeepJSON(t *testing.T) {
+	if err := decodeStrict(make([]byte, MaxArtifactBytes+1), new(any)); !errors.Is(err, ErrArtifactTooLarge) {
+		t.Fatalf("oversized artifact error = %v", err)
+	}
+	deep := []byte("0")
+	for i := 0; i < MaxJSONDepth+2; i++ {
+		deep = append(append([]byte{'['}, deep...), ']')
+	}
+	if err := decodeStrict(deep, new(any)); !errors.Is(err, ErrArtifactTooLarge) {
+		t.Fatalf("deep artifact error = %v", err)
+	}
+}
+
 func TestContinuityArtifactParsersRejectUnknownAndTrailingJSON(t *testing.T) {
 	now := int64(1_800_000_000)
 	v, _, _ := testVault(t, now)

@@ -13,6 +13,9 @@ import (
 // signed/committed protocol objects; silently accepting ambiguous JSON creates
 // a gap between what an operator inspected and what a verifier consumed.
 func decodeStrict(raw []byte, dst any) error {
+	if len(raw) > MaxArtifactBytes {
+		return ErrArtifactTooLarge
+	}
 	if err := validateJSONStructure(raw); err != nil {
 		return err
 	}
@@ -51,6 +54,13 @@ func validateJSONStructure(raw []byte) error {
 }
 
 func walkJSONToken(dec *json.Decoder, tok json.Token) error {
+	return walkJSONTokenDepth(dec, tok, 1)
+}
+
+func walkJSONTokenDepth(dec *json.Decoder, tok json.Token, depth int) error {
+	if depth > MaxJSONDepth {
+		return ErrArtifactTooLarge
+	}
 	delim, ok := tok.(json.Delim)
 	if !ok {
 		return nil
@@ -75,7 +85,7 @@ func walkJSONToken(dec *json.Decoder, tok json.Token) error {
 			if err != nil {
 				return err
 			}
-			if err := walkJSONToken(dec, value); err != nil {
+			if err := walkJSONTokenDepth(dec, value, depth+1); err != nil {
 				return err
 			}
 		}
@@ -92,7 +102,7 @@ func walkJSONToken(dec *json.Decoder, tok json.Token) error {
 			if err != nil {
 				return err
 			}
-			if err := walkJSONToken(dec, value); err != nil {
+			if err := walkJSONTokenDepth(dec, value, depth+1); err != nil {
 				return err
 			}
 		}

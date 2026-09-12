@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,11 +223,40 @@ func parseRecipientPubs(raw string) ([][]byte, error) {
 }
 
 func readContinuityVault(path string) *continuity.Vault {
-	raw, err := os.ReadFile(path)
+	raw, err := readContinuityArtifact(path)
 	check(err)
 	v, err := continuity.Parse(raw)
 	check(err)
 	return v
+}
+
+func readContinuityArtifact(path string) ([]byte, error) {
+	if path == "" {
+		return nil, errors.New("continuity: artifact path is required")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("continuity: artifact path must be a regular file")
+	}
+	if info.Size() > continuity.MaxArtifactBytes {
+		return nil, continuity.ErrArtifactTooLarge
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, continuity.MaxArtifactBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > continuity.MaxArtifactBytes {
+		return nil, continuity.ErrArtifactTooLarge
+	}
+	return raw, nil
 }
 
 func writeContinuityVault(path string, v *continuity.Vault) error {

@@ -89,7 +89,7 @@ func continuityAnchorPost(args []string) {
 }
 
 func readChainAnchor(path string) *continuity.ChainAnchor {
-	raw, err := os.ReadFile(path)
+	raw, err := readContinuityArtifact(path)
 	check(err)
 	ca, err := continuity.ParseChainAnchor(raw)
 	check(err)

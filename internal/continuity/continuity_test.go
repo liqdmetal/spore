@@ -168,6 +168,25 @@ func TestPrivateInputsAreNotMutated(t *testing.T) {
 	}
 }
 
+func TestArtifactLimitsFailClosed(t *testing.T) {
+	owner := testKey(t)
+	recipient := testKey(t)
+	tooLarge := make([]byte, MaxPayloadBytes+1)
+	if _, err := Create(CreateOptions{OwnerPriv: owner.Priv, Recipients: [][]byte{recipient.Pub}, Payload: tooLarge, CreatedAt: 1_800_000_000, Interval: time.Second, Grace: 0}); err == nil {
+		t.Fatal("accepted oversized payload")
+	}
+	v, _, _ := testVault(t, 1_800_000_000)
+	v.Recipients = append(v.Recipients, make([]RecipientWrap, MaxRecipients)...)
+	if err := v.Verify(); err == nil {
+		t.Fatal("accepted oversized recipient set")
+	}
+	v, _, _ = testVault(t, 1_800_000_000)
+	v.Checkins = append(v.Checkins, make([]CheckInRecord, MaxCheckIns)...)
+	if err := v.Verify(); err == nil {
+		t.Fatal("accepted oversized check-in chain")
+	}
+}
+
 func TestOverflowAndInvalidPolicyFailClosed(t *testing.T) {
 	owner := testKey(t)
 	recipient := testKey(t)

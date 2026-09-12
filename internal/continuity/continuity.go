@@ -97,6 +97,21 @@ type Status struct {
 
 const vaultVersion uint8 = 1
 
+// Resource limits keep untrusted continuity artifacts from turning verification
+// into an unbounded allocation or signature-verification workload. They are
+// deliberately generous for human-sized recovery instructions, but finite.
+const (
+	MaxArtifactBytes = 32 << 20
+	MaxPayloadBytes  = 16 << 20
+	MaxRecipients    = 64
+	MaxCheckIns      = 10_000
+	MaxJSONDepth     = 64
+)
+
+const aeadOverhead = 16
+
+var ErrArtifactTooLarge = errors.New("continuity: artifact exceeds size limit")
+
 // Create encrypts payload once and wraps its random payload key separately for
 // each designated recipient. The owner identity is used only to authenticate
 // the check-in chain; it is never used as a static encryption key.
@@ -104,11 +119,11 @@ func Create(opts CreateOptions) (*Vault, error) {
 	if len(opts.OwnerPriv) != 32 {
 		return nil, fmt.Errorf("%w: owner private key must be 32 bytes", ErrInvalidVault)
 	}
-	if len(opts.Payload) == 0 {
-		return nil, fmt.Errorf("%w: payload must not be empty", ErrInvalidVault)
+	if len(opts.Payload) == 0 || len(opts.Payload) > MaxPayloadBytes {
+		return nil, ErrInvalidVault
 	}
-	if len(opts.Recipients) == 0 {
-		return nil, fmt.Errorf("%w: at least one recipient is required", ErrInvalidVault)
+	if len(opts.Recipients) == 0 || len(opts.Recipients) > MaxRecipients {
+		return nil, ErrInvalidVault
 	}
 	if opts.CreatedAt <= 0 {
 		return nil, fmt.Errorf("%w: created-at must be positive", ErrInvalidVault)
@@ -349,7 +364,7 @@ func Release(v *Vault, recipientPriv []byte, now int64) ([]byte, error) {
 // requiring any private key. It detects tampered recipient envelopes, body,
 // policy, identity, deadlines, and signatures.
 func (v *Vault) Verify() error {
-	if v == nil || v.Version != vaultVersion || v.VaultID == "" || v.PolicyID == "" || len(v.Recipients) == 0 || len(v.Checkins) == 0 {
+	if v == nil || v.Version != vaultVersion || v.VaultID == "" || v.PolicyID == "" || len(v.Recipients) == 0 || len(v.Recipients) > MaxRecipients || len(v.Checkins) == 0 || len(v.Checkins) > MaxCheckIns {
 		return ErrInvalidVault
 	}
 	ownerPub, err := decodeFixed(v.OwnerPub, 32)
@@ -365,7 +380,7 @@ func (v *Vault) Verify() error {
 		return err
 	}
 	payloadCiphertext, err := hex.DecodeString(v.PayloadCiphertext)
-	if err != nil || len(payloadCiphertext) < sporecrypto.KeySize/2 {
+	if err != nil || len(payloadCiphertext) < aeadOverhead || len(payloadCiphertext) > MaxPayloadBytes+aeadOverhead {
 		return ErrInvalidVault
 	}
 	if v.CreatedAt <= 0 || v.IntervalSeconds <= 0 || v.GraceSeconds < 0 {
@@ -383,7 +398,7 @@ func (v *Vault) Verify() error {
 			return err
 		}
 		ct, err := hex.DecodeString(r.Ciphertext)
-		if err != nil || len(ct) < sporecrypto.KeySize/2 {
+		if err != nil || len(ct) < aeadOverhead+sporecrypto.KeySize || len(ct) > sporecrypto.KeySize+aeadOverhead {
 			return ErrInvalidVault
 		}
 		pubs = append(pubs, r.RecipientPub)

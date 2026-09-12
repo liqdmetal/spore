@@ -62,7 +62,7 @@ func continuityVerifyNotice(args []string) {
 	if *noticePath == "" {
 		check(errors.New("continuity verify-notice requires -notice"))
 	}
-	raw, err := os.ReadFile(*noticePath)
+	raw, err := readContinuityArtifact(*noticePath)
 	check(err)
 	n, err := continuity.ParseNotice(raw)
 	check(err)

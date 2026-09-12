@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func continuityQuorum(args []string) {
 	}
 	atts := make([]continuity.QuorumAttestation, 0, len(paths))
 	for _, path := range paths {
-		raw, err := os.ReadFile(path)
+		raw, err := readContinuityArtifact(path)
 		check(err)
 		att, err := continuity.ParseQuorumAttestation(raw)
 		check(err)
@@ -162,7 +161,7 @@ func splitNonEmpty(raw string) []string {
 }
 
 func readQuorumPolicy(path string) *continuity.QuorumPolicy {
-	raw, err := os.ReadFile(path)
+	raw, err := readContinuityArtifact(path)
 	check(err)
 	policy, err := continuity.ParseQuorumPolicy(raw)
 	check(err)
@@ -170,7 +169,7 @@ func readQuorumPolicy(path string) *continuity.QuorumPolicy {
 }
 
 func readQuorumRelease(path string) *continuity.QuorumRelease {
-	raw, err := os.ReadFile(path)
+	raw, err := readContinuityArtifact(path)
 	check(err)
 	q, err := continuity.ParseQuorumRelease(raw)
 	check(err)
