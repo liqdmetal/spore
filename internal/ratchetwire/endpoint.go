@@ -1,23 +1,132 @@
 package ratchetwire
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/ratchet"
+	"github.com/liqdmetal/spore/internal/secure"
 )
+
+// hexDecodeString decodes a hex identity/public-key string to bytes.
+func hexDecodeString(s string) ([]byte, error) {
+	if s == "" {
+		return nil, nil
+	}
+	return hex.DecodeString(s)
+}
 
 // Endpoint is the endpoint-local E2 adapter. It never writes session state to
 // a carrier or body store; callers persist ExportState through a protected
 // local keystore.
 type Endpoint struct {
-	Sessions *SessionTable
-	Store    BodyStore
+	Sessions   *SessionTable
+	Store      BodyStore
+	secureWire *SecureWire // nil = legacy mode (no envelope v2 wrapping)
+}
+
+// SecureWire binds internal/secure envelope v2 into the ratchet wire so every
+// on-chain pointer carries a SIGNED, E2E-encrypted body. On DERO the inner
+// codec delegates to the native tx-point-to-point secrecy; on EVM/Solana the
+// same envelope kills plaintext injection because the strict receiver refuses
+// unsigned payloads outright.
+type SecureWire struct {
+	// Identity priv: 32-byte X25519 scalar. Also derives the sender's Ed25519
+	// signing key deterministically (SENDER_AUTH.md §2).
+	IdentityPriv []byte
+	// Recipient pub: the target's 32-byte X25519 public key (for sending).
+	RecipientPub [32]byte
+	// Pinned sig: the sender's Ed25519 signature prefix we expect on incoming
+	// envelopes. Zero-valued = accept any valid v2 signature. Non-zero = contact-pinning
+	// mode (T1 in ROADMAP-PRODUCTION.md): reject everything from an unknown signer.
+	PinnedSig [32]byte
+}
+
+// NewSecureWire constructs a SecureWire from hex strings (CLI-friendly).
+func NewSecureWire(identityHex, recipientPubHex string, pinnedSigHex *[32]byte) (*SecureWire, error) {
+	id, err := hexDecodeString(identityHex)
+	if err != nil {
+		return nil, fmt.Errorf("securewire: invalid identity hex: %w", err)
+	}
+	if len(id) == 0 {
+		return nil, nil // nil means "not configured"
+	}
+	sw := &SecureWire{IdentityPriv: id}
+	if recipientPubHex != "" {
+		recipient, err := hexDecodeString(recipientPubHex)
+		if err != nil {
+			return nil, fmt.Errorf("securewire: invalid recipient hex: %w", err)
+		}
+		if len(recipient) == 0 {
+			return nil, nil
+		}
+		copy(sw.RecipientPub[:], recipient)
+	}
+	if pinnedSigHex != nil && len(*pinnedSigHex) == 32 {
+		copy(sw.PinnedSig[:], (*pinnedSigHex)[:])
+	}
+	return sw, nil
+}
+
+// isPinned reports whether this SecureWire has a contact-pinning anchor set —
+// non-zero means reject any sender whose sig pub does not match.
+func (sw *SecureWire) isPinned() bool {
+	var zero [32]byte
+	return sw.PinnedSig != zero
+}
+
+// encodePayload wraps plaintext in a kind-0xE1 envelope v2, then returns the
+// wire-ready ciphertext. This is called BEFORE ratchet.DoubleRatchet.Encrypt
+// during send so the frame body IS the envelope ciphertext.
+func (sw *SecureWire) encodePayload(plaintext []byte) ([]byte, error) {
+	if len(sw.IdentityPriv) == 0 || len(sw.RecipientPub[:]) == 0 {
+		return nil, fmt.Errorf("securewire: identity and recipient keys required")
+	}
+	return secure.Encrypt(sw.IdentityPriv, sw.RecipientPub[:], plaintext)
+}
+
+// decodePayload unwraps an envelope v2, verifying the sender signature BEFORE
+// returning the inner plaintext. Returns the decrypted text.
+// On contact-pin failure it returns a sentinel ErrPinMismatch so callers can
+// distinguish impersonation from transport noise without changing Endpoint.
+func (sw *SecureWire) decodePayload(ratchetPlain []byte) ([]byte, error) {
+	if len(sw.IdentityPriv) == 0 {
+		return nil, fmt.Errorf("securewire: identity key required for decode")
+	}
+	pl, senderPub, err := secure.Open(sw.IdentityPriv, ratchetPlain)
+	if err != nil {
+		return nil, fmt.Errorf("securewire: decode: %w", err)
+	}
+	// Contact pin enforcement: when PinnedSig is non-zero, reject everything
+	// whose sender SigPub does not match — zero-allowlist kills replay from
+	// an impersonator or mailbox compromise at the wire layer.
+	var zero [32]byte
+	if sw.isPinned() && [32]byte(senderPub) != zero && [32]byte(senderPub) != sw.PinnedSig {
+		return nil, &ErrPinMismatch{Expected: sw.PinnedSig, Got: senderPub}
+	}
+	return pl, nil
+}
+
+// ErrPinMismatch is returned when SecureWire rejects a message because the
+// sender's Ed25519 SigPub does not match the pinned anchor (contact pin).
+type ErrPinMismatch struct {
+	Expected [32]byte // the pinned sender SigPub
+	Got      []byte   // the actual sender SigPub from the envelope
+}
+
+func (e *ErrPinMismatch) Error() string {
+	return fmt.Sprintf("securewire: pin mismatch: expected=%x got=%x", e.Expected, e.Got)
 }
 
 func NewEndpoint(st BodyStore) *Endpoint {
 	return &Endpoint{Sessions: NewSessionTable(), Store: st}
+}
+
+// NewEndpointWithSecureWire creates an Endpoint with envelope v2 wrapping.
+func NewEndpointWithSecureWire(st BodyStore, sw *SecureWire) *Endpoint {
+	return &Endpoint{Sessions: NewSessionTable(), Store: st, secureWire: sw}
 }
 
 func exportSession(s *ratchet.Session) ([]byte, error) {
@@ -64,7 +173,18 @@ func (e *Endpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKBundle, 
 	if err != nil {
 		return Pointer{}, nil, [8]byte{}, err
 	}
-	msg, err := s.Encrypt(plaintext)
+
+	// If SecureWire is configured, wrap plaintext in envelope v2 BEFORE ratchet encryption
+	wirePlain := plaintext
+	if e.secureWire != nil {
+		var innerErr error
+		wirePlain, innerErr = e.secureWire.encodePayload(plaintext)
+		if innerErr != nil {
+			return Pointer{}, nil, [8]byte{}, fmt.Errorf("securewire encode: %w", innerErr)
+		}
+	}
+
+	msg, err := s.Encrypt(wirePlain)
 	if err != nil {
 		return Pointer{}, nil, [8]byte{}, err
 	}
@@ -115,6 +235,15 @@ func (e *Endpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, frame Frame
 		e.Sessions.Erase(hs.SessionID)
 		return nil, err
 	}
+
+	// If SecureWire is configured, unwrap envelope v2 AFTER ratchet decryption
+	if e.secureWire != nil {
+		plaintext, err = e.secureWire.decodePayload(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("securewire decode: %w", err)
+		}
+	}
+
 	return plaintext, nil
 }
 
@@ -146,7 +275,17 @@ func (e *Endpoint) SendNext(id [8]byte, plaintext []byte, deadline time.Time) (P
 	}
 	var ptr Pointer
 	err := e.Sessions.withSession(id, func(s *ratchet.Session) error {
-		msg, err := s.Encrypt(plaintext)
+		// If SecureWire is configured, wrap plaintext in envelope v2 BEFORE ratchet encryption
+		wirePlain := plaintext
+		if e.secureWire != nil {
+			var innerErr error
+			wirePlain, innerErr = e.secureWire.encodePayload(plaintext)
+			if innerErr != nil {
+				return fmt.Errorf("securewire encode: %w", innerErr)
+			}
+		}
+
+		msg, err := s.Encrypt(wirePlain)
 		if err != nil {
 			return err
 		}
@@ -174,5 +313,18 @@ func (e *Endpoint) ReceiveNext(p Pointer, now time.Time) ([]byte, error) {
 	if frame.Kind != FrameMessage {
 		return nil, errors.New("ratchetwire: expected continuation")
 	}
-	return e.Sessions.Decrypt(frame.SessionID, frame.Message, time.Unix(int64(frame.Deadline), 0))
+	plaintext, err := e.Sessions.Decrypt(frame.SessionID, frame.Message, time.Unix(int64(frame.Deadline), 0))
+	if err != nil {
+		return nil, err
+	}
+
+	// If SecureWire is configured, unwrap envelope v2 AFTER ratchet decryption
+	if e.secureWire != nil {
+		plaintext, err = e.secureWire.decodePayload(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("securewire decode: %w", err)
+		}
+	}
+
+	return plaintext, nil
 }

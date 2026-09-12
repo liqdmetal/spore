@@ -437,6 +437,9 @@ func msgSendE2(args []string) {
 	amount := fs.String("amount", "", "pay-with-message: value to attach to the SAME tx as the pointer, in whole units with asset suffix (e.g. 5.5dero, 0.0001evm). DERO + EVM-calldata only today; the money and the message are atomic — both land or neither does")
 	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin; never pass plaintext as an argv flag — argv is visible to shell history, ps, and crash reports)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	// Secure wire flags: envelope v2 wrapping (accessed via fs.Lookup in sendE2Core)
+	_ = fs.String("key", "", "sender identity private key hex for envelope v2 (overrides -identity if set)")
+	_ = fs.String("peer-pub", "", "recipient identity public key hex for envelope v2")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -527,7 +530,20 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err != nil {
 		return err
 	}
-	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
+	// Secure wire: envelope v2 wrapping enabled when -key and -peer-pub
+	// are supplied (must be set after Parse so config flags are resolved).
+	var sw *ratchetwire.SecureWire
+	if keyHex := fs.Lookup("key").Value.String(); keyHex != "" {
+		peerHex := fs.Lookup("peer-pub").Value.String()
+		if peerHex == "" {
+			check(errors.New("-peer-pub is required when -key is set"))
+		}
+		sw, err = ratchetwire.NewSecureWire(keyHex, peerHex, nil)
+		if err != nil {
+			check(fmt.Errorf("secure wire: %w", err))
+		}
+	}
+	ep, err := ratchetwire.NewDurableEndpointWithSecureWire(st, states, sessionTTL, time.Now(), sw)
 	if err != nil {
 		return err
 	}
@@ -633,6 +649,8 @@ func msgRecvE2(args []string) {
 	notifySMTPUser := fs.String("notify-smtp-user", "", "SMTP username (password from SPORE_NOTIFY_SMTP_PASSWORD)")
 	notifyTwilioSID := fs.String("notify-twilio-sid", "", "Twilio account SID (auth token from SPORE_NOTIFY_TWILIO_AUTH_TOKEN)")
 	notifyTwilioFrom := fs.String("notify-twilio-from", "", "Twilio sender number")
+	// Secure wire flag: envelope v2 decode (accessed via fs.Lookup)
+	_ = fs.String("key", "", "our identity private key hex for envelope v2 decode (overrides -identity if set)")
 	// -maildb is registered by e2Common (shared with send paths for name
 	// resolution); read it after Parse rather than redeclaring it — a
 	// duplicate fs.String panics with "flag redefined".
@@ -700,7 +718,25 @@ func msgRecvE2(args []string) {
 	check(err)
 	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
 	check(err)
-	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
+	// Secure wire: receiver side needs only our identity key to open
+	// incoming envelopes. The sender's peer pub is already pinned
+	// in the contact/maildb — verified at the endpoint layer.
+	var sw *ratchetwire.SecureWire
+	if keyHex := fs.Lookup("key").Value.String(); keyHex != "" {
+		sw, err = ratchetwire.NewSecureWire(keyHex, "", nil)
+		if err != nil {
+			check(fmt.Errorf("secure wire: %w", err))
+		}
+	} else if *identity != "" {
+		ik, ierr := readHexFile(*identity, 32)
+		if ierr == nil && ik != nil {
+			sw, err = ratchetwire.NewSecureWire(hex.EncodeToString(ik), "", nil)
+			if err != nil {
+				check(fmt.Errorf("secure wire: %w", err))
+			}
+		}
+	}
+	ep, err := ratchetwire.NewDurableEndpointWithSecureWire(st, states, sessionTTL, time.Now(), sw)
 	check(err)
 	// Open the mail store ONCE, not per message (re-reading the whole JSON
 	// file for every delivery is wasteful, and a per-message Open failure
