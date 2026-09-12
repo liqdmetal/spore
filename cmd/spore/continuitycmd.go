@@ -35,6 +35,16 @@ func continuitycmd(args []string) {
 		continuityRelease(args[1:])
 	case "verify":
 		continuityVerify(args[1:])
+	case "revocation-init":
+		continuityRevocationInit(args[1:])
+	case "revoke":
+		continuityRevoke(args[1:])
+	case "revocation-check":
+		continuityRevocationCheck(args[1:])
+	case "rotate":
+		continuityRotate(args[1:])
+	case "rotation-verify":
+		continuityVerifyRotation(args[1:])
 	case "observer-keygen":
 		continuityObserverKeygen(args[1:])
 	case "observe":
@@ -85,7 +95,13 @@ func continuityUsage() {
   spore continuity status -vault VAULT [-at UNIX]
   spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
   spore continuity verify -vault VAULT
+  spore continuity revocation-init -vault VAULT -out STATE [-owner-key KEY -checkpoint CHECKPOINT]
+  spore continuity revoke -vault VAULT -state STATE -owner-key KEY -kind recipient|observer -subject PUB -out STATE -checkpoint CHECKPOINT [-at UNIX]
+  spore continuity revocation-check -vault VAULT -state STATE -checkpoint CHECKPOINT
+  spore continuity rotate -old-vault VAULT -old-owner-key KEY -new-owner-key KEY -new-recipient-pub HEX -file PAYLOAD -vault-out SUCCESSOR -certificate-out CERT
+  spore continuity rotation-verify -old-vault VAULT -successor-vault SUCCESSOR -certificate CERT
   spore continuity observer-keygen -out OBSERVER_KEY
+  spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX] [-revocations STATE -checkpoint CHECKPOINT]
   spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
   spore continuity watch-init -vault VAULT -observer-key OBSERVER_KEY -out WATCH_STATE
@@ -190,9 +206,16 @@ func continuityRelease(args []string) {
 	recipientPath := fs.String("recipient-key", "", "designated recipient X25519 private key file")
 	out := fs.String("out", "", "plaintext release output path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
+	rotationPath := fs.String("rotation", "", "optional signed vault rotation JSON path")
+	successorPath := fs.String("successor-vault", "", "successor vault JSON path required with -rotation")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *recipientPath == "" || *out == "" {
 		check(errors.New("continuity release requires -vault -recipient-key and -out"))
+	}
+	if (*rotationPath == "") != (*successorPath == "") {
+		check(errors.New("continuity release requires both -rotation and -successor-vault"))
 	}
 	v := readContinuityVault(*vaultPath)
 	recipient, err := readContinuityKey(*recipientPath)
@@ -201,7 +224,18 @@ func continuityRelease(args []string) {
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	plain, err := continuity.Release(v, recipient, now)
+	var plain []byte
+	if *rotationPath != "" {
+		cert := readVaultRotation(*rotationPath)
+		successor := readContinuityVault(*successorPath)
+		plain, err = continuity.ReleaseWithRotation(v, cert, successor, recipient, now)
+	} else if *revocationsPath != "" || *checkpointPath != "" {
+		state, checkpoint, pairErr := readRevocationPair(*revocationsPath, *checkpointPath)
+		check(pairErr)
+		plain, err = continuity.ReleaseWithRevocations(v, state, checkpoint, recipient, now)
+	} else {
+		plain, err = continuity.Release(v, recipient, now)
+	}
 	check(err)
 	if err := writePrivateBytes(*out, plain); err != nil {
 		check(err)
@@ -284,7 +318,7 @@ func readContinuityArtifactLimit(path string, maxBytes int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(raw)) > continuity.MaxArtifactBytes {
+	if int64(len(raw)) > maxBytes {
 		return nil, continuity.ErrArtifactTooLarge
 	}
 	return raw, nil

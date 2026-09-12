@@ -54,13 +54,17 @@ type RecoveryBundle struct {
 }
 
 var recoveryArtifactNames = map[string]struct{}{
-	"continuity-vault.json":          {},
-	"quorum-policy.json":             {},
-	"quorum-release.json":            {},
-	"continuity-anchor.json":         {},
-	"continuity-anchor-receipt.json": {},
-	"continuity-watch.json":          {},
-	"continuity-release-notice.json": {},
+	"continuity-vault.json":                 {},
+	"continuity-successor-vault.json":       {},
+	"quorum-policy.json":                    {},
+	"quorum-release.json":                   {},
+	"continuity-anchor.json":                {},
+	"continuity-anchor-receipt.json":        {},
+	"continuity-watch.json":                 {},
+	"continuity-release-notice.json":        {},
+	"continuity-revocations.json":           {},
+	"continuity-revocation-checkpoint.json": {},
+	"continuity-rotation.json":              {},
 }
 
 // NewRecoveryBundle validates and packages the supplied fixed-name artifacts.
@@ -285,6 +289,12 @@ func verifyRecoveryArtifact(name string, raw []byte) error {
 		_, err = ParseWatchState(raw)
 	case name == "continuity-release-notice.json":
 		_, err = ParseNotice(raw)
+	case name == "continuity-revocations.json":
+		_, err = ParseRevocationState(raw)
+	case name == "continuity-revocation-checkpoint.json":
+		_, err = ParseRevocationCheckpoint(raw)
+	case name == "continuity-rotation.json":
+		_, err = ParseVaultRotation(raw)
 	default:
 		return ErrInvalidRecoveryBundle
 	}
@@ -312,6 +322,31 @@ func verifyRecoveryCrossBindings(b *RecoveryBundle) error {
 			return err
 		}
 	}
+	var successor *Vault
+	if raw := files["continuity-successor-vault.json"]; raw != nil {
+		var err error
+		successor, err = Parse(raw)
+		if err != nil {
+			return err
+		}
+	}
+	hasRotation := files["continuity-rotation.json"] != nil
+	if hasRotation && (vault == nil || successor == nil) {
+		return fmt.Errorf("%w: rotation requires retired and successor vaults", ErrInvalidRecoveryBundle)
+	}
+	if (successor != nil) != hasRotation {
+		return fmt.Errorf("%w: successor vault requires rotation certificate", ErrInvalidRecoveryBundle)
+	}
+	if vault != nil && successor != nil {
+		certRaw := files["continuity-rotation.json"]
+		cert, err := ParseVaultRotation(certRaw)
+		if err != nil {
+			return err
+		}
+		if err := VerifyRotation(vault, successor, cert); err != nil {
+			return fmt.Errorf("%w: rotation binding: %v", ErrInvalidRecoveryBundle, err)
+		}
+	}
 	if raw := files["quorum-policy.json"]; raw != nil {
 		var err error
 		policy, err = ParseQuorumPolicy(raw)
@@ -323,6 +358,41 @@ func verifyRecoveryCrossBindings(b *RecoveryBundle) error {
 		if err := VerifyPolicyForVault(policy, vault); err != nil {
 			return fmt.Errorf("%w: policy/vault binding: %v", ErrInvalidRecoveryBundle, err)
 		}
+	}
+	var revocations *RevocationState
+	if raw := files["continuity-revocations.json"]; raw != nil {
+		var err error
+		revocations, err = ParseRevocationState(raw)
+		if err != nil {
+			return err
+		}
+	}
+	var checkpoint *RevocationCheckpoint
+	if raw := files["continuity-revocation-checkpoint.json"]; raw != nil {
+		var err error
+		checkpoint, err = ParseRevocationCheckpoint(raw)
+		if err != nil {
+			return err
+		}
+	}
+	if (revocations == nil) != (checkpoint == nil) {
+		return fmt.Errorf("%w: revocation state and checkpoint must travel together", ErrInvalidRecoveryBundle)
+	}
+	if vault != nil && revocations != nil {
+		if err := VerifyRevocationCheckpoint(vault, revocations, checkpoint); err != nil {
+			return fmt.Errorf("%w: revocation binding: %v", ErrInvalidRecoveryBundle, err)
+		}
+	}
+	var rotation *VaultRotation
+	if raw := files["continuity-rotation.json"]; raw != nil {
+		var err error
+		rotation, err = ParseVaultRotation(raw)
+		if err != nil {
+			return err
+		}
+	}
+	if rotation != nil && vault != nil && rotation.NewVaultID != vault.VaultID && rotation.OldVaultID != vault.VaultID {
+		return fmt.Errorf("%w: rotation vault binding", ErrInvalidRecoveryBundle)
 	}
 	var chainAnchor *ChainAnchor
 	if raw := files["continuity-anchor.json"]; raw != nil {

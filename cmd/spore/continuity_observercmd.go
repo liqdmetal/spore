@@ -34,6 +34,8 @@ func continuityObserve(args []string) {
 	keyPath := fs.String("observer-key", "", "observer Ed25519 private key file")
 	out := fs.String("out", "", "signed release notice output path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *keyPath == "" || *out == "" {
 		check(errors.New("continuity observe requires -vault -observer-key and -out"))
@@ -45,8 +47,20 @@ func continuityObserve(args []string) {
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	n, err := continuity.Observe(v, key, now)
-	check(err)
+	var n *continuity.ReleaseNotice
+	if (*revocationsPath == "") != (*checkpointPath == "") {
+		check(errors.New("continuity observe requires both -revocations and -checkpoint"))
+	}
+	if *revocationsPath != "" {
+		state, checkpoint, err := readRevocationPair(*revocationsPath, *checkpointPath)
+		check(err)
+		n, err = continuity.ObserveWithRevocations(v, state, checkpoint, key, now)
+		check(err)
+	} else {
+		var err error
+		n, err = continuity.Observe(v, key, now)
+		check(err)
+	}
 	raw, err := json.MarshalIndent(n, "", "  ")
 	check(err)
 	check(writeAtomicPrivate(*out, append(raw, '\n')))

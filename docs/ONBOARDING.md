@@ -1,14 +1,10 @@
-# Spore — onboarding (zero → first forward-private message)
+# Spore — onboarding (zero to first forward-private message)
 
-**In one line:** an E2E-encrypted, forward-private, compostable messenger. You
-talk wallet-to-wallet, money and message can ride the same atomic tx, and
-everything rots on your schedule. No central server, no VC, no token.
+In one line: an E2E-encrypted, forward-private, compostable messenger. You talk wallet-to-wallet, money and message can ride the same atomic tx, and everything rots on your schedule. No central server, no VC, no token.
 
-Copy-paste first, prose second. The **E2 path (`*-e2`) is the real messenger** —
-forward-secret, single-use prekeys, off-chain bodies. The legacy `whisper`/`msg
-send` paths are at the bottom for compatibility and are **not** forward-private.
+Copy-paste first, prose second. The E2 path (`*-e2`) is the real messenger — forward-secret, single-use prekeys, off-chain bodies. The legacy `whisper`/`msg send` paths are at the bottom for compatibility and are not forward-private.
 
-**Get the binary** (grab `/releases/latest`, or build):
+## Get the binary
 
 ```bash
 curl -LO https://github.com/liqdmetal/spore/releases/latest/download/spore-windows-amd64.exe
@@ -16,20 +12,16 @@ curl -LO https://github.com/liqdmetal/spore/releases/latest/download/spore-windo
 #  or build/install:
 go install github.com/liqdmetal/spore/cmd/spore@latest
 ```
-Below, `spore …` means your binary. Verify with `spore -version`.
 
----
+Below, `spore …` means your binary. Verify with `spore -version`.
 
 ## 0. Sanity check — no chain, no wallet, no setup
 
 ```bash
 spore demo
 ```
-Exercises the full **send → receive → burn** lifecycle in-process. Expected
-tail: `OK: body evicted, key erased, anchor inert.` If that runs, your binary
-works.
 
----
+Exercises the full send → receive → burn lifecycle in-process. Expected tail: `OK: body evicted, key erased, anchor inert.` If that runs, your binary works.
 
 ## 1. Initialize (one command, one time)
 
@@ -37,41 +29,30 @@ works.
 spore init
 ```
 
-This creates your whole identity kit under `~/.spore/` (override with
-`SPORE_HOME` or `-dir`), all `0600` except the public bundle:
+This creates your whole identity kit under `~/.spore/` (override with `SPORE_HOME` or `-dir`), all `0600` except the public bundle:
 
 | File | What |
 |---|---|
-| `identity.key` | your long-term identity private key (X25519) — **never share** |
-| `spk.key` | signed-prekey private key — **never share** |
-| `state.key` | encrypts your local ratchet session state — **never share** |
-| `opk-pool.json` | one-time-prekey **private** halves (consumed once each) |
-| `batch.json` | single-use **public** prekey bundles, ready to publish |
+| `identity.key` | your long-term identity private key (X25519) — never share |
+| `spk.key` | signed-prekey private key — never share |
+| `state.key` | encrypts your local ratchet session state — never share |
+| `opk-pool.json` | one-time-prekey private halves (consumed once each) |
+| `batch.json` | single-use public prekey bundles, ready to publish |
 | `identity-card.json` | your public identity card (share out-of-band so contacts pin you) |
-| `store.key` | **dedicated** signing key for the `nostr://` serverless body store |
+| `store.key` | dedicated signing key for the `nostr://` serverless body store |
 | `config.json` | defaults so every later command is short |
 
-It prints your **pinned-sig** (your public signing key). Share `pinned-sig` +
-`identity-card.json` **out-of-band** (in person, a QR code, a separate channel) so
-contacts can pin your identity. That out-of-band pin is the trust root —
-discovery below is transport convenience, never a trust substitute.
+It prints your pinned-sig (your public signing key). Share `pinned-sig` + `identity-card.json` out-of-band (in person, a QR code, a separate channel) so contacts can pin your identity. That out-of-band pin is the trust root — discovery below is transport convenience, never a trust substitute.
 
-> **Why not `bundle.json`?** The card is deliberately named differently:
-> `-bundle` expects a single pre-signed `SPKBundle` (one entry of `batch.json`),
-> so a card named `bundle.json` is an onboarding dead end — the flag rejects it.
-> `readBundle` now names that mistake explicitly and says what to do instead.
+### Why not `bundle.json`?
 
-After `init`, **every `*-e2` command reads `config.json` automatically** — you
-stop retyping `-identity`, `-spk`, `-state-dir`, `-state-key`, `-store`, etc.
-Explicit flags always win.
+The card is deliberately named differently: `-bundle` expects a single pre-signed `SPKBundle` (one entry of `batch.json`), so a card named `bundle.json` is an onboarding dead end — the flag rejects it. `readBundle` now names that mistake explicitly and says what to do instead.
 
----
+After `init`, every `*-e2` command reads `config.json` automatically — you stop retyping `-identity`, `-spk`, `-state-dir`, `-state-key`, `-store`, etc. Explicit flags always win.
 
 ## 2. Run your mailbox (your always-on node)
 
-Your hosted mailbox stores ciphertext bodies and **serves your single-use
-prekeys** so others can start a conversation with you. It never touches your
-identity/SPK private keys; `spore msg recv-e2` decrypts on your device.
+Your hosted mailbox stores ciphertext bodies and serves your single-use prekeys so others can start a conversation with you. It never touches your identity/SPK private keys; `spore msg recv-e2` decrypts on your device.
 
 ```bash
 mkdir -p ~/.spore/users/me
@@ -88,8 +69,7 @@ spore prekeybatch push -in ~/.spore/batch.json \
 spore prekeybatch status -mailbox http://127.0.0.1:8080/u/me
 ```
 
-Each `GET /prekey` from a sender **pops one single-use bundle** — two senders
-never get the same one-time key. When the batch runs low, refill:
+Each `GET /prekey` from a sender pops one single-use bundle — two senders never get the same one-time key. When the batch runs low, refill:
 
 ```bash
 spore prekeybatch gen -out ~/.spore/batch2.json -n 50   # auto-continues OPK ids
@@ -99,37 +79,28 @@ spore prekeybatch push -in ~/.spore/batch2.json \
 
 ### Choose where your off-chain bodies live (`-store`)
 
-The mailbox above is one option. `-store` picks the off-chain body store, and
-there are three postures:
+The mailbox above is one option. `-store` picks the off-chain body store, and there are three postures:
 
 | Posture | `-store` | You run | Prekey discovery |
 |---|---|---|---|
-| **Home node** (default, encouraged) | `http://127.0.0.1:8080` | your mailbox (step 2 above) | your mailbox serves `GET /prekey` |
-| **Serverless** | `nostr://relay.damus.io,nos.lol` | **nothing** | manual bundle exchange only |
-| **Hosted** (Model B) | `https://mailbox.example.net` | nothing — you pay | the operator's mailbox |
+| Home node (default, encouraged) | `http://127.0.0.1:8080` | your mailbox (step 2 above) | your mailbox serves `GET /prekey` |
+| Serverless | `nostr://relay.damus.io,nos.lol` | nothing | manual bundle exchange only |
+| Hosted (Model B) | `https://mailbox.example.net` | nothing — you pay | the operator's mailbox |
 
-**Hosted** is the cleanest first-message path for a beta user who does not want to run a node: the operator runs a blind courier for you. See the hosted-beta flow below and [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
+Hosted is the cleanest first-message path for a beta user who does not want to run a node: the operator runs a blind courier for you. See the hosted-beta flow below and MODEL_B_SERVICE.md.
 
-**Hosted** is the cleanest first-message path for a beta user who does not want to run a node: the operator runs a blind courier for you. See the hosted-beta flow below and [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
-
-**Serverless = the no-servers endgame.** Bodies are published as signed events
-to a public Nostr relay commons; nobody operates a store for you, and any
-subset of relays can serve a body by content address:
+Serverless is the no-servers endgame. Bodies are published as signed events to a public Nostr relay commons; nobody operates a store for you, and any subset of relays can serve a body by content address:
 
 ```bash
 # set it once in config.json (init already generated ~/.spore/store.key for this)
 spore msg recv-e2 -store nostr://relay.damus.io,nos.lol -store-key ~/.spore/store.key
 ```
 
-`-store-key` must be a **dedicated** key (not your identity or chain key):
-publishing to a commons is linkable by pubkey, so a separate key stops a relay
-from tying your storage activity to your messaging identity.
+`-store-key` must be a dedicated key (not your identity or chain key): publishing to a commons is linkable by pubkey, so a separate key stops a relay from tying your storage activity to your messaging identity.
 
-**Serverless trade-offs — read before choosing it:**
+### Serverless trade-offs — read before choosing it
 
-- **Prekey discovery is manual.** With no mailbox there is no `GET /prekey`, so
-  step 2's `prekeybatch push` has nowhere to go. Instead, each side hands the
-  other ONE pre-signed bundle out-of-band (Signal, QR, in person):
+- Prekey discovery is manual. With no mailbox there is no `GET /prekey`, so step 2's `prekeybatch push` has nowhere to go. Instead, each side hands the other ONE pre-signed bundle out-of-band (Signal, QR, in person):
 
   ```bash
   # on the RECIPIENT's machine: carve a single bundle out of batch.json
@@ -143,29 +114,20 @@ from tying your storage activity to your messaging identity.
     -store nostr://relay.damus.io,nos.lol
   ```
 
-  Note `-bundle` takes a single `SPKBundle`, **not** `batch.json` and **not**
-  `identity-card.json` — `readBundle` rejects both with an explanation. Each
-  bundle is single-use, so carve off a fresh one per new contact.
-- **256 KiB body cap** — relays reject large events. Attachments want the
-  mailbox.
-- **Deletion is best-effort.** NIP-09 requests are advisory and relays may keep
-  copies. The real erasure is the ratchet: consumed message keys are destroyed,
-  so lingering ciphertext is undecryptable garbage.
+  Note `-bundle` takes a single `SPKBundle`, not `batch.json` and not `identity-card.json` — `readBundle` rejects both with an explanation. Each bundle is single-use, so carve off a fresh one per new contact.
 
-→ Full limits and hostile-relay defenses:
-[`CARRIER_MATRIX.md`](CARRIER_MATRIX.md#off-chain-body-stores-mailbox-vs-the-serverless-commons)
+- 256 KiB body cap — relays reject large events. Attachments want the mailbox.
+- Deletion is best-effort. NIP-09 requests are advisory and relays may keep copies. The real erasure is the ratchet: consumed message keys are destroyed, so lingering ciphertext is undecryptable garbage.
 
-> **No home server and want automatic prekeys?** A hosted Model-B mailbox does
-> step 2 for you as a blind courier (it never holds your keys). See
-> [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md). Self-hosting is the privacy
-> default; hosting is optional convenience.
+→ Full limits and hostile-relay defenses: CARRIER_MATRIX.md#off-chain-body-stores-mailbox-vs-the-serverless-commons
+
+> No home server and want automatic prekeys? A hosted Model-B mailbox does step 2 for you as a blind courier (it never holds your keys). See MODEL_B_SERVICE.md. Self-hosting is the privacy default; hosting is optional convenience.
 
 ## 2b. Hosted beta (no node of your own)
 
 If you do not want to run a node or mailbox yourself, an operator can run it for you as a blind courier. The operator never sees your identity/SPK private keys; `recv-e2` still decrypts on your device.
 
 What the operator gives you:
-
 - a mailbox route, e.g. `https://mailbox.example.net/u/<name>`
 - a bearer token for that route
 - (optionally) a private ntfy topic for arrival alerts
@@ -229,13 +191,11 @@ echo "hello" | spore msg send-e2 \
 
 ### Trust boundary (read this)
 
-- The operator sees traffic + timing and the ciphertext bodies; it does **not** see plaintext or keys.
+- The operator sees traffic + timing and the ciphertext bodies; it does not see plaintext or keys.
 - `mailbox host -privacy` blanks the Sender field in the hosted log so the operator does not record who sent what.
 - Body padding is on by default for premium users, so the operator cannot fingerprint message length.
 - ntfy sees "you got a message" + a short txid, never the body.
-- Full operator-run service docs: [`MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
-
----
+- Full operator-run service docs: MODEL_B_SERVICE.md.
 
 ## 3. Receive (leave running)
 
@@ -256,16 +216,11 @@ spore msg recv-e2
 #   details: docs/NOTIFICATIONS.md
 ```
 
-`recv-e2` watches the chain for pointers addressed to you, fetches the
-off-chain body, ratchets it open, and prints it. Blocked contacts (see
-`msg mail block`) are dropped **before** decryption.
-
----
+`recv-e2` watches the chain for pointers addressed to you, fetches the off-chain body, ratchets it open, and prints it. Blocked contacts (see `msg mail block`) are dropped before decryption.
 
 ## 4. Send
 
-You need the recipient's **chain address**, their **pinned-sig**, and a way to
-get their **bundle** (a local file, or their mailbox's `/prekey` URL).
+You need the recipient's chain address, their pinned-sig, and a way to get their bundle (a local file, or their mailbox's `/prekey` URL).
 
 ```bash
 # discover their bundle from their mailbox (pinned-sig still verified);
@@ -286,10 +241,7 @@ echo "hello" | spore msg send-e2 \
   -store-token [REDACTED]
 ```
 
-**Plaintext is never an argv flag** — shell history, `ps`, and crash reports
-read argv. Use `-msg-file F` or pipe via stdin (shown above).
-
----
+Plaintext is never an argv flag — shell history, `ps`, and crash reports read argv. Use `-msg-file F` or pipe via stdin (shown above).
 
 ## 5. The rest of the email-class flow
 
@@ -321,8 +273,6 @@ spore msg mail block -addr SPAMMER
 spore msg mail purge -older-than 720h       # bound local plaintext retention
 ```
 
----
-
 ## 6. Compostability as a feature
 
 ```bash
@@ -330,59 +280,33 @@ spore panic                 # DRY RUN: lists exactly what would be wiped
 spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-dir
 ```
 
-`panic` targets only spore-shaped files in the paths you pass and re-verifies
-each one is gone (or fails loudly). Off-chain bodies already rot on their TTL;
-EVM/Solana mailbox records burn on delivery; `panic` erases your local
-plaintext. What **can't** be erased: the opaque pointer scrap on an immutable
-chain (DERO/Bitcoin) — it's useless once the body reaps, but the tx is public
-history. We don't pretend otherwise.
-
----
+`panic` targets only spore-shaped files in the paths you pass and re-verifies each one is gone (or fails loudly). Off-chain bodies already rot on their TTL; EVM/Solana mailbox records burn on delivery; `panic` erases your local plaintext. What can't be erased: the opaque pointer scrap on an immutable chain (DERO/Bitcoin) — it's useless once the body reaps, but the tx is public history. We don't pretend otherwise.
 
 ## Chain / carrier readiness
 
 | Carrier | Usable today? | First message needs |
 |---|---|---|
-| **DERO** | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; **native value + pay-with-message** |
-| **Solana** | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
-| **EVM** | 🧪 dev (local `anvil`) | a local EVM node + account; **pay-with-message on calldata path** |
-| **Nostr** | 🧪 carrier impl | relay URLs + a Nostr key |
-| **Bitcoin** | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
-| **Cosmos / TON** | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
-| **XMR** | 🚧 not for E2 | 8-byte seam too small for the pointer — refused, not downgraded |
+| DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
+| Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
+| EVM | 🧪 dev (local anvil) | a local EVM node + account; pay-with-message on calldata path |
+| Nostr | 🧪 carrier impl | relay URLs + a Nostr key |
+| Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
+| Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
+| XMR | 🚧 not for E2 | 8-byte seam too small for the pointer — refused, not downgraded |
 
-`-chain` selects the carrier (`dero` default). Full matrix + invariants:
-[`CARRIER_MATRIX.md`](CARRIER_MATRIX.md).
-
----
+`-chain` selects the carrier (`dero` default). Full matrix + invariants: CARRIER_MATRIX.md.
 
 ## Privacy model (honest limits)
 
-- **Forward-private + compostable** on every NEW send. The DERO command names
-  `whisper send`, `whisper send-long`, `msg send -chain dero`, and
-  `msg send-long` are compatibility aliases for the canonical `*-e2` path;
-  their old native/0xE1 records remain receive-only and are not forward-private.
-- **Metadata is visible**: "a tx happened at ~time" is chain-wide public. DERO's
-  ring sigs hide the sender; EVM/Solana/Bitcoin/TON expose tx metadata (content
-  stays private via the off-chain ratchet body). ntfy sees "you got a message" +
-  a short txid, never the body.
-- **Local plaintext**: `maildb` stores decrypted snippets for search (0600,
-  purge-able); the spool stores queued plaintext (0600, HMAC-sealed). `panic`
-  wipes both.
-- **No relay = point-to-point unicast.** Group broadcast needs a relay or an SC.
+- Forward-private + compostable on every NEW send. The DERO command names `whisper send`, `whisper send-long`, `msg send -chain dero`, and `msg send-long` are compatibility aliases for the canonical `*-e2` path; their old native/0xE1 records remain receive-only and are not forward-private.
+- Metadata is visible: "a tx happened at ~time" is chain-wide public. DERO's ring sigs hide the sender; EVM/Solana/Bitcoin/TON expose tx metadata (content stays private via the off-chain ratchet body). ntfy sees "you got a message" + a short txid, never the body.
+- Local plaintext: `maildb` stores decrypted snippets for search (0600, purge-able); the spool stores queued plaintext (0600, HMAC-sealed). `panic` wipes both.
+- No relay = point-to-point unicast. Group broadcast needs a relay or an SC.
 
-Threat model: [`SENDER_AUTH.md`](SENDER_AUTH.md) · wire formats:
-[`WIRE_SPEC.md`](WIRE_SPEC.md) · ratchet: [`RATCHET.md`](RATCHET.md) ·
-self-hosting: [`HOME_NODE.md`](HOME_NODE.md).
-
----
+Threat model: SENDER_AUTH.md · wire formats: WIRE_SPEC.md · ratchet: RATCHET.md · self-hosting: HOME_NODE.md.
 
 ## Appendix — old native DERO records (receive-only compatibility)
 
-Old native DERO records can still be received with the bare compatibility
-receiver, but new sends must use the E2 kit above. New DERO posts default to
-ring size 16; pass `-ringsize 8` to trade some transaction size for lower cost.
-Spore accepts only ring sizes 8 and 16.
+Old native DERO records can still be received with the bare compatibility receiver, but new sends must use the E2 kit above. New DERO posts default to ring size 16; pass `-ringsize 8` to trade some transaction size for lower cost. Spore accepts only ring sizes 8 and 16.
 
-Prefer the E2 path above for anything you care about. Donations:
-`spore donate --all`.
+Prefer the E2 path above for anything you care about. Donations: `spore donate --all`.

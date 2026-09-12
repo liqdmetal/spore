@@ -41,6 +41,8 @@ func continuityAttest(args []string) {
 	keyPath := fs.String("observer-key", "", "approved observer Ed25519 private key file")
 	out := fs.String("out", "", "attestation JSON output path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *policyPath == "" || *keyPath == "" || *out == "" {
 		check(errors.New("continuity attest requires -vault -policy -observer-key and -out"))
@@ -54,7 +56,14 @@ func continuityAttest(args []string) {
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	att, err := continuity.Attest(policy, v, key, now)
+	var att *continuity.QuorumAttestation
+	if *revocationsPath != "" || *checkpointPath != "" {
+		state, checkpoint, pairErr := readRevocationPair(*revocationsPath, *checkpointPath)
+		check(pairErr)
+		att, err = continuity.AttestWithRevocations(policy, v, state, checkpoint, key, now)
+	} else {
+		att, err = continuity.Attest(policy, v, key, now)
+	}
 	check(err)
 	check(writeJSONPrivate(*out, att))
 	fmt.Printf("continuity attestation written: %s\n", *out)
@@ -66,6 +75,9 @@ func continuityQuorum(args []string) {
 	policyPath := fs.String("policy", "", "quorum policy JSON path")
 	attestationPaths := fs.String("attestations", "", "comma-separated attestation JSON paths")
 	out := fs.String("out", "", "quorum release JSON output path")
+	vaultPath := fs.String("vault", "", "optional vault JSON path required with revocation enforcement")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
 	_ = fs.Parse(args)
 	if *policyPath == "" || *attestationPaths == "" || *out == "" {
 		check(errors.New("continuity quorum requires -policy -attestations and -out"))
@@ -83,7 +95,18 @@ func continuityQuorum(args []string) {
 		check(err)
 		atts = append(atts, *att)
 	}
-	q, err := continuity.NewQuorumRelease(policy, atts)
+	var q *continuity.QuorumRelease
+	var err error
+	if *revocationsPath != "" || *checkpointPath != "" || *vaultPath != "" {
+		if *vaultPath == "" {
+			check(errors.New("continuity quorum requires -vault with revocation enforcement"))
+		}
+		state, checkpoint, pairErr := readRevocationPair(*revocationsPath, *checkpointPath)
+		check(pairErr)
+		q, err = continuity.NewQuorumReleaseWithRevocations(policy, readContinuityVault(*vaultPath), state, checkpoint, atts)
+	} else {
+		q, err = continuity.NewQuorumRelease(policy, atts)
+	}
 	check(err)
 	check(writeJSONPrivate(*out, q))
 	fmt.Printf("continuity quorum release written: %s\n", *out)
@@ -115,6 +138,8 @@ func continuityReleaseQuorum(args []string) {
 	recipientPath := fs.String("recipient-key", "", "designated recipient X25519 private key file")
 	out := fs.String("out", "", "plaintext release output path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *quorumPath == "" || *recipientPath == "" || *out == "" {
 		check(errors.New("continuity release-quorum requires -vault -quorum -recipient-key and -out"))
@@ -127,7 +152,14 @@ func continuityReleaseQuorum(args []string) {
 	if now == 0 {
 		now = time.Now().Unix()
 	}
-	plain, err := continuity.ReleaseWithQuorum(v, q, recipient, now)
+	var plain []byte
+	if *revocationsPath != "" || *checkpointPath != "" {
+		state, checkpoint, pairErr := readRevocationPair(*revocationsPath, *checkpointPath)
+		check(pairErr)
+		plain, err = continuity.ReleaseWithQuorumRevocations(v, q, state, checkpoint, recipient, now)
+	} else {
+		plain, err = continuity.ReleaseWithQuorum(v, q, recipient, now)
+	}
 	check(err)
 	check(writePrivateBytes(*out, plain))
 	fmt.Printf("continuity quorum payload released to %s\n", *out)

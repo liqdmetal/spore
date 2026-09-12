@@ -18,7 +18,7 @@ package store
 // Pinning to one IPFS node is not durability, it is a single point of failure
 // with extra steps. So a MultiStore writes to N substrates and reads from
 // whichever still answers. Durability comes from DIVERSITY, not from trusting
-// any one network — the same invariant RelayOS's substrate fabric is built on:
+// any one network — the same invariant mycelium's substrate fabric is built on:
 // "infrastructure may disappear; commitments and verifiable evidence must
 // survive."
 //

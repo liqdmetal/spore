@@ -3,7 +3,6 @@
 Spore notifications solve the day-to-day availability problem: the recipient does **not** need to keep a wallet, node, or CLI process running. A hosted mailbox can alert when ciphertext is accepted; a local receiver can alert after decryption. In both cases, the alert is only a wake-up signal.
 
 Notifications are deliberately **not message transport** and do not decrypt anything on a server. Email/SMS/webhook providers receive only:
-
 - `Spore: new private message`
 - a short transaction identifier in webhook JSON
 - no plaintext, ciphertext, keys, wallet credentials, or sender address
@@ -48,7 +47,7 @@ The publisher authenticates to ntfy with a bearer token loaded from the service 
 SPORE_NOTIFY_WEBHOOK_TOKEN=[REDACTED]
 ```
 
-When an authenticated ciphertext body is PUT to `/u/alice/put/<cid>`, the mailbox host enqueues a durable metadata-only event (`txid`, `subject`, `received_at`) to an at-least-once outbox, and the outbox POSTs it to `https://notify.example.net/spore-alice` with `Authorization: Bearer [REDACTED]`. The ntfy message body is something like:
+When an authenticated ciphertext body is PUT to `/u/alice/put/<cid>`, the mailbox host enqueues a durable metadata-only event (`txid`, `subject`, `received_at`) to an at-least-once outbox, and the outbox POSTs it to `https://notify.example.net/spore-alice` with `Authorization: Bearer *** The ntfy message body is something like:
 
 - topic: `spore-alice`
 - payload: `{"event":"message.available","txid":"...","subject":"Spore private message pending","received_at":"..."}`

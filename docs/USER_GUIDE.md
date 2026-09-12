@@ -1,13 +1,13 @@
 # Spore — user guide
 
-> **This guide is the DERO path.** Spore is multi-chain — the same core runs
+> **This guide is the DERO path.** This project is multi-chain — the same core runs
 > on EVM, Solana and (pending live-verify) Monero via `spore msg ... -chain
 > dero|evm|xmr|solana`. See `README.md` for the chain-status table and
 > `docs/LIVE_NODES.md` for what's verified.
 
-Spore is a **no-relay private messenger on the DERO blockchain**. You write to
+This project is a no-relay private messenger on the DERO blockchain. You write to
 a person's DERO address; the message reaches them without ever passing through
-a server you don't control. Messages are designed to *rot*: what lingers
+a server you don't control. Messages are designed to rot: what lingers
 on-chain is a hash and a dead key, not readable content.
 
 This guide covers the `spore` CLI. Companion docs: `README.md` (overview),
@@ -248,8 +248,6 @@ directly and needs no daemon. Name resolution is a convenience over your node
 > -chain dero`, and `msg send-long` are compatibility names for this same E2
 > path. Old native DERO payloads, old `0xE1` envelopes, and old one-shot bodies
 > remain receive-only compatibility records and are not forward-private.
-
-
 
 **Rot = content that becomes unrecoverable on purpose.** On DERO, content in a
 block can never be deleted, so compostability is done two ways: **(a)** keys

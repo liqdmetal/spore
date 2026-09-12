@@ -19,6 +19,9 @@ func continuityRecoveryCreate(args []string) {
 	receiptPath := fs.String("receipt", "", "optional anchor receipt JSON path")
 	watchPath := fs.String("watch", "", "optional signed watch checkpoint JSON path")
 	noticePath := fs.String("notice", "", "optional signed release notice JSON path")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
+	rotationPath := fs.String("rotation", "", "optional signed vault rotation JSON path")
 	out := fs.String("out", "", "recovery bundle JSON output path")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *out == "" {
@@ -41,6 +44,12 @@ func continuityRecoveryCreate(args []string) {
 	add("continuity-anchor-receipt.json", *receiptPath)
 	add("continuity-watch.json", *watchPath)
 	add("continuity-release-notice.json", *noticePath)
+	add("continuity-revocations.json", *revocationsPath)
+	add("continuity-revocation-checkpoint.json", *checkpointPath)
+	add("continuity-rotation.json", *rotationPath)
+	if (*revocationsPath == "") != (*checkpointPath == "") {
+		check(errors.New("continuity recovery-create requires both -revocations and -checkpoint"))
+	}
 
 	bundle, err := continuity.NewRecoveryBundle(files)
 	check(err)

@@ -1,187 +1,120 @@
 # Spore Production Roadmap
 
-*Derived from `../spore-stack-audit-2026-09-07.md`. Defines what separates a
-production-ready private messenger from a research artifact, the minimum
-viable trust model, and the ordered work to get there.*
+*Derived from `../spore-stack-audit-2026-09-07.md`. Defines what separates a production-ready private messenger from a research artifact, the minimum viable trust model, and the ordered work to get there.*
 
 ---
 
 ## 1. The line between research artifact and product
 
-A research artifact says "the crypto is sound." A product must be able to say
-all of the following simultaneously:
+A research artifact says "the crypto is sound." A product must be able to say all of the following simultaneously:
 
-1. **An attacker who can reach your network cannot read, delete, or spend.**
-   (Today: false — C1/C2/C3 in the audit.)
-2. **You can prove a message came from the person you think it did.**
-   (Today: false — no sender authentication.)
-3. **Delivery works end-to-end on every live chain.** (Today: Solana receive
-   broken past message #1; burn bricked; spore-peer rejects ~1.6% of bodies.)
-4. **The data-at-rest story matches the data-on-chain story.** ("Messages rot"
-   is currently falsified by `messages.log`.)
-5. **An ordinary user cannot configure it into an unsafe state by default.**
-   (Today: every dangerous surface is the default.)
+1. **An attacker who can reach your network cannot read, delete, or spend.** (Today: false — C1/C2/C3 in the audit.)
+2. **You can prove a message came from the person you think it did.** (Today: false — no sender authentication.)
+3. **Delivery works end-to-end on every live chain.** (Today: Solana receive broken past message #1; burn bricked; spore-peer rejects ~1.6% of bodies.)
+4. **The data-at-rest story matches the data-on-chain story.** ("Messages rot" is currently falsified by `messages.log`.)
+5. **An ordinary user cannot configure it into an unsafe state by default.** (Today: every dangerous surface is the default.)
 
 Rule of thumb: ship nothing that listens on a socket until (1) and (5) hold.
 
----
+## 2. Minimum viable trust model — what the user trusts, nothing else
 
-## 2. Minimum viable trust model (MVTM)
+The minimum viable trust model is the floor, not the ceiling. The user trusts exactly four things and nothing more:
 
-The design goal: **each user trusts only (a) themselves, (b) their own
-always-on node, and (c) the chain's liveness** — nothing else. Enumerating
-what currently breaks that:
+- the code they ran (audit + reproducible build or signed release),
+- their own keys (device-local, never leaves),
+- the chain's security model (DERO ring sigs, EVM/Solana consensus) for delivery and ordering,
+- their own capacity to read a doc and not paste a secret into a chat.
 
-| Party | Must NOT be trusted for | Status today |
-|---|---|---|
-| Chain observers | message content | ✅ held (E2E envelope / DERO native) |
-| Chain observers | sender identity, recipient identity | ❌ exposed on EVM/Solana (from/to in the clear); DERO ok |
-| Chain observers | message existence & timing | accepted limitation (documented) |
-| Mailbox operator | content | ✅ (E2E bodies) |
-| Mailbox operator | who messaged whom, when | ⚠️ `-privacy` flag exists but off by default; log retains timing regardless |
-| Mailbox operator | availability (can delete/withhold bodies) | ✅ acceptable — delivery is retryable |
-| Relay operator | content | ✅ opaque ciphertext |
-| Relay operator | destination metadata | ❌ relay sees plaintext dest URL per push |
-| Anyone on the network | forging a message to you | ❌ **anyone can** (anonymous ECDH + plaintext passthrough) |
-| Anyone on the network | deleting your mail | ❌ open `DELETE /body` / relay drop |
-| `spore web` visitors | spending your wallet | ❌ unauthenticated proxy |
+A hosted service is the opposite of that model: it asks the user to trust a third party with reachability. That's a different product (Model B), sold separately with its own honest limits. The core product is the zero-server path.
 
-**Minimum viable trust model = the invariants below. If a change breaks one,
-it doesn't ship.**
+## 3. The six invariants (the audit translates these into test gates)
 
-- **T1 — Authenticity.** A delivered message is readable *and* attributable to
-  a chain identity the recipient chose to accept. Unattributable ciphertext is
-  spam, not mail.
-- **T2 — Confidentiality.** No party other than sender/receiver endpoints
-  (including their own nodes) ever holds plaintext or key material.
-- **T3 — Least exposure.** Every network listener defaults to loopback; any
-  non-loopback bind requires an explicit credential and (for anything
-  plaintext-carrying) TLS.
-- **T4 — Rottable at rest.** Anything a user can recover, an attacker who
-  later takes the disk cannot — or the retention is explicit and bounded.
-- **T5 — Availability is best-effort, never trusted.** Any node can silently
-  drop bodies; the protocol must make withholding equivalent to nonexistence
-  (retryable pointers + burn deadlines), not data loss.
-- **T6 — Content-addressing everywhere.** No body is accepted without
-  sha256 == CID (already held — keep it sacred).
+Relying on names is fragile; the testable properties are the contract.
 
-What the MVTM deliberately does NOT promise: metadata privacy against global
-passive observers (unrealistic without mixnets), forward secrecy against a
-compromised *current* device (needs real ratcheting — see P2), or anonymity
-from chain analytics (dero ring sigs help; EVM/Solana don't).
+| # | Name | What it means in plain terms | The audit's test label |
+|---|---|---|---|
+| T1 | Authenticity | A message in your inbox is one your contact's key produced, not a network injection. Until this lands, "from Alice" is a claim, not a fact. | Sender Authentication (H1) |
+| T2 | Confidentiality | No party other than the sender and receiver endpoints ever holds the plaintext or the key material that can recover it. | Confidentiality review |
+| T3 | Least exposure | Every network listener defaults to loopback. Binding to a real interface is an explicit, justified choice, not the default. | Loopback-by-default audit (C1/C2) |
+| T4 | Rottable at rest | Anything the user can recover, an attacker who later takes the disk cannot — or the retention is explicit and bounded (a log with a retention policy the user chose), not indefinite. | Data-at-rest review (H5) |
+| T5 | Best-effort availability, never trusted delivery | Any relay, mailbox, or peer can silently drop bodies. The protocol does not depend on their honesty for secrecy or authenticity; it only depends on them for latency and reach. Withholding is equivalent to nonexistence from the protocol's point of view — the user retries, gives up, or uses a paid path. | Availability / DoS review |
+| T6 | Content-addressing everywhere bodies land | A body is accepted only if sha256(body) == the CID the pointer references. No body is served because "it looks like the right size" or "the relay said so." | spore-peer framing audit (H4) |
 
----
+These six are the product. Everything else is implementation detail or UX.
 
-## 3. P0 — Stop the bleeding (1–2 weeks, blocking everything else)
+## 4. P0 — get the floor (the stuff that, if missing, means this is not a product)
 
-All are small, mechanical, testable. No protocol changes.
+P0 is the non-negotiable floor. Items below are not "nice to have" — each one is a gate that says "this is still research."
 
-1. **Listener hygiene** (C1, C2, C3):
-   - Default `-listen 127.0.0.1:PORT` for mailbox, webchat, relay, daemon inbox.
-   - Refuse non-loopback binds without `-token` (and `-cert/-key` for anything
-     serving plaintext or bearer tokens). Error, don't warn.
-   - `spore web`: delete `/whisper/send` unless an explicit
-     `-allow-browser-spend` flag (with token) is set; `/whisper/recv` requires
-     the same token.
-2. **Relay SSRF + quotas** (C3):
-   - `X-Relay-Dest` restricted to an operator-configured allowlist (or removed
-     entirely — the sender can push direct; relay-chooses-dest is the wrong
-     trust direction).
-   - Auth-by-default, per-IP rate limits, disk quota, max deadline (e.g. 7d cap),
-     bounded `pending` map.
-3. **Delivery correctness** (H2, H4):
-   - Solana: give every `Incoming` a real txid (fetch signatures per message,
-     or dedup key on `seq`), stop re-reading the full inbox per poll.
-   - spore-peer: replace first-byte error sniffing with a 1-byte status frame
-     (`0x00 ok || 0xNN error`) — wire version bump, keep compat.
-4. **Data-at-rest** (H5): encrypt `messages.log` (same XChaCha machinery, key
-   derived from the mailbox key), TTL-trim it, make it single-line-corruption
-   tolerant, kill the O(n²) full-file `Has()` scan (index file or SQLite).
-5. **Delete footguns**: `EncryptStatic`, committed test artifacts in
-   `internal/peer/`, stale package docs.
+**P0-1 — loopback by default, token-gated when it must cross one.** Every listener that can touch user data binds to `127.0.0.1` unless the user explicitly opts into a real interface, and anything that crosses a network boundary authenticates the other side with a bearer token or equivalent. This closes the "anyone on the LAN can talk to your daemon" class of bug. Audit items C1/C2.
 
-Exit criteria: an external tester with only network access to a default
-deployment cannot read, write, delete, spend, or crash anything.
+**P0-2 — a malicious or mistaken remote store cannot hand you garbage and have you treat it as mail.** spore-peer (and any future body-fetch path) must check that a fetched body hashes to the CID in the pointer before it becomes plaintext. The old behavior — accepting a body because it arrived — is the class of bug that lets a hostile peer feed you ciphertext that decrypts to garbage or, worse, to something that looks like mail. Audit item H4. The honest caveat: the frame protocol as implemented today rejects ~1.6% of valid bodies because it once treated "starts with ASCII 4/5" as an error signal. That is now fixed, but it is the exact shape of the bug class — verify framing by CID, not by content sniffing.
 
-## 4. P1 — Earn the name "private messenger" (4–8 weeks)
+**P0-3 — the Solana burn path must actually work, and the mailbox must not hand out the same message twice.** Two delivery bugs made it into a release: `burn` was bricked (a body delivered once could be re-served), and the mailbox could hand out the same message to the same recipient more than once under some conditions. Both are delivery-integrity bugs, not "edge cases." Fix + bank-level tests.
 
-6. **Sender authentication** (H1) — the single most important protocol change:
-   - Each identity = chain address + X25519 *signed* prekey. Signature made
-     with the chain's native key (Ed25519 on Solana, secp256k1 on EVM, DERO
-     addr-key) over the X25519 prekey pub → chain-provable key ownership.
-   - Envelope carries `sig(sender_id, eph_pub || cid || context)`; recipient
-     rejects unsigned/unknown-sender envelopes. Drop plaintext passthrough on
-     public chains (DERO keeps its native path).
-   - Bind both pubkeys into HKDF `info` (M11) while touching this code.
-   - First-contact flow: out-of-band pub exchange (like Signal safety
-     numbers), with a "verify" UX later.
-7. **Solana program v4** (H3): burn must shrink or compact — either
-   `realloc` down + lamport reclaim, or a fixed-slot layout with a
-   tombstone bit so `copy_from_slice` can't mismatch. Add `owner == program_id`
-   checks, cap per-inbox growth, and ship an on-chain test for burn-after-deliver.
-8. **Chain status honesty** (M7): XMR either moves to integrated addresses /
-   tx_extra with real wallet-rpc verification, or the backend is explicitly
-   feature-flagged off. No mock-verified paths in a production binary.
-9. **DoS hardening** (M1, M3): spore-peer connection/thread caps; channel box
-   auth (even a shared room token), room-count cap, incremental persistence.
-10. **Ops basics**: structured logging, metrics, proxy/Tor support for all
-    outbound RPC, `spore doctor` (validates key file, RPC reachability, listen
-    exposure, log health).
+**P0-4 — no plaintext secrets in default logs, no default listeners on real interfaces, no default curl of a hard-coded remote.** The audit found plaintext secrets in logs, listeners on real interfaces by default, and a default outbound connection to a hard-coded remote. All three are "the default configuration leaks or exposes" bugs. Fix the defaults; a power user who wants different behavior can opt in.
 
-## 5. P2 — Becoming a real messenger (months, after P1)
+**P0-5 — the "messages rot" claim must be true, including the things you write to disk for convenience.** A log file that grows without bound and contains message metadata is not "compostable." If you ship a feature that persists anything message-related, it either has a retention policy the user controls or it is not a compostable messenger.
 
-- **Ratcheting / forward secrecy**: the current design has long-medium-term
-  X25519 keys — a stolen device key decrypts everything in flight. Move to
-  X3DH + double-ratchet (or at least per-message ratchet seeded from ECDH) —
-  the anchor/pointer split already fits: pointer carries the ratchet header.
-- **Group messaging without the box**: the docs correctly note unicast-only.
-  Minimum path: sender-side fan-out to member mailboxes (no relay), then
-  MLS-style group keys over that. The channel box remains a fallback, clearly
-  labeled lower-trust.
-- **Verified contact UX**: fingerprint/safety-number display, key-rotation
-  transparency (the KEYROTATE anchor exists — use it, log rotations, surface
-  unverified rotations loudly).
-- **Mobile story**: the Model B hosted mailbox is the weakest trust point.
-  Target: phone runs a light client against the user's home node with mTLS +
-  per-device tokens; Model B becomes "bring your own relay you pay," not
-  "trust our courier."
-- **Fuzzing**: libFuzzer/oss-fuzz targets for the CBOR walker, canonical
-  codec, ABI decoder (M2 overflow), and the spore-peer framing. The repo
-  already carries an oss-fuzz fork — eat your own dog food.
+**P0-6 — sender authentication.** This is T1. Until the product can tell the user "this message came from the key you think it came from," the messenger is unauthenticated. This is the single biggest gap between "we can send bytes" and "this is a messenger you can trust." Tracked separately (signed prekeys, envelope v2). See §8.
 
-## 6. P3 — Ecosystem bets
+**P0-7 — reproduce the build / sign the release.** A user cannot audit a binary they cannot rebuild or verify. Either the build is reproducible or the release is signed and the signing key's trust story is documented. Pick one and make it real.
 
-- derohe-rs L1 mempool catch (already in ROADMAP.md) — the 1–2s receive path
-  is the product differentiator; make it default once stable.
-- MyceliumMailbox.sol deploy + gas-sponsored delivery via a permit/relayer.
-- Cross-chain identity proof (gated, hard — keep it gated).
-- A formal spec of the wire format (envelope, canonical, pointer) with
-  interop test vectors — right now the spec is the Go code.
+## 5. P1 — make it a real messenger (sender authentication, documented honest limits, one full live chain end-to-end)
 
-## 7. Sequencing & gate
+P1 is what turns the floor into a product. P0 says "the defaults don't leak and bodies aren't garbage." P1 says "the messenger is actually authenticated and the user knows what 'private' does and does not mean."
 
-```
-P0 ──► ship "hardened research release" ──► P1 ──► beta with real users ──► P2 ──► 1.0
-```
+**P1-1 — sender authentication lands.** T1 holds. The user can pin contacts, the product verifies the sender's key against the pin, and the honest-caveat doc says what authentication does not cover (device compromise, metadata, the out-of-band step). This is the gating item for "this is a messenger" rather than "this is a pipe."
 
-### Status (2026-09-07)
+**P1-2 — document the honest limits on every live chain, in the product, not in a design doc.** For each live chain the product supports, say what "private" means on that chain and what it does not. DERO native payload encryption is real; EVM/Solana carry ciphertext but the metadata (who sent to whom, when) is visible on-chain; spore-peer is a transport, not a trust anchor. This is not marketing honesty; it is the difference between a user who understands their threat model and one who does not.
 
-- **P0 COMPLETE.** Loopback defaults + token gating (C1/C2, `internal/safehttp`),
-  relay SSRF allowlist + quotas (C3), Solana seq-keyed dedup (H2), Solana
-  burn un-bricked with bank tests (H3), spore-peer status-frame protocol (H4),
-  encrypted + TTL-trimmed message log (H5), footguns removed. All suites green
-  (Go 20 pkgs, Rust 14 tests, Solana program 9 tests).
-- **P1 sender authentication COMPLETE** (H1): signed prekeys + envelope v2
-  (0xE1), HKDF identity binding, strict receive, contact pinning. Threat
-  model: `docs/SENDER_AUTH.md`.
-- **Wire spec COMPLETE**: `docs/WIRE_SPEC.md` + `docs/interop-vectors.json`,
-  conformance tests in Go and Rust.
-- **P0 items 4/10 remain open**: XMR honest-or-off decision, DoS caps on
-  channel box, `spore doctor`, metrics, Tor/proxy support, fuzz targets.
+**P1-3 — one full end-to-end path on a live chain, documented, with the honest caveats attached.** A real DERO or Solana send → receive → burn, run by a human following the docs, with the known limits stated next to it. Not a script. Not a testnet-only path. A human should be able to follow the docs and get a message end-to-end on a live chain, and the docs should tell them what that does and does not prove.
 
-**Beta gate** (the honest "production-ready for a private messenger" claim):
-T1–T6 all hold; DERO + one public chain (Solana) deliver/burn correctly under
-a 48h adversarial testnet soak; spore-peer has fuzz-clean framing; an external
-reviewer can run a default deployment with only the docs and find no C-level
-finding. Until then, every artifact should say what this audit says: sound
-core, unshippable edges.
+**P1-4 — deprecate or clearly quarantine anything that is not E2.** Legacy paths that are not forward-private must be either deprecated, clearly labeled as legacy in the product, or quarantined behind an explicit opt-in. The default path must be E2. Backward compatibility is a real requirement, but it must not be the default marketing story.
+
+## 6. P2 — harden for other people (hosted path honest limits, DoS, one external review, fuzz the framing)
+
+P2 is what lets other people use this without the author in the loop. It is also the point where the product stops being "the author's messenger" and starts being a thing.
+
+**P2-1 — the hosted/Model-B path has honest limits written down and visible to the buyer.** A hosted mailbox sees traffic patterns, timing, and volume. That is the product. The honest limit is that the hosted path is not metadata-private, and the buyer should know that before they pay. Write it down in the product docs, not just in a design doc. Make the self-host path the privacy-default, and make the hosted path the convenience path with its honest tradeoffs stated.
+
+**P2-2 — DoS resilience on the body-fetch and relay paths.** A hostile peer, relay, or mailbox can try to exhaust the receiver by feeding it bodies, frames, or requests. The receiver must bound its cost per body/frame/request and must not do unbounded work in response to an untrusted input. This is the difference between "works on a friendly network" and "works when someone dislikes you."
+
+**P2-3 — one external review, or an honest explanation of why not.** The audit says this is the gating item for "other people should rely on this." Either there is an external review with named reviewers and a published record, or the product's marketing says "single-reviewer, unaudited" and the user can decide. The honest move is to say which one it is.
+
+**P2-4 — fuzz the body-fetch and framing paths.** spore-peer's framing is the kind of code that has "rejects ~1.6% of valid bodies" bugs. Fuzz the framing and body-fetch paths with malformed frames, bad CIDs, oversized bodies, and duplicate requests, and fix whatever turns up. The audit point H4 was about framing; fuzzing is how you make sure the fix is real and stays real.
+
+## 7. P3 — ecosystem bets (only after the above hold)
+
+These are meaningful only if P0–P2 are done. They are not part of the floor.
+
+- **DERO L1 mempool catch (1–2s receive).** Nice-to-have latency improvement. Only pursue once the E2 receive path is correct on every live chain; a fast wrong answer is worse than a slow right one.
+- **Mailbox deploy + gas-sponsored delivery.** Makes the EVM path cheaper and more usable for non-technical recipients. Dependent on the mailbox actually burning correctly (P0-3) and sender auth landing (P1-1).
+- **Cross-chain identity proof.** The honest version of this is hard and gated. Do not market "cross-chain messenger" until there is a real identity proof; the current honest story is "same-chain delivery, cross-chain is future work."
+
+## 8. The gating item for sender authentication (T1)
+
+This is the single biggest gap between the current release and "a messenger a stranger could rely on." The work is tracked separately (signed prekeys, envelope v2, HKDF identity binding, contact pinning). The gating question is simple: can the recipient verify, from the message alone and their own keys, that the sender's pinned key produced it? Until that is yes and in the default path, the product is notauthenticated, and every "from X" display is a courtesy label.
+
+## 9. What "production-ready" means here
+
+Production-ready does not mean "no bugs." It means:
+
+- the defaults do not leak secrets or expose listeners (P0-1, P0-4),
+- a hostile body-fetch cannot make the receiver treat garbage as mail (P0-2, P0-4),
+- delivery actually burns and does not re-serve (P0-3),
+- "messages rot" is true including disk artifacts (P0-5),
+- the user can verify who sent a message (P1-1 = T1),
+- the honest limits are documented for every live chain (P1-2),
+- and the product does not claim compostability, forward secrecy, or metadata privacy where it does not have them.
+
+Until those hold, the honest label is "research artifact with a working pipe," not "private messenger." That label is not an insult; it is the accurate shipping status, and the roadmap above is the ordered list of things that turn the label into "product."
+
+## 10. Status (as of the audit)
+
+- **P0 mostly complete.** Loopback defaults + token gating (C1/C2), relay SSRF allowlist + quotas (C3), Solana seq-keyed dedup (H2), Solana burn un-bricked with bank tests (H3), spore-peer status-frame protocol (H4), encrypted + TTL-trimmed message log (H5), footguns removed. All suites green (Go 20 pkgs, Rust 14 tests, Solana program 9 tests).
+- **P1 sender authentication in progress (H1).** Signed prekeys + envelope v2 (0xE1), HKDF identity binding, strict receive, contact pinning. Threat model: `docs/SENDER_AUTH.md`.
+- **Wire spec done:** `docs/WIRE_SPEC.md` + `docs/interop-vectors.json`, conformance tests in Go and Rust.
+- **P0 items 4/10 still open.** XMR honest-or-off decision, DoS caps on channel box, `spore doctor`, metrics, Tor/proxy support, fuzz targets.
+
+**Beta gate (the honest "production-ready for a private messenger" claim):** T1–T6 all hold; DERO + one public chain (Solana) deliver/burn correctly under a 48h adversarial testnet soak; spore-peer has fuzz-clean framing; an external reviewer can run a default deployment with only the docs and find no C-level finding. Until then, every artifact should say what this audit says: sound core, unshippable edges.

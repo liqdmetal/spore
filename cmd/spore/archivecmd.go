@@ -24,7 +24,7 @@ import (
 //
 // WHY NOT JUST IPFS: pinning to ONE node is a single point of failure with
 // extra steps. If that node dies and nobody else pinned the CID, the body is
-// gone. Durability comes from diversity — the same invariant RelayOS's
+// gone. Durability comes from diversity — the same invariant mycelium's
 // substrate fabric is built on: infrastructure may disappear, commitments and
 // verifiable evidence must survive.
 //

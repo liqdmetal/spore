@@ -41,6 +41,8 @@ func continuityWatch(args []string) {
 	noticePath := fs.String("notice", "", "signed release-ready notice JSON output path")
 	outboxPath := fs.String("outbox", "", "durable metadata-only notification outbox JSONL path")
 	webhookURL := fs.String("webhook", "", "metadata-only notification webhook URL")
+	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
+	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
 	flush := fs.Bool("flush", false, "synchronously attempt queued notifications")
 	_ = fs.Parse(args)
@@ -55,6 +57,18 @@ func continuityWatch(args []string) {
 	state, err := continuity.ParseWatchState(stateRaw)
 	check(err)
 	check(state.VerifyForVault(v))
+	if (*revocationsPath == "") != (*checkpointPath == "") {
+		check(errors.New("continuity watch requires both -revocations and -checkpoint"))
+	}
+	var revocations *continuity.RevocationState
+	var checkpoint *continuity.RevocationCheckpoint
+	if *revocationsPath != "" {
+		var err error
+		revocations, checkpoint, err = readRevocationPair(*revocationsPath, *checkpointPath)
+		check(err)
+		key := append([]byte(nil), observerKey...)
+		check(continuity.VerifyRevocationForKey(v, revocations, checkpoint, continuity.RevokedObserver, key))
+	}
 
 	// Provider credentials remain environment-only through notify.NewFromEnv.
 	dispatch, err := notify.NewFromEnv(notify.Options{WebhookURL: *webhookURL})
@@ -75,7 +89,12 @@ func continuityWatch(args []string) {
 		return
 	}
 	if !state.NotificationQueued {
-		notice, err := continuity.Observe(v, observerKey, now)
+		var notice *continuity.ReleaseNotice
+		if revocations != nil {
+			notice, err = continuity.ObserveWithRevocations(v, revocations, checkpoint, observerKey, now)
+		} else {
+			notice, err = continuity.Observe(v, observerKey, now)
+		}
 		check(err)
 		noticeRaw, err := json.MarshalIndent(notice, "", "  ")
 		check(err)
