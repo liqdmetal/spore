@@ -131,6 +131,8 @@ spore continuity check-in -vault VAULT -owner-key FILE
 spore continuity status -vault VAULT [-at UNIX]
 spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
 spore continuity verify -vault VAULT
+spore continuity watch-init -vault VAULT -observer-key KEY -out WATCH_STATE
+spore continuity watch -vault VAULT -observer-key KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush]
 
 # N-of-M independent observer release:
 spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY

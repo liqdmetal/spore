@@ -214,3 +214,43 @@ absence of future chain reorgs.
 
 The chain remains an optional timestamp/commitment carrier, not a liveness
 oracle and not proof of death or incapacity.
+
+## Metadata-only watch and notification retry
+
+Initialize a signed local watcher checkpoint for one exact vault epoch:
+
+```sh
+spore continuity watch-init \
+  -vault ./continuity-vault.json \
+  -observer-key ./observer.key \
+  -out ./continuity-watch.json
+```
+
+Run the explicit watch at a schedule or from an operator-run service. The watch
+verifies the current signed vault, refuses stale checkpoints, and after the
+inclusive deadline creates one signed release-ready observer notice for that
+check-in epoch. It then appends a fixed metadata-only event to Spore's durable
+notification outbox:
+
+```sh
+spore continuity watch \
+  -vault ./continuity-vault.json \
+  -observer-key ./observer.key \
+  -state ./continuity-watch.json \
+  -notice ./continuity-release-notice.json \
+  -outbox ./continuity-notify.jsonl \
+  -webhook https://notify.example.invalid/hook \
+  [-flush]
+```
+
+The webhook receives only a stable event identifier, a generic subject, and an
+optional timestamp. Provider credentials remain environment-only. Failed
+provider delivery stays in the 0600 outbox for retry; delivery is at-least-once
+and may duplicate after a crash. The watch never sends plaintext, ciphertext,
+recipient keys, wallet credentials, or funds, and it never releases the vault.
+A later owner check-in invalidates the checkpoint and requires `watch-init`
+again for the new epoch.
+
+This is an explicit metadata-only workflow, not an unattended hosted service;
+process scheduling, webhook hardening, and operator alerting remain deployment
+responsibilities.

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ type Outbox struct {
 	done     chan struct{}
 	wg       sync.WaitGroup
 	mu       sync.Mutex
+	sendMu   sync.Mutex
 	pending  []Event
 	closed   bool
 }
@@ -83,6 +85,11 @@ func (o *Outbox) Enqueue(e Event) error {
 	if o.closed {
 		return errors.New("notify outbox: closed")
 	}
+	for _, pending := range o.pending {
+		if pending.TxID == e.TxID {
+			return nil
+		}
+	}
 	f, err := os.OpenFile(o.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return fmt.Errorf("notify outbox: open: %w", err)
@@ -105,6 +112,51 @@ func (o *Outbox) Enqueue(e Event) error {
 
 // Close stops the retry worker. Queued events remain on disk for a later
 // process start; an event may be delivered more than once across a crash.
+// Flush synchronously attempts queued events in order until the queue is empty,
+// the context is canceled, or a provider rejects an event. Failed events remain
+// durable for the background retry worker or a later process start.
+func (o *Outbox) Flush(ctx context.Context) error {
+	if o == nil {
+		return errors.New("notify outbox: nil outbox")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	o.sendMu.Lock()
+	defer o.sendMu.Unlock()
+	for {
+		o.mu.Lock()
+		if o.closed {
+			o.mu.Unlock()
+			return errors.New("notify outbox: closed")
+		}
+		if len(o.pending) == 0 {
+			o.mu.Unlock()
+			return nil
+		}
+		e := o.pending[0]
+		o.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := o.dispatch.Send(e); err != nil {
+			return err
+		}
+		o.mu.Lock()
+		if len(o.pending) > 0 {
+			o.pending = o.pending[1:]
+			if err := writeEvents(o.path, o.pending); err != nil {
+				o.pending = append([]Event{e}, o.pending...)
+				o.mu.Unlock()
+				return fmt.Errorf("notify outbox: compact: %w", err)
+			}
+		}
+		o.mu.Unlock()
+	}
+}
+
 func (o *Outbox) Close() error {
 	if o == nil {
 		return nil
@@ -136,6 +188,8 @@ func (o *Outbox) run() {
 }
 
 func (o *Outbox) drain() {
+	o.sendMu.Lock()
+	defer o.sendMu.Unlock()
 	o.mu.Lock()
 	if o.closed || len(o.pending) == 0 {
 		o.mu.Unlock()

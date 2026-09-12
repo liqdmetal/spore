@@ -41,6 +41,10 @@ func continuitycmd(args []string) {
 		continuityObserve(args[1:])
 	case "verify-notice":
 		continuityVerifyNotice(args[1:])
+	case "watch":
+		continuityWatch(args[1:])
+	case "watch-init":
+		continuityWatchInit(args[1:])
 	case "quorum-create":
 		continuityQuorumCreate(args[1:])
 	case "attest":
@@ -62,7 +66,7 @@ func continuitycmd(args []string) {
 	case "-h", "--help":
 		continuityUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|quorum-create|attest|quorum|verify-quorum|release-quorum|anchor-create|anchor-verify|anchor-post)\n", args[0])
+		fmt.Fprintf(os.Stderr, "continuity: unknown subcommand %q (want create|check-in|status|release|verify|observer-keygen|observe|verify-notice|watch-init|watch|quorum-create|attest|quorum|verify-quorum|release-quorum|anchor-create|anchor-verify|anchor-post|anchor-check)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -78,6 +82,12 @@ func continuityUsage() {
   spore continuity observer-keygen -out OBSERVER_KEY
   spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
+  spore continuity watch-init -vault VAULT -observer-key OBSERVER_KEY -out WATCH_STATE
+  spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -outbox OUTBOX [-webhook URL] [-at UNIX] [-flush]
+
+Watch is metadata-only. It signs one release-ready observer notice per exact
+check-in epoch and queues a generic wake-up through the durable outbox. Provider
+failure remains queued for retry; delivery is at-least-once, not exactly-once.
   spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY
   spore continuity attest -vault VAULT -policy POLICY -observer-key KEY -out ATTESTATION [-at UNIX]
   spore continuity quorum -policy POLICY -attestations A1[,A2,...] -out QUORUM

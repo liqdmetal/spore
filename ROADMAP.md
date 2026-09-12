@@ -36,6 +36,9 @@ remaining; it does not re-state live status.*
 - **Continuity quorum v1:** thresholded N-of-M independent attestations bound to
   the exact check-in epoch; quorum-gated recipient release remains explicit and
   non-custodial.
+- **Continuity watch v1:** signed local watch checkpoints, one metadata-only
+  release-ready event per exact epoch, and durable at-least-once notification
+  retry through the existing outbox. No automatic release or wallet action.
 
 ### Continuity vault — shipped protocol slices
 - **Continuity chain anchor v1:** optional DERO commitment to the exact vault,
@@ -46,9 +49,9 @@ remaining; it does not re-state live status.*
   identifiers.
 
 ### Continuity vault — remaining production slices
-- Notification and recovery UX without handing plaintext or keys to a service.
 - Independent recovery drill across machines with protected vault copies.
-- Anchor posting receipt and chain readback verification.
+- Independent cryptographic review and controlled live-chain evidence.
+- Notification deployment hardening beyond the explicit local watch/outbox workflow.
 - No automatic wallet spending or irreversible account actions.
 
 ### Carriers (all carry the same opaque 74-byte pointer, no downgrade)
@@ -90,8 +93,8 @@ remaining; it does not re-state live status.*
 | P0 | Windows CI and release provenance | Continuity has platform-specific replacement code; Linux-only CI is insufficient. |
 | P0 | Two-party live E2E and adversarial soak | Mainnet/self-message/local-Anvil evidence is not equivalent to independent-recipient production proof. |
 | P1 | Recovery drill and protected vault-copy runbook | A continuity product must survive operator/device loss, not just decrypt in one test process. |
-| P1 | Anchor receipt and chain readback | Wallet acceptance alone does not prove the intended opaque anchor was included. |
-| P1 | Watch/notification UX | Make explicit observer operation usable without adding custody or automatic spending. |
+| P1 | Anchor live-chain evidence | Wallet-history readback is implemented; controlled funded posting and reorg/finality evidence remain. |
+| P1 | Watch deployment hardening | Local metadata-only watch/outbox is implemented; scheduling, provider hardening, and recovery operations remain. |
 
 ### Product roadmap after the evidence gates
 
