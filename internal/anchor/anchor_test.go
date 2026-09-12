@@ -169,9 +169,13 @@ func TestFromArgumentsHashAsHexString(t *testing.T) {
 }
 
 func TestExpired(t *testing.T) {
-	a := &Anchor{BurnDeadline: uint64(time.Now().Add(-time.Second).Unix())}
-	if !a.Expired(time.Now()) {
-		t.Fatal("expected expired")
+	deadline := time.Now().Unix()
+	a := &Anchor{BurnDeadline: uint64(deadline)}
+	if !a.Expired(time.Unix(deadline, 0)) {
+		t.Fatal("expected expired at the exact deadline")
+	}
+	if a.Expired(time.Unix(deadline-1, 0)) {
+		t.Fatal("expected not expired before the deadline")
 	}
 	a.BurnDeadline = uint64(time.Now().Add(time.Hour).Unix())
 	if a.Expired(time.Now()) {

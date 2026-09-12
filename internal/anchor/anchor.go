@@ -170,9 +170,10 @@ func FromArguments(args Arguments) (*Anchor, error) {
 	return a, nil
 }
 
-// Expired reports whether the burn deadline has passed.
+// Expired reports whether the burn deadline has arrived.
+// Continuity release uses the same inclusive deadline rule: now >= deadline.
 func (a *Anchor) Expired(now time.Time) bool {
-	return now.Unix() > int64(a.BurnDeadline)
+	return now.Unix() >= int64(a.BurnDeadline)
 }
 
 // hashFromValue accepts a 64-char hex string, raw []byte, or [32]byte.
