@@ -252,13 +252,16 @@ func verifyPolicy(p QuorumPolicy) error {
 	if p.Version != quorumVersion || p.PolicyID == "" || p.Threshold == 0 || p.Threshold > uint(len(p.Attesters)) || p.VaultPolicy == "" {
 		return ErrInvalidQuorum
 	}
-	if _, err := decodeFixed(p.VaultID, 32); err != nil {
+	vaultID, err := decodeFixed(p.VaultID, 32)
+	if err != nil || isZero(vaultID) {
 		return ErrInvalidQuorum
 	}
-	if _, err := decodeFixed(p.VaultPolicy, 32); err != nil {
+	vaultPolicyID, err := decodeFixed(p.VaultPolicy, 32)
+	if err != nil || isZero(vaultPolicyID) {
 		return ErrInvalidQuorum
 	}
-	if _, err := decodeFixed(p.OwnerSigPub, ed25519.PublicKeySize); err != nil {
+	ownerSigPub, err := decodeFixed(p.OwnerSigPub, ed25519.PublicKeySize)
+	if err != nil || isZero(ownerSigPub) {
 		return ErrInvalidQuorum
 	}
 	if p.LastCheckIn <= 0 || p.Deadline <= p.LastCheckIn {
