@@ -30,6 +30,22 @@ func TestRoundTripViaArguments(t *testing.T) {
 	}
 }
 
+func TestContinuityRoundTripViaArguments(t *testing.T) {
+	a := &Anchor{
+		Version: Version, Kind: KindContinuity, BurnDeadline: 1_900_000_000,
+		ContinuitySeq: (1 << 40) - 1,
+	}
+	copy(a.EphemeralPub[:], bytes.Repeat([]byte{0x12}, 32))
+	copy(a.CID[:], bytes.Repeat([]byte{0x34}, 32))
+	b, err := FromArguments(a.ToArguments())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *b != *a {
+		t.Fatalf("continuity round trip = %#v, want %#v", b, a)
+	}
+}
+
 // TestArgumentCountAndTypes pins the wire layout: 4 args, 2 hash + 2 uint64.
 func TestArgumentCountAndTypes(t *testing.T) {
 	a := &Anchor{Version: Version, Kind: KindMessage}
@@ -80,6 +96,17 @@ func TestFromArgumentsMissingFields(t *testing.T) {
 	}
 	if _, err := FromArguments(filtered); err == nil {
 		t.Fatal("expected missing D-field error")
+	}
+}
+
+func TestFromArgumentsRejectsDuplicateAndUnknownFields(t *testing.T) {
+	args := (&Anchor{Version: Version, Kind: KindMessage}).ToArguments()
+	if _, err := FromArguments(append(append(Arguments(nil), args...), args[0])); err == nil {
+		t.Fatal("accepted duplicate K field")
+	}
+	unknown := append(append(Arguments(nil), args...), Argument{Name: "X", DataType: DataString, Value: "future"})
+	if _, err := FromArguments(unknown); err == nil {
+		t.Fatal("accepted unknown anchor field")
 	}
 }
 

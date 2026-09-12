@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/liqdmetal/spore/internal/anchor"
+	"github.com/liqdmetal/spore/internal/dero"
 )
 
-func TestChainAnchorBindsExactQuorumEpoch(t *testing.T) {
+func testChainAnchor(t *testing.T) (*Vault, *QuorumPolicy, *ChainAnchor) {
+	t.Helper()
 	now := int64(1_800_000_000)
 	v, _, _ := testVault(t, now)
 	_, pub1 := observerPair(t)
@@ -22,6 +24,11 @@ func TestChainAnchorBindsExactQuorumEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return v, policy, ca
+}
+
+func TestChainAnchorBindsExactQuorumEpoch(t *testing.T) {
+	v, policy, ca := testChainAnchor(t)
 	if err := ca.VerifyAgainst(v, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -42,18 +49,7 @@ func TestChainAnchorBindsExactQuorumEpoch(t *testing.T) {
 }
 
 func TestChainAnchorDeroWireRoundTrip(t *testing.T) {
-	now := int64(1_800_000_000)
-	v, _, _ := testVault(t, now)
-	_, pub1 := observerPair(t)
-	_, pub2 := observerPair(t)
-	policy, err := NewQuorumPolicy(v, 2, [][]byte{pub1, pub2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := NewChainAnchor(v, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, _, ca := testChainAnchor(t)
 	wire, err := ca.ToDEROAnchor()
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +78,19 @@ func TestChainAnchorDeroWireRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChainAnchorPostsWithinDEROWireLimit(t *testing.T) {
+	_, _, ca := testChainAnchor(t)
+	wire, err := ca.ToDEROAnchor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := dero.PackArguments(wire.ToArguments()); err != nil {
+		t.Fatal(err)
+	} else if len(got) > 111 {
+		t.Fatalf("wire payload length = %d, want <= 111", len(got))
+	}
+}
+
 func TestChainAnchorRejectsLaterOwnerCheckin(t *testing.T) {
 	now := int64(1_800_000_000)
 	v, owner, _ := testVault(t, now)
@@ -104,23 +113,45 @@ func TestChainAnchorRejectsLaterOwnerCheckin(t *testing.T) {
 }
 
 func TestChainAnchorJSONDoesNotContainPlaintext(t *testing.T) {
-	now := int64(1_800_000_000)
-	v, _, _ := testVault(t, now)
-	_, pub1 := observerPair(t)
-	_, pub2 := observerPair(t)
-	policy, err := NewQuorumPolicy(v, 2, [][]byte{pub1, pub2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := NewChainAnchor(v, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, _, ca := testChainAnchor(t)
 	raw, err := json.Marshal(ca)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(raw, []byte("sealed continuity instructions")) {
 		t.Fatal("chain anchor contains plaintext")
+	}
+}
+
+func TestParseChainAnchorRejectsUnknownAndTrailingJSON(t *testing.T) {
+	_, _, ca := testChainAnchor(t)
+	raw, err := json.Marshal(ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range [][]byte{
+		append(append([]byte(nil), raw...), []byte(" {}")...),
+		append(append([]byte(nil), raw[:len(raw)-1]...), []byte(`,"future":true}`)...),
+	} {
+		if _, err := ParseChainAnchor(input); err == nil {
+			t.Fatalf("accepted malformed anchor: %s", input)
+		}
+	}
+}
+
+func TestChainAnchorRejectsZeroAndWrongType(t *testing.T) {
+	ca := ChainAnchor{
+		Type: chainAnchorType, Version: chainAnchorVersion,
+		VaultID:  "0000000000000000000000000000000000000000000000000000000000000000",
+		PolicyID: "1111111111111111111111111111111111111111111111111111111111111111",
+		Deadline: 1, CheckInSeq: 0,
+	}
+	if err := ca.Verify(); !errors.Is(err, ErrInvalidChainAnchor) {
+		t.Fatalf("accepted zero vault id: %v", err)
+	}
+	ca.VaultID = "2222222222222222222222222222222222222222222222222222222222222222"
+	ca.Type = "wrong-type"
+	if err := ca.Verify(); !errors.Is(err, ErrInvalidChainAnchor) {
+		t.Fatalf("accepted wrong type: %v", err)
 	}
 }

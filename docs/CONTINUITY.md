@@ -1,5 +1,9 @@
 # Continuity vault
 
+> **Security model:** this is an explicit, local recovery protocol. It is not
+> proof of death or incapacity, does not custody funds, and does not perform
+> automatic spending, credential rotation, or irreversible actions.
+
 `spore continuity` is the first dead-man continuity slice. It is an explicit,
 local, encrypted release workflow—not an automatic wallet or fund executor.
 
@@ -82,7 +86,7 @@ The observer layer is now available:
 # generate an independent observer signing key
 spore continuity observer-keygen -out ./observer.key
 
-# inspect the public vault and emit a signed release-ready notice after due time
+# inspect the vault file and emit a signed release-ready notice after due time
 spore continuity observe \
   -vault ./continuity-vault.json \
   -observer-key ./observer.key \
@@ -94,11 +98,13 @@ spore continuity verify-notice \
   -vault ./continuity-vault.json
 ```
 
-The observer sees the public vault metadata, ciphertext, commitments, and signed
-check-in chain. It does **not** receive recipient private keys, payload
-plaintext, or wallet authority. The notice is a signed fact that the observer
-saw a particular vault deadline pass; it is not proof of death or incapacity,
-and it does not release the payload by itself.
+The observer reads the vault file's non-secret metadata, ciphertext, commitments,
+and signed check-in chain. The vault is not a public transaction record, and the
+observer still needs access to the vault file or a trusted copy. It does **not**
+receive recipient private keys, payload plaintext, or wallet authority. The
+notice is a signed fact that the observer saw a particular vault deadline pass;
+it is not proof of death or incapacity, and it does not release the payload by
+itself.
 
 ## N-of-M observer release
 
@@ -134,8 +140,8 @@ spore continuity release-quorum \
   -out ./released-instructions.txt
 ```
 
-A quorum policy binds the exact vault ID, payload commitment, owner signing key,
-check-in sequence, and deadline. A later owner check-in makes the policy stale;
+A quorum policy binds the exact vault ID, vault payload commitment, owner signing
+key, check-in sequence, and deadline. A later owner check-in makes the policy stale;
 old attestations cannot be replayed. The quorum bundle contains notices and
 signatures only—never plaintext, recipient private keys, or wallet authority.
 Release remains explicit and local.
@@ -162,9 +168,10 @@ spore continuity anchor-verify \
 
 The anchor commits to the vault ID, quorum-policy ID, signed check-in sequence,
 and deadline. The DERO wire form carries only the two opaque 32-byte IDs plus
-the deadline and sequence metadata; it contains no plaintext, ciphertext,
-recipient key, or wallet authority. A later owner check-in makes the anchor
-invalid against the current vault.
+the deadline and sequence metadata. DERO's message field is recipient-encrypted,
+so this is not a public transaction-metadata commitment; it contains no
+plaintext, ciphertext, recipient key, or wallet authority. A later owner check-in
+makes the anchor invalid against the current vault.
 
 Posting is deliberately separate and explicit:
 

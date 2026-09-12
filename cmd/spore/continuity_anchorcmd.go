@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"github.com/liqdmetal/spore/internal/dero"
 )
 
-// continuityAnchorCreate makes a public chain commitment locally. It does not
+// continuityAnchorCreate makes an opaque chain commitment locally. It does not
 // contact a wallet or post anything.
 func continuityAnchorCreate(args []string) {
 	fs := flag.NewFlagSet("continuity anchor-create", flag.ExitOnError)
@@ -84,8 +83,7 @@ func continuityAnchorPost(args []string) {
 func readChainAnchor(path string) *continuity.ChainAnchor {
 	raw, err := os.ReadFile(path)
 	check(err)
-	var ca continuity.ChainAnchor
-	check(json.Unmarshal(raw, &ca))
-	check(ca.Verify())
-	return &ca
+	ca, err := continuity.ParseChainAnchor(raw)
+	check(err)
+	return ca
 }

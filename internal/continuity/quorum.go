@@ -22,7 +22,7 @@ var (
 )
 
 // QuorumPolicy approves independent observer keys for one exact vault epoch.
-// It contains public metadata only. A later owner check-in makes this policy
+// It contains non-secret metadata only. A later owner check-in makes this policy
 // stale and requires a new policy, preventing old notices from being replayed.
 type QuorumPolicy struct {
 	Version     uint8    `json:"version"`
@@ -84,7 +84,8 @@ func NewQuorumPolicy(v *Vault, threshold uint, attesters [][]byte) (*QuorumPolic
 }
 
 // Attest signs a release-ready notice under an approved independent attester
-// key. The vault is public; no payload or recipient private key is accessed.
+// key. The vault contains only non-secret metadata and ciphertext; no payload
+// plaintext or recipient private key is accessed.
 func Attest(policy *QuorumPolicy, v *Vault, observerPriv []byte, now int64) (*QuorumAttestation, error) {
 	if policy == nil || v == nil || len(observerPriv) != ed25519.PrivateKeySize {
 		return nil, ErrInvalidQuorum
@@ -187,10 +188,42 @@ func VerifyNoticeQuorumForVault(v *Vault, q *QuorumRelease) error {
 	return nil
 }
 
+// ParseQuorumPolicy decodes and validates a policy from its JSON form.
+func ParseQuorumPolicy(raw []byte) (*QuorumPolicy, error) {
+	var p QuorumPolicy
+	if err := decodeStrict(raw, &p); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidQuorum, err)
+	}
+	if err := verifyPolicy(p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// ParseQuorumAttestation decodes one attestation and verifies its embedded
+// observer signature. Policy binding is intentionally deferred to the caller.
+func ParseQuorumAttestation(raw []byte) (*QuorumAttestation, error) {
+	var a QuorumAttestation
+	if err := decodeStrict(raw, &a); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidQuorum, err)
+	}
+	if err := a.Notice.Verify(); err != nil {
+		return nil, err
+	}
+	if a.Attester != a.Notice.ObserverPub {
+		return nil, ErrInvalidQuorum
+	}
+	if _, err := decodeFixed(a.Attester, ed25519.PublicKeySize); err != nil {
+		return nil, ErrInvalidQuorum
+	}
+	return &a, nil
+}
+
+// ParseQuorumRelease decodes and validates a complete quorum bundle.
 func ParseQuorumRelease(raw []byte) (*QuorumRelease, error) {
 	var q QuorumRelease
-	if err := json.Unmarshal(raw, &q); err != nil {
-		return nil, err
+	if err := decodeStrict(raw, &q); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidQuorum, err)
 	}
 	if err := q.Verify(); err != nil {
 		return nil, err

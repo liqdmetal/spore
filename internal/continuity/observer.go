@@ -117,8 +117,8 @@ func VerifyNoticeForVault(v *Vault, n *ReleaseNotice) error {
 // ParseNotice decodes and verifies a notice from its JSON representation.
 func ParseNotice(raw []byte) (*ReleaseNotice, error) {
 	var n ReleaseNotice
-	if err := json.Unmarshal(raw, &n); err != nil {
-		return nil, err
+	if err := decodeStrict(raw, &n); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidNotice, err)
 	}
 	if err := n.Verify(); err != nil {
 		return nil, err

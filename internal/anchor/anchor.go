@@ -11,10 +11,10 @@
 // within the 111-byte budget):
 //
 //	name  type    content
-//	  K    H      sender ephemeral X25519 pubkey (32B)  -> ECDH handle
-//	  C    H      body CID = sha256(ciphertext) (32B)   -> off-chain retrieval + commitment
+//	  K    H      message: ephemeral X25519 pubkey; continuity: vault ID
+//	  C    H      message: body CID; continuity: quorum policy ID
 //	  D    U      burn deadline, unix seconds
-//	  F    U      meta: version | kind<<8 | flags<<16
+//	  F    U      meta: version | kind<<8 | flags<<16 | continuity seq<<24
 //
 // It carries NO plaintext, NO ciphertext, and NO long-term key material. Once
 // the ephemeral secrets are erased, this record is inert: a dead public key,
@@ -116,6 +116,9 @@ func FromArguments(args Arguments) (*Anchor, error) {
 	have := map[string]bool{}
 	for _, arg := range args {
 		key := arg.Name + arg.DataType
+		if have[arg.Name] {
+			return nil, fmt.Errorf("anchor: duplicate field %q", arg.Name)
+		}
 		switch key {
 		case "K" + DataHash:
 			h, err := hashFromValue(arg.Value)
@@ -145,6 +148,8 @@ func FromArguments(args Arguments) (*Anchor, error) {
 			}
 			meta = v
 			have["F"] = true
+		default:
+			return nil, fmt.Errorf("anchor: unknown field %q", arg.Name)
 		}
 	}
 	if !have["K"] || !have["C"] || !have["D"] || !have["F"] {

@@ -78,9 +78,11 @@ func continuityQuorum(args []string) {
 	}
 	atts := make([]continuity.QuorumAttestation, 0, len(paths))
 	for _, path := range paths {
-		var att continuity.QuorumAttestation
-		readJSON(path, &att)
-		atts = append(atts, att)
+		raw, err := os.ReadFile(path)
+		check(err)
+		att, err := continuity.ParseQuorumAttestation(raw)
+		check(err)
+		atts = append(atts, *att)
 	}
 	q, err := continuity.NewQuorumRelease(policy, atts)
 	check(err)
@@ -160,25 +162,19 @@ func splitNonEmpty(raw string) []string {
 }
 
 func readQuorumPolicy(path string) *continuity.QuorumPolicy {
-	var policy continuity.QuorumPolicy
-	readJSON(path, &policy)
-	if policy.Version == 0 || policy.PolicyID == "" {
-		check(errors.New("continuity: invalid quorum policy"))
-	}
-	return &policy
+	raw, err := os.ReadFile(path)
+	check(err)
+	policy, err := continuity.ParseQuorumPolicy(raw)
+	check(err)
+	return policy
 }
 
 func readQuorumRelease(path string) *continuity.QuorumRelease {
-	var q continuity.QuorumRelease
-	readJSON(path, &q)
-	check(q.Verify())
-	return &q
-}
-
-func readJSON(path string, dst any) {
 	raw, err := os.ReadFile(path)
 	check(err)
-	check(json.Unmarshal(raw, dst))
+	q, err := continuity.ParseQuorumRelease(raw)
+	check(err)
+	return q
 }
 
 func writeJSONPrivate(path string, value any) error {

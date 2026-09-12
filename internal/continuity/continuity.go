@@ -539,8 +539,8 @@ func (v *Vault) MarshalBinary() ([]byte, error) { return json.Marshal(v) }
 // Parse decodes and verifies a vault before returning it.
 func Parse(raw []byte) (*Vault, error) {
 	var v Vault
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
+	if err := decodeStrict(raw, &v); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidVault, err)
 	}
 	if err := v.Verify(); err != nil {
 		return nil, err
