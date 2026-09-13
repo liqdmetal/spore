@@ -9,12 +9,14 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -71,6 +73,7 @@ func mailboxHost(args []string) {
 	logTTL := fs.Duration("log-ttl", mailbox.DefaultLogTTL, "decrypted-message log retention per user")
 	reap := fs.Duration("reap", 30*time.Second, "expired-body reaper interval (all users)")
 	interval := fs.Duration("interval", 3*time.Second, "SHARED chain poll interval (one watcher for all users)")
+	rate := fs.Uint("rate", 120, "per-IP request throttle per minute on the host mux (0 = unlimited)")
 	notifyFile := fs.String("notify-file", "", "optional JSON map of user -> {email,sms,webhook}; provider secrets/settings come from environment")
 	minHeight := fs.Uint64("min-height", 0, "scan the chain from this height")
 	autoBurn := fs.Bool("auto-burn", false, "erase each user's on-chain mailbox slot after that user accepts a delivery (per-user, never hub-level)")
@@ -205,8 +208,21 @@ func mailboxHost(args []string) {
 		}()
 	}
 
-	// Single multiplexed HTTP listener, path-routed per user.
+	// Per-IP fixed-window throttle for the host mux (-rate).
+	hostLimiter := newHostLimiter(*rate)
+
+	// Single multiplexed HTTP listener, path-routed per user. Wrapped with
+	// per-IP request throttling (host-level, -rate) and an HSTS header, so a
+	// token holder (or a public profile scraper) cannot hammer the box.
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		if *rate > 0 {
+			ip := clientIP(r)
+			if !hostLimiter.allow(ip, time.Now().Unix()/60) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+		}
 		if r.URL.Path == "/" {
 			writeHostIndex(w)
 			return
@@ -381,6 +397,59 @@ func validUserName(name string) bool {
 func writeHostIndex(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintln(w, "spore mailbox host: use /u/<name>/<route>")
+}
+
+// clientIP resolves the real client address for the throttle. The listener
+// sits behind the TLS edge (Caddy) on loopback, so RemoteAddr is always
+// 127.0.0.1 and every visitor would share one bucket; the edge sets
+// X-Forwarded-For, which is trustworthy here because nothing but the edge can
+// reach the loopback port.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			xff = xff[:i]
+		}
+		if ip := strings.TrimSpace(xff); ip != "" {
+			return ip
+		}
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// hostLimiter is a fixed-window per-IP request counter for the host mux.
+// Bounded memory: stale windows are overwritten on the next hit from that IP.
+// The window key is MINUTES (nowSec/60), matching the "-rate per minute" flag.
+type hostLimiter struct {
+	max  uint
+	wins map[string][2]int64 // ip -> [windowStartSec, count]
+	mu   sync.Mutex
+}
+
+func newHostLimiter(max uint) *hostLimiter {
+	return &hostLimiter{max: max, wins: map[string][2]int64{}}
+}
+
+func (l *hostLimiter) allow(ip string, nowSec int64) bool {
+	if l.max == 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w, ok := l.wins[ip]
+	if !ok || w[0] != nowSec {
+		l.wins[ip] = [2]int64{nowSec, 1}
+		return true
+	}
+	if uint(w[1]) >= l.max {
+		return false
+	}
+	w[1]++
+	l.wins[ip] = w
+	return true
 }
 
 // handleUserQR serves the user's public pay-me QR (GET) or accepts a new one
