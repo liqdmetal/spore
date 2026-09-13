@@ -73,6 +73,19 @@ func msgE2(args []string) {
 	}
 }
 
+// flagValueOr returns a flag's string value, or def when the flag is not
+// registered on this FlagSet. The legacy `msg send` path reuses sendE2Core
+// with a narrower flag set that lacks the newer e2Common flags (e.g. relay);
+// an unguarded fs.Lookup(...).Value.String() nil-derefs (found by the live
+// soak: legacy msg send segfaulted at e2Store).
+func flagValueOr(fs *flag.FlagSet, name, def string) string {
+	f := fs.Lookup(name)
+	if f == nil {
+		return def
+	}
+	return f.Value.String()
+}
+
 // e2Store builds the off-chain body store from a -store URL. Two schemes:
 //
 //	http(s)://host    -> HTTPStore (your mailbox, or a paid Model-B operator)
@@ -539,7 +552,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if len(plaintext) == 0 {
 		return errors.New("send-e2: empty plaintext")
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), fs.Lookup("relay").Value.String())
+	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""))
 	if err != nil {
 		return err
 	}
@@ -774,7 +787,7 @@ func msgRecvE2(args []string) {
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), fs.Lookup("relay").Value.String())
+	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""))
 	check(err)
 	ik, err := readHexFile(*identity, 32)
 	check(err)
@@ -1072,7 +1085,7 @@ func msgReplyE2(args []string) {
 	if len(plaintext) == 0 {
 		check(errors.New("reply-e2: empty plaintext"))
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), fs.Lookup("relay").Value.String())
+	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""))
 	check(err)
 	stateDir := fs.Lookup("state-dir").Value.String()
 	stateKeyFile := fs.Lookup("state-key").Value.String()
@@ -1120,7 +1133,7 @@ func msgSessions(args []string) {
 	// optional here: fall back to an in-memory store when omitted.
 	var st ratchetwire.BodyStore
 	if storeURL := fs.Lookup("store").Value.String(); storeURL != "" {
-		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), fs.Lookup("relay").Value.String())
+		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""))
 		check(err)
 		st = s
 	} else {

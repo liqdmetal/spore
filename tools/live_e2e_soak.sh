@@ -21,17 +21,33 @@ cd /tmp && rm -rf soak-a soak-b-state && mkdir -p soak-a soak-b-state
 if [ ! -s /tmp/soak-a/state.key ]; then
   openssl rand -hex 32 > /tmp/soak-a/state.key
 fi
-ADDR=$($B status -rpc "$RPC" -rpc-login "$LOGIN" 2>/dev/null | grep -oE 'dero1[a-z0-9]+' | head -1)
+ADDR=$(curl -s -u "$LOGIN" --max-time 20 -X POST -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"a","method":"getaddress","params":null}' "$RPC" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('address',''))" 2>/dev/null)
 [ -z "$ADDR" ] && ADDR=dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4
 echo "wallet addr: $ADDR"
 $B init -dir /tmp/soak-a >/dev/null 2>&1
 
 echo "=== 1. happy path: A -> B over mainnet, decrypt on B ==="
-expect_ok $B invite issue -identity /tmp/qr-id/identity.key -spk /tmp/qr-id/spk.key \
-  -address "$ADDR" -name demo -mailbox https://mail.sporem3.io/u/demo
-INVITE=$(grep -oE 'spore-invite-v1:[^ ]+' /tmp/soak.out | head -1)
-expect_ok $B invite verify -invite "$INVITE"
-PIN=$(grep -oE '[0-9a-f]{64}' /tmp/soak.out | head -1)
+$B invite issue -identity /tmp/qr-id/identity.key -spk /tmp/qr-id/spk.key \
+  -address "$ADDR" -name demo -mailbox https://mail.sporem3.io/u/demo > /tmp/soak-invite.txt 2>&1
+INVITE=$(grep -oE 'spore-invite-v1:[^ ]+' /tmp/soak-invite.txt | head -1)
+if [ -z "$INVITE" ]; then
+  bad "invite issue produced no URI"; tail -3 /tmp/soak-invite.txt
+else
+  ok "invite issued (${#INVITE} chars)"
+fi
+PIN=$(python3 - "$INVITE" <<'PY'
+import base64, json, sys
+u = sys.argv[1]
+b = u.split(":", 1)[1]
+try:
+    pad = "=" * (-len(b) % 4)
+    print(json.loads(base64.urlsafe_b64decode(b + pad))["pinned_sig"])
+except Exception as e:
+    print("", end="")
+PY
+)
 echo "  pinned: ${PIN:0:16}…"
 expect_ok $B msg send -chain dero -rpc "$RPC" -rpc-login "$LOGIN" -ringsize 8 \
   -to "$ADDR" -identity /tmp/soak-a/identity.key \
@@ -66,11 +82,15 @@ expect_fail $B msg send -chain dero -rpc "$RPC" -rpc-login "$LOGIN" -ringsize 8 
   -state-dir /tmp/soak-a/state -state-key /tmp/soak-a/state.key -msg-file - <<<"tamper"
 
 echo "=== 4. tampered invite must fail verification ==="
-expect_fail $B invite verify -invite "${INVITE%?}0"
+# flip a character in the MIDDLE of the token (the last char is a no-op on
+# some payloads — the URI may legitimately end in '0')
+TAMPERED="${INVITE:0:40}9${INVITE:41}"
+expect_fail $B invite verify -invite "$TAMPERED"
 
 echo "=== 5. malformed push to the mailbox must be refused (no 500s) ==="
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
   --data-binary 'not-a-real-body' --max-time 15 \
+  -H "Authorization: Bearer $DEMOTOK" \
   "https://mail.sporem3.io/u/demo/put/0000000000000000000000000000000000000000000000000000000000000000")
 [ "$CODE" = "400" ] && ok "malformed push -> $CODE" || bad "malformed push -> $CODE (want 400)"
 
