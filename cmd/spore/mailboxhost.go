@@ -486,9 +486,9 @@ func handleUserProfile(w http.ResponseWriter, r *http.Request, dir string) {
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "profile.json"))
 	card := struct {
-		Name     string `json:"name"`
-		Tagline  string `json:"tagline"`
-		Links    []struct {
+		Name    string `json:"name"`
+		Tagline string `json:"tagline"`
+		Links   []struct {
 			Label string `json:"label"`
 			URL   string `json:"url"`
 		} `json:"links"`
@@ -548,9 +548,9 @@ func handleUserProfile(w http.ResponseWriter, r *http.Request, dir string) {
 }
 
 func renderProfile(w http.ResponseWriter, card struct {
-	Name     string `json:"name"`
-	Tagline  string `json:"tagline"`
-	Links    []struct {
+	Name    string `json:"name"`
+	Tagline string `json:"tagline"`
+	Links   []struct {
 		Label string `json:"label"`
 		URL   string `json:"url"`
 	} `json:"links"`
@@ -619,7 +619,7 @@ func renderProfile(w http.ResponseWriter, card struct {
   %s
   <div class="note">Scan the QR to add and message this person privately — end-to-end encrypted, and any payment rides the same atomic transaction. Hosted mailboxes hold only TTL-bound ciphertext; no server ever holds the keys.</div>
 </div></body></html>`,
-		esc(card.Name), esc(card.Tagline), esc(card.Name), linksHTML, assuranceHTML,
+		esc(card.Name), esc(card.Name), esc(card.Tagline), esc(card.Name), linksHTML, assuranceHTML,
 		esc(shortAddr), esc(shortPinned(pinned)), payNote)
 }
 
