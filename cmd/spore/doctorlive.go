@@ -46,6 +46,7 @@ import (
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
+	"github.com/liqdmetal/spore/internal/relay"
 	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/store"
 )
@@ -54,6 +55,7 @@ import (
 type doctorLiveOpts struct {
 	Store    string // mailbox base URL, e.g. https://host/u/alice ("" = skip)
 	StoreTok string
+	Relay    string // anonymous relay hop base URL for body writes ("" = write straight to Store)
 	RPC      string // wallet RPC endpoint, e.g. http://127.0.0.1:20211/json_rpc ("" = skip)
 	RPCLogin string // wallet RPC basic auth user:pass
 	Timeout  time.Duration
@@ -317,17 +319,32 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 		return out
 	}
 	{
-		st, err := store.NewHTTPStoreWithToken(o.Store, o.StoreTok)
+		inner, err := store.NewHTTPStoreWithToken(o.Store, o.StoreTok)
 		if err != nil {
 			out = append(out, doctorCheck{Name: "mailbox-put", OK: false, Note: fmt.Sprintf("client: %v", err)})
 			return out
+		}
+		// A relay hop in front of the mailbox is a different write path (and a
+		// different failure mode: the relay must have the destination
+		// allowlisted, and it authenticates the last hop itself). Probe what
+		// the caller actually configured.
+		var st store.Store = inner
+		path := "direct"
+		if o.Relay != "" {
+			rs, err := relay.NewRelayStore(o.Relay, o.Store, inner)
+			if err != nil {
+				out = append(out, doctorCheck{Name: "mailbox-put", OK: false, Note: fmt.Sprintf("-relay: %v", err)})
+				return out
+			}
+			st = rs
+			path = "via relay " + o.Relay
 		}
 		body := []byte("spore doctor live probe " + hex.EncodeToString(randBytes(8)))
 		cid := crypto.CID(body)
 		deadline := time.Now().Add(time.Minute)
 		if err := st.Put(cid, body, deadline); err != nil {
 			out = append(out, doctorCheck{Name: "mailbox-put", OK: false,
-				Note: fmt.Sprintf("PUT %s: %v (check the store URL and -store-token)", o.Store, err)})
+				Note: fmt.Sprintf("PUT %s (%s): %v (check the store URL, -store-token, and — for -relay — the relay's -allow-dest list)", o.Store, path, err)})
 			return out
 		}
 		got, err := st.Get(cid)
@@ -340,14 +357,23 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 				Note: fmt.Sprintf("body changed: got %d bytes, want %d", len(got), len(body))})
 			return out
 		}
-		// Clean up so the probe does not linger in the operator's store.
+		// Clean up so the probe does not linger in the operator's store. A
+		// sender shipping through a relay holds no mailbox token, so it cannot
+		// remove the mailbox's copy at all — say that instead of reporting a
+		// failure the caller has no way to fix. The copy is TTL-bound (the
+		// probe asks for one minute) and belongs to the recipient to reap.
+		if o.StoreTok == "" {
+			out = append(out, doctorCheck{Name: "mailbox-put", OK: true,
+				Note: fmt.Sprintf("PUT/GET round-trip clean against %s (%s); DELETE skipped — no -store-token, so the mailbox's copy is the recipient's to reap at the deadline", o.Store, path)})
+			return out
+		}
 		if err := st.Delete(cid); err != nil {
 			out = append(out, doctorCheck{Name: "mailbox-put", OK: false,
 				Note: fmt.Sprintf("DELETE after GET: %v (probe left behind)", err)})
 			return out
 		}
 		out = append(out, doctorCheck{Name: "mailbox-put", OK: true,
-			Note: fmt.Sprintf("PUT/GET/DELETE round-trip clean against %s", o.Store)})
+			Note: fmt.Sprintf("PUT/GET/DELETE round-trip clean against %s (%s)", o.Store, path)})
 	}
 
 	return out

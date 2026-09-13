@@ -56,6 +56,12 @@ For any messaging mode you need:
    only encrypted, TTL-bound bodies; new sends do not use the historical
    `spore-peer` one-shot transport.
 
+   Sending to *someone else's* hosted mailbox needs none of their credentials:
+   add `-relay https://relay.<their-host>` and the body travels through that
+   anonymous hop, which authenticates the final leg itself and makes the mailbox
+   see the relay's IP rather than yours. Your own inbox is still read with
+   `-store … -store-token <your token>`. See `docs/MODEL_B_RUNBOOK.md` §2b.
+
 ## 3. Quick start: short messages (whispers)
 
 A new whisper is a real DERO transaction whose payload carries only an opaque

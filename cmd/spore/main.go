@@ -108,6 +108,8 @@ func main() {
 		creditcmd(os.Args[2:])
 	case "sub":
 		subcmd(os.Args[2:])
+	case "settle":
+		settlecmd(os.Args[2:])
 	case "init":
 		initcmd(os.Args[2:])
 	case "prekeybatch":
@@ -434,6 +436,7 @@ func webchat(args []string) {
 	// the user's own. Disabled unless -e2-dir is given.
 	e2dir := fs.String("e2-dir", "", "spore E2 state dir (identity.key, spk.key, state.key, state/, opk-pool.json, mail.json — see `spore init -dir`): enables /e2/send + /e2/recv (forward-private browser messaging)")
 	storeURL := fs.String("store", "", "body store URL for E2 bodies (your mailbox)")
+	relayURL := fs.String("relay", "", "anonymous relay hop for E2 body WRITES (e.g. https://relay.example.org): the mailbox sees the relay's IP and the browser session needs no mailbox token")
 	ringSize := fs.Uint64("ringsize", dero.DefaultSporeRingSize, "DERO E2 ring size: 8 or 16 (default 16)")
 	_ = fs.Parse(args)
 
@@ -475,7 +478,7 @@ func webchat(args []string) {
 		if err := dero.ValidateSporeRingSize(*ringSize); err != nil {
 			log.Fatalf("web: %v", err)
 		}
-		loaded, err := newWebE2(*e2dir, *storeURL, "", *ringSize)
+		loaded, err := newWebE2(*e2dir, *storeURL, "", *relayURL, *ringSize)
 		if err != nil {
 			log.Fatalf("web: e2: %v", err)
 		}

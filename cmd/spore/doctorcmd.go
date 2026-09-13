@@ -115,6 +115,7 @@ func doctorcmd(args []string) {
 	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet, wallet receive-readiness)")
 	storeURL := fs.String("store", "", "with -live: mailbox base URL (https://host/u/<name>) for a real store round-trip")
 	storeTok := fs.String("store-token", "", "with -live: bearer token for -store")
+	relayHop := fs.String("relay", "", "with -live: anonymous relay hop base URL (e.g. https://relay.example.org) — probes body writes through the relay instead of straight to -store")
 	addChainFlags(fs) // optional -chain/-rpc probe (same flags as `spore status`)
 	_ = fs.Parse(args)
 
@@ -141,6 +142,7 @@ func doctorcmd(args []string) {
 		report(runLiveDoctorChecks(doctorLiveOpts{
 			Store:    *storeURL,
 			StoreTok: *storeTok,
+			Relay:    *relayHop,
 			RPC:      fs.Lookup("rpc").Value.String(),
 			RPCLogin: fs.Lookup("rpc-login").Value.String(),
 			Timeout:  *timeout,

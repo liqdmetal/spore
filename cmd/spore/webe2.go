@@ -49,7 +49,7 @@ type webE2 struct {
 	seen       map[string]bool // delivered identity keys, this process
 }
 
-func newWebE2(dir, storeURL, storeTok string, ringsize ...uint64) (*webE2, error) {
+func newWebE2(dir, storeURL, storeTok, relayBase string, ringsize ...uint64) (*webE2, error) {
 	if dir == "" {
 		return nil, errors.New("-e2-dir is empty")
 	}
@@ -87,7 +87,7 @@ func newWebE2(dir, storeURL, storeTok string, ringsize ...uint64) (*webE2, error
 			return nil, fmt.Errorf("maildb: %w", err)
 		}
 	}
-	st, err := e2Store(storeURL, storeTok, "")
+	st, err := e2Store(storeURL, storeTok, "", relayBase)
 	if err != nil {
 		return nil, err
 	}

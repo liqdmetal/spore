@@ -42,7 +42,7 @@ func TestWebE2RequiresFullKit(t *testing.T) {
 	dir := t.TempDir()
 	// A directory with one key but not the rest.
 	writePrivate(filepath.Join(dir, "identity.key"), make([]byte, 32))
-	if _, err := newWebE2(dir, "http://127.0.0.1:1", ""); err == nil {
+	if _, err := newWebE2(dir, "http://127.0.0.1:1", "", ""); err == nil {
 		t.Fatal("newWebE2 accepted a partial kit")
 	}
 }
@@ -52,7 +52,7 @@ func TestWebE2RequiresFullKit(t *testing.T) {
 func TestWebE2LoadsRealKit(t *testing.T) {
 	dir := t.TempDir()
 	initcmd([]string{"-dir", dir})
-	e, err := newWebE2(dir, "http://127.0.0.1:1", "")
+	e, err := newWebE2(dir, "http://127.0.0.1:1", "", "")
 	if err != nil {
 		t.Fatalf("newWebE2 on a real kit: %v", err)
 	}
@@ -65,11 +65,11 @@ func TestWebE2LoadsRealKit(t *testing.T) {
 	if e.ringSize != 16 {
 		t.Fatalf("web E2 default ring = %d, want 16", e.ringSize)
 	}
-	e8, err := newWebE2(dir, "http://127.0.0.1:1", "", 8)
+	e8, err := newWebE2(dir, "http://127.0.0.1:1", "", "", 8)
 	if err != nil || e8.ringSize != 8 {
 		t.Fatalf("web E2 ring 8: endpoint=%v err=%v", e8, err)
 	}
-	if _, err := newWebE2(dir, "http://127.0.0.1:1", "", 32); err == nil {
+	if _, err := newWebE2(dir, "http://127.0.0.1:1", "", "", 32); err == nil {
 		t.Fatal("web E2 accepted unsupported ring 32")
 	}
 }
