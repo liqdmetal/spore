@@ -533,7 +533,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	// omitted), or a DeroNS name via -daemon. Resolved here so every send
 	// path (send-e2, forward-e2, compose/flush, invoice, pay) gets it once.
 	resolvedAddr, resolvedPinned, err := resolveTo(context.Background(), to,
-		fs.Lookup("maildb").Value.String(), fs.Lookup("daemon").Value.String())
+		flagValueOr(fs, "maildb", ""), flagValueOr(fs, "daemon", ""))
 	if err != nil {
 		return err
 	}
@@ -552,7 +552,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if len(plaintext) == 0 {
 		return errors.New("send-e2: empty plaintext")
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""))
+	st, err := e2Store(flagValueOr(fs, "store", ""), flagValueOr(fs, "store-token", ""), flagValueOr(fs, "store-key", ""), flagValueOr(fs, "relay", ""))
 	if err != nil {
 		return err
 	}
@@ -561,7 +561,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		return err
 	}
 	var b *ratchet.SPKBundle
-	contact, haveContact := contactForTo(fs.Lookup("maildb").Value.String(), to)
+	contact, haveContact := contactForTo(flagValueOr(fs, "maildb", ""), to)
 	b, err = pickBundle(context.Background(), bundle, bundleURL, bundleToken, contact, haveContact,
 		fetchBundle, func(m string) { fmt.Fprintln(os.Stderr, "send-e2:", m) })
 	if err != nil {
@@ -574,8 +574,8 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if len(sig) != 32 {
 		return errors.New("-pinned-sig must be 32-byte hex")
 	}
-	stateDir := fs.Lookup("state-dir").Value.String()
-	stateKeyFile := fs.Lookup("state-key").Value.String()
+	stateDir := flagValueOr(fs, "state-dir", "")
+	stateKeyFile := flagValueOr(fs, "state-key", "")
 	if stateDir == "" || stateKeyFile == "" {
 		return errors.New("E2 requires -state-dir and -state-key")
 	}
@@ -583,7 +583,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err != nil {
 		return err
 	}
-	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
+	sessionTTL, err := time.ParseDuration(flagValueOr(fs, "session-ttl", ""))
 	if err != nil {
 		return err
 	}
@@ -596,8 +596,8 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	// Secure wire: envelope v2 wrapping enabled when -key and -peer-pub
 	// are supplied (must be set after Parse so config flags are resolved).
 	var sw *ratchetwire.SecureWire
-	if keyHex := fs.Lookup("key").Value.String(); keyHex != "" {
-		peerHex := fs.Lookup("peer-pub").Value.String()
+	if keyHex := flagValueOr(fs, "key", ""); keyHex != "" {
+		peerHex := flagValueOr(fs, "peer-pub", "")
 		if peerHex == "" {
 			check(errors.New("-peer-pub is required when -key is set"))
 		}
@@ -671,8 +671,8 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 			fmt.Println()
 			return nil
 		}
-		if !carrierCarriesValue(fs.Lookup("chain").Value.String()) {
-			return fmt.Errorf("-amount %s%s is not supported on the %s carrier (value-carrying: dero|evm); refusing to send an unpaid message as if paid", formatAmount(asset, atomic), asset, fs.Lookup("chain").Value.String())
+		if !carrierCarriesValue(flagValueOr(fs, "chain", "")) {
+			return fmt.Errorf("-amount %s%s is not supported on the %s carrier (value-carrying: dero|evm); refusing to send an unpaid message as if paid", formatAmount(asset, atomic), asset, flagValueOr(fs, "chain", ""))
 		}
 		if atomic < hint {
 			return fmt.Errorf("-amount rounds to %d atomic units, below the 1-unit postage floor", atomic)

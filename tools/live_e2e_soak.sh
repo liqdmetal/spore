@@ -9,6 +9,7 @@
 # wrong pinned sig, tampered invite, malformed push, and the host rate limit.
 set -u
 B="${1:?spore binary}"; RPC="${2:?wallet rpc}"; LOGIN="${3:?rpc login}"; DEMOTOK="${4:?demo token}"
+RECV_RPC="${5:-${2}}"
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "  ✅ $1"; }
 bad() { FAIL=$((FAIL+1)); echo "  ❌ $1"; }
@@ -22,7 +23,7 @@ if [ ! -s /tmp/soak-a/state.key ]; then
   openssl rand -hex 32 > /tmp/soak-a/state.key
 fi
 ADDR=$(curl -s -u "$LOGIN" --max-time 20 -X POST -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"a","method":"getaddress","params":null}' "$RPC" \
+  -d '{"jsonrpc":"2.0","id":"a","method":"getaddress","params":null}' "$RECV_RPC" \
   | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('address',''))" 2>/dev/null)
 [ -z "$ADDR" ] && ADDR=dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyqqhl3sy4
 echo "wallet addr: $ADDR"
@@ -60,7 +61,7 @@ echo "=== 2. B decrypts locally (pointer seen, body fetched, ratchet opens) ==="
 # recv-e2 is a watch loop (no -once): run it in the background and wait for
 # the mined pointer + decrypt, up to 150s.
 : > /tmp/soak-recv.log
-timeout 150 $B msg recv-e2 -chain dero -rpc "$RPC" -rpc-login "$LOGIN" \
+timeout 150 $B msg recv-e2 -chain dero -rpc "$RECV_RPC" -rpc-login "$LOGIN" \
   -store https://mail.sporem3.io/u/demo -store-token "$DEMOTOK" \
   -identity /tmp/qr-id/identity.key -spk /tmp/qr-id/spk.key -opk-pool /tmp/qr-id/opk-pool.json \
   -state-dir /tmp/soak-b-state -state-key /tmp/soak-a/state.key > /tmp/soak-recv.log 2>&1 &
