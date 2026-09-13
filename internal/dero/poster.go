@@ -453,3 +453,35 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 	}()
 	return ch, errc
 }
+
+// InvokeSC calls a DERO smart contract via the wallet RPC's sc_invoke method.
+// scid is the contract ID (64-char hex), rpcArgs is the typed argument list,
+// deroDeposit is native DERO to send with the call, tokenDeposit is SC tokens to deposit,
+// ringsize is the anonymity set, fees is explicit fees (0 = auto).
+func (c *Client) InvokeSC(ctx context.Context, scid string, rpcArgs anchor.Arguments, deroDeposit, tokenDeposit, ringsize, fees uint64) (string, error) {
+	params := struct {
+		SCID            string          `json:"scid"`
+		SC_RPC          anchor.Arguments `json:"sc_rpc"`
+		SC_DERO_Deposit uint64          `json:"sc_dero_deposit"`
+		SC_TOKEN_Deposit uint64         `json:"sc_token_deposit"`
+		Ringsize        uint64          `json:"ringsize"`
+		Fees            uint64          `json:"fees"`
+	}{
+		SCID:             scid,
+		SC_RPC:           rpcArgs,
+		SC_DERO_Deposit:  deroDeposit,
+		SC_TOKEN_Deposit: tokenDeposit,
+		Ringsize:         ringsize,
+		Fees:             fees,
+	}
+	var result struct {
+		TXID string `json:"txid"`
+	}
+	if err := c.call(ctx, "sc_invoke", params, &result); err != nil {
+		return "", err
+	}
+	if result.TXID == "" {
+		return "", errors.New("dero: sc_invoke returned empty txid")
+	}
+	return result.TXID, nil
+}

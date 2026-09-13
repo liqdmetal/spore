@@ -314,5 +314,5 @@ func flushOne(e spoolEntry) error {
 	if e.DeliveryGuarant {
 		_ = fs.Set("delivery-guaranteed", "true")
 	}
-	return sendE2Core(fs, e.To, e.Identity, e.Bundle, e.BundleURL, e.BundleToken, e.Pinned, e.MsgFile, e.Amount, time.Duration(e.TTLSeconds)*time.Second)
+	return sendE2Core(fs, e.To, e.Identity, e.Bundle, e.BundleURL, e.BundleToken, e.Pinned, e.MsgFile, e.Amount, time.Duration(e.TTLSeconds)*time.Second, "", "", "", 0)
 }

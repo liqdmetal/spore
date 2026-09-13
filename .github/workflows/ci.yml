@@ -67,6 +67,63 @@ jobs:
       - name: Fuzz DERO anchor arguments
         run: go test ./internal/anchor -run=^$ -fuzz=FuzzFromArguments -fuzztime=15s
 
+
+  windows-release:
+    name: Windows release binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build release binary
+        run: go build -ldflags="-s -w" -o dist/spore.exe ./cmd/spore
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spore-windows-amd64
+          path: dist/spore.exe
+          retention-days: 7
+
+  linux-release:
+    name: Linux release binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build release binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/spore ./cmd/spore
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spore-linux-amd64
+          path: dist/spore
+          retention-days: 7
+
+  release-manifest:
+    name: Release manifest
+    needs: [windows-release, linux-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: spore-*
+          path: dist/
+      - name: Generate SHA256 manifest
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spore-SHA256SUMS
+          path: dist/SHA256SUMS
+          retention-days: 7
   gofmt:
     name: gofmt (blocking gate)
     runs-on: ubuntu-latest

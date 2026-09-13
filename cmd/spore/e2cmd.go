@@ -27,6 +27,7 @@ import (
 	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
+	"github.com/liqdmetal/spore/internal/sap"
 	"github.com/liqdmetal/spore/internal/store"
 )
 
@@ -437,6 +438,11 @@ func msgSendE2(args []string) {
 	amount := fs.String("amount", "", "pay-with-message: value to attach to the SAME tx as the pointer, in whole units with asset suffix (e.g. 5.5dero, 0.0001evm). DERO + EVM-calldata only today; the money and the message are atomic — both land or neither does")
 	msgFile := fs.String("msg-file", "", "file containing plaintext (use '-' or omit for stdin; never pass plaintext as an argv flag — argv is visible to shell history, ps, and crash reports)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	// Escrow flags: when set, the value rides an HTLC contract instead of direct transfer
+	escrow := fs.String("escrow", "", "escrow mode: htlc (hash timelock). If set, -amount is locked in an HTLC contract and -escrow-hash, -escrow-recipient, -escrow-expiry become required")
+	escrowHash := fs.String("escrow-hash", "", "32-byte hex preimage hash for HTLC escrow (SHA256(preimage))")
+	escrowRecipient := fs.String("escrow-recipient", "", "DERO address that can claim the HTLC with the preimage")
+	escrowExpiry := fs.Uint64("escrow-expiry", 0, "HTLC expiry block height (absolute); funds refundable to sender after this height")
 	// Secure wire flags: envelope v2 wrapping (accessed via fs.Lookup in sendE2Core)
 	_ = fs.String("key", "", "sender identity private key hex for envelope v2 (overrides -identity if set)")
 	_ = fs.String("peer-pub", "", "recipient identity public key hex for envelope v2")
@@ -454,7 +460,22 @@ func msgSendE2(args []string) {
 	if *bundle != "" && *bundleURL != "" {
 		check(errors.New("send-e2: -bundle and -bundle-url are mutually exclusive (omit both to use a contact's invite)"))
 	}
-	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *amount, *ttl); err != nil {
+	// Escrow validation
+	if *escrow != "" {
+		if *escrow != "htlc" {
+			check(errors.New("-escrow only supports 'htlc' currently"))
+		}
+		if *amount == "" {
+			check(errors.New("-escrow requires -amount"))
+		}
+		if *escrowHash == "" || *escrowRecipient == "" || *escrowExpiry == 0 {
+			check(errors.New("-escrow=htlc requires -escrow-hash (32-byte hex), -escrow-recipient (DERO address), and -escrow-expiry (block height)"))
+		}
+		if fs.Lookup("chain").Value.String() != "dero" {
+			check(errors.New("-escrow only works with -chain dero (DERO smart contracts only)"))
+		}
+	}
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *msgFile, *amount, *ttl, *escrow, *escrowHash, *escrowRecipient, *escrowExpiry); err != nil {
 		check(err)
 	}
 }
@@ -463,8 +484,9 @@ func msgSendE2(args []string) {
 // flush. fs must be a parsed e2Common FlagSet. Errors are returned (caller
 // decides fatal vs spool-retry) and the plaintext never touches argv.
 // amount is the optional pay-with-message value ("5.5dero"); empty = postage
-// only.
-func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile, amount string, ttl time.Duration) error {
+// only. escrow mode ("htlc") and its params route value through a smart
+// contract instead of direct transfer.
+func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, pinned, msgFile, amount string, ttl time.Duration, escrow, escrowHash, escrowRecipient string, escrowExpiry uint64) error {
 	// Name resolution: -to accepts a raw address, a maildb contact NICKNAME
 	// (which also supplies that contact's pinned sig, so -pinned-sig can be
 	// omitted), or a DeroNS name via -daemon. Resolved here so every send
@@ -573,6 +595,41 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		if aerr != nil {
 			return aerr
 		}
+		if escrow == "htlc" {
+			// HTLC escrow: send pointer with postage, value via HTLC contract
+			d, ok := c.Chain.(*dero.Backend)
+			if !ok {
+				return errors.New("escrow requires dero carrier (chain=dero)")
+			}
+			client := d.Client()
+			ctx := context.Background()
+			
+			hashBytes, err := hex.DecodeString(escrowHash)
+			if err != nil {
+				return fmt.Errorf("-escrow-hash must be 32-byte hex: %w", err)
+			}
+			if len(hashBytes) != 32 {
+				return errors.New("-escrow-hash must be 32 bytes (64 hex chars)")
+			}
+			var hash [32]byte
+			copy(hash[:], hashBytes)
+			
+			txid, err := sap.HTLCFund(ctx, client, hash, escrowRecipient, escrowExpiry, atomic, 16)
+			if err != nil {
+				return fmt.Errorf("HTLC fund failed: %w", err)
+			}
+			fmt.Printf(" escrow HTLC funded on %s", txid)
+			r, err := c.PostPointer(context.Background(), to, raw, 1)
+			if err != nil {
+				return err
+			}
+			fmt.Printf(" sent-e2 txid %s pointer %x", r.TxID, raw)
+			if asset, atomic, aerr := parseAmountFlag(amount); aerr == nil {
+				fmt.Printf(" ESCROWED %s %s", formatAmount(asset, atomic), strings.ToUpper(asset))
+			}
+			fmt.Println()
+			return nil
+		}
 		if !carrierCarriesValue(fs.Lookup("chain").Value.String()) {
 			return fmt.Errorf("-amount %s%s is not supported on the %s carrier (value-carrying: dero|evm); refusing to send an unpaid message as if paid", formatAmount(asset, atomic), asset, fs.Lookup("chain").Value.String())
 		}
@@ -624,7 +681,7 @@ func msgForwardE2(args []string) {
 	if (*bundle == "") == (*bundleURL == "") {
 		check(errors.New("forward-e2 requires exactly one of -bundle or -bundle-url"))
 	}
-	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *file, *amount, *ttl); err != nil {
+	if err := sendE2Core(fs, *to, *identity, *bundle, *bundleURL, *bundleToken, *pinned, *file, *amount, *ttl, "", "", "", 0); err != nil {
 		check(err)
 	}
 }

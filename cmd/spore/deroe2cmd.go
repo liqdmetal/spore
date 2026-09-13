@@ -156,7 +156,7 @@ func sendDeroE2(args []string, name string, longBody bool) {
 	}
 	o, err := deroE2SendOptionsFrom(fs, longBody)
 	check(err)
-	if err := sendE2Core(fs, o.to, o.identity, o.bundle, o.bundleURL, o.bundleToken, o.pinnedSig, o.msgFile, o.amount, fsDuration(fs, "ttl")); err != nil {
+	if err := sendE2Core(fs, o.to, o.identity, o.bundle, o.bundleURL, o.bundleToken, o.pinnedSig, o.msgFile, o.amount, fsDuration(fs, "ttl"), "", "", "", 0); err != nil {
 		check(err)
 	}
 }

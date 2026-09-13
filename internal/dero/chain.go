@@ -49,6 +49,7 @@ func (b *Backend) SetSporeRingSize(ringsize uint64) error {
 func (b *Backend) Name() string                                { return "dero" }
 func (b *Backend) Address(ctx context.Context) (string, error) { return b.client.GetAddress(ctx) }
 func (b *Backend) Height(ctx context.Context) (uint64, error)  { return b.client.GetHeight(ctx) }
+func (b *Backend) Client() *Client                             { return b.client }
 
 func (b *Backend) RingSize() uint64 { return b.ringSize }
 
