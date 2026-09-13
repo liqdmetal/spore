@@ -110,6 +110,8 @@ func main() {
 		subcmd(os.Args[2:])
 	case "settle":
 		settlecmd(os.Args[2:])
+	case "bill":
+		billcmd(os.Args[2:])
 	case "init":
 		initcmd(os.Args[2:])
 	case "prekeybatch":
