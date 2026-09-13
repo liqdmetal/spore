@@ -24,14 +24,19 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/invite"
 	"github.com/liqdmetal/spore/internal/ratchet"
+	"github.com/skip2/go-qrcode"
 )
 
 func invitecmd(args []string) {
@@ -42,6 +47,8 @@ func invitecmd(args []string) {
 	switch args[0] {
 	case "issue":
 		inviteIssue(args[1:])
+	case "qr":
+		inviteQR(args[1:])
 	case "verify":
 		inviteVerify(args[1:])
 	case "-h", "--help":
@@ -118,28 +125,7 @@ func inviteIssue(args []string) {
 	sk, err := readHexFile(*spk, 32)
 	check(err)
 
-	var opkPtr *[32]byte
-	if *opkFile != "" {
-		raw, err := readHexFile(*opkFile, 32)
-		check(err)
-		opkPtr = &[32]byte{}
-		copy(opkPtr[:], raw)
-	}
-
-	bundle, err := ratchet.BuildBundle(ik, sk, uint32(*spkID), opkPtr, uint32(*opkID))
-	check(err)
-
-	inv, err := invite.New(ik, invite.Options{
-		Name:      *name,
-		Chain:     *chain,
-		Address:   *address,
-		Bundle:    *bundle,
-		PrekeyURL: *mailbox,
-		StoreURL:  *storeURL,
-		Note:      *note,
-		TTL:       *ttl,
-		AllowOPK:  opkPtr != nil,
-	})
+	inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, *note, *spkID, *ttl, *opkFile, *opkID, *allowOPK)
 	check(err)
 
 	encoded, err := inv.Encode()
@@ -156,7 +142,7 @@ func inviteIssue(args []string) {
 	if inv.ExpiresAt != "" {
 		fmt.Printf("expires      %s\n", inv.ExpiresAt)
 	}
-	if opkPtr != nil {
+	if inv.Bundle.OPKPub != nil {
 		fmt.Println()
 		fmt.Println("WARNING: this invite embeds a ONE-TIME prekey. Send it to exactly one")
 		fmt.Println("         person. Reusing it hands the same one-time key to several")
@@ -169,6 +155,128 @@ func inviteIssue(args []string) {
 	fmt.Println()
 	fmt.Println("they add you with:")
 	fmt.Printf("  spore msg mail add -invite '<the spore-invite-v1:... line>'\n")
+}
+
+// buildInvite constructs and signs the invite object from the shared
+// issue/QR flag values. The one-time-prekey guard lives here so both commands
+// inherit the single-recipient rule.
+func buildInvite(ik, sk []byte, address, chain, name, mailbox, storeURL, note string, spkID uint, ttl time.Duration, opkFile string, opkID uint, allowOPK bool) (*invite.Invite, error) {
+	var opkPtr *[32]byte
+	if opkFile != "" {
+		raw, err := readHexFile(opkFile, 32)
+		if err != nil {
+			return nil, err
+		}
+		opkPtr = &[32]byte{}
+		copy(opkPtr[:], raw)
+	}
+	bundle, err := ratchet.BuildBundle(ik, sk, uint32(spkID), opkPtr, uint32(opkID))
+	if err != nil {
+		return nil, err
+	}
+	return invite.New(ik, invite.Options{
+		Name:      name,
+		Chain:     chain,
+		Address:   address,
+		Bundle:    *bundle,
+		PrekeyURL: mailbox,
+		StoreURL:  storeURL,
+		Note:      note,
+		TTL:       ttl,
+		AllowOPK:  opkPtr != nil,
+	})
+}
+
+// inviteQR renders an invite (an existing -uri, or one built from the issue
+// flags) as a QR PNG, optionally carrying a pay-me -amount, and optionally
+// uploads it to the user's hosted mailbox profile (/u/<name>/qr) so the
+// public profile page shows it. The QR is public by design: the invite holds
+// public keys only, and no private material ever reaches the mailbox.
+func inviteQR(args []string) {
+	fs := flag.NewFlagSet("invite qr", flag.ExitOnError)
+	uri := fs.String("uri", "", "existing spore-invite-v1 URI (mutually exclusive with the issue flags below)")
+	identity := fs.String("identity", "", "identity key file (hex, 32 bytes)")
+	spk := fs.String("spk", "", "signed-prekey private key file (hex, 32 bytes)")
+	address := fs.String("address", "", "YOUR chain address (see spore status)")
+	name := fs.String("name", "", "how you want to be known")
+	chain := fs.String("chain", "dero", "chain backend")
+	spkID := fs.Uint("spk-id", 1, "signed-prekey id matching your published bundle")
+	mailbox := fs.String("mailbox", "", "optional prekey URL senders may fetch a fresh bundle from")
+	storeURL := fs.String("store", "", "optional body store URL")
+	note := fs.String("note", "", "optional note carried in the invite")
+	ttl := fs.Duration("ttl", 0, "optional validity window (0 = no expiry)")
+	amount := fs.String("amount", "", "optional pay-me amount appended to the URI (?amount=) so a scan pre-fills the payment")
+	o := fs.String("o", "qr.png", "output PNG path")
+	put := fs.String("put", "", "mailbox base URL to upload the QR to, e.g. https://mail.sporem3.io/u/<name> (PUT /u/<name>/qr)")
+	storeTok := fs.String("store-token", "", "bearer token for -put (your mailbox token)")
+	_ = fs.Parse(args)
+
+	if *uri == "" && (*identity == "" || *spk == "" || *address == "") {
+		fmt.Fprintln(os.Stderr, "invite qr: give -uri, or the issue flags (-identity -spk -address) to build and sign a fresh invite")
+		os.Exit(2)
+	}
+	encoded := *uri
+	if encoded == "" {
+		if err := loadConfigForFlags(fs); err != nil {
+			check(err)
+		}
+		ik, err := readHexFile(*identity, 32)
+		check(err)
+		sk, err := readHexFile(*spk, 32)
+		check(err)
+		inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, *note, *spkID, *ttl, "", 1, false)
+		check(err)
+		encoded, err = inv.Encode()
+		check(err)
+		if *name == "" {
+			*name = inv.Name
+		}
+	}
+	payload := encoded
+	if *amount != "" {
+		payload = encoded + "?amount=" + *amount
+	}
+	if err := qrcode.WriteFile(payload, qrcode.Medium, 512, *o); err != nil {
+		check(err)
+	}
+	fmt.Printf("invite URI   %s\n", payload)
+	fmt.Printf("qr saved     %s\n", *o)
+	if *put != "" {
+		if *storeTok == "" {
+			fmt.Fprintln(os.Stderr, "invite qr: -put requires -store-token (your mailbox token — the QR upload is private, the QR itself is public)")
+			os.Exit(2)
+		}
+		base := strings.TrimRight(*put, "/")
+		qrURL := base + "/qr"
+		data, err := os.ReadFile(*o)
+		check(err)
+		req, err := http.NewRequest(http.MethodPut, qrURL, bytes.NewReader(data))
+		check(err)
+		req.Header.Set("Authorization", "Bearer "+*storeTok)
+		req.Header.Set("Content-Type", "image/png")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		check(err)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			check(fmt.Errorf("upload %s: %s %s", qrURL, resp.Status, bytes.TrimSpace(msg)))
+		}
+		fmt.Printf("qr uploaded  %s\n", qrURL)
+	}
+	if *name != "" {
+		fmt.Printf("profile      %s/\n", baseOr(*put, *mailbox))
+	}
+}
+
+// baseOr returns the first non-empty string, else "". Keeps the QR summary
+// line honest when the caller gave no mailbox/put URL.
+func baseOr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return strings.TrimRight(v, "/")
+		}
+	}
+	return ""
 }
 
 func inviteVerify(args []string) {
