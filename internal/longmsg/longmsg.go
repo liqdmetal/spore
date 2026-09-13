@@ -93,7 +93,11 @@ func unpadBody(padded []byte) ([]byte, error) {
 	for i := 0; i < 8; i++ {
 		n |= int(padded[i]) << (8 * i)
 	}
-	if n < 0 || 8+n > len(padded) {
+	// Compare without computing 8+n: n near MaxInt64 makes 8+n overflow to a
+	// negative value, which sailed past the old `8+n > len` guard and let a
+	// hostile body panic the receiver with a negative slice bound (found by
+	// FuzzUnpadBody). n <= len-8 implies 8+n <= len, no overflow possible.
+	if n < 0 || n > len(padded)-8 {
 		return nil, errors.New("longmsg: bad padding length")
 	}
 	return padded[8 : 8+n], nil
