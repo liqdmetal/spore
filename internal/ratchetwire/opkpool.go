@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/liqdmetal/spore/internal/bounds"
 	"github.com/liqdmetal/spore/internal/ratchet"
 )
 
@@ -37,7 +38,7 @@ func NewPersistentOPKPool(path string) (*OPKPool, error) {
 		return nil, errors.New("ratchetwire: empty OPK pool path")
 	}
 	p := &OPKPool{items: make(map[uint32][32]byte), path: path}
-	data, err := os.ReadFile(path)
+	data, err := bounds.ReadBound(path, 64<<10) // 64 KiB OPK pool cap
 	if os.IsNotExist(err) {
 		return p, nil
 	}

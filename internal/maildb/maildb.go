@@ -3,6 +3,7 @@ package maildb
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/bounds"
 	"github.com/liqdmetal/spore/internal/ratchet"
 )
 
@@ -74,7 +76,7 @@ type MessageMeta struct {
 	Snippet   string `json:"snippet"`
 }
 
-// MailDB is a thread-safe, JSON-file-backed mail store.
+// MailDB is a thread-safe, JSON-file-backed mail store with an optional tokenized inverted index.
 type MailDB struct {
 	mu        sync.RWMutex
 	path      string
@@ -82,23 +84,24 @@ type MailDB struct {
 	threads   map[string]Thread
 	messages  []MessageMeta
 	allowOnly bool // allowlist-only mode: only known (non-blocked) contacts can message
+	idx       *InvertedIndex
 }
 
 // Open loads (or creates) the mail store at path.
 func Open(path string) (*MailDB, error) {
-	m := &MailDB{path: path, contacts: map[string]Contact{}, threads: map[string]Thread{}}
+	m := &MailDB{path: path, contacts: map[string]Contact{}, threads: map[string]Thread{}, idx: NewInvertedIndex(1024)}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := bounds.ReadBound(path, 512<<10) // 512 KiB cap on mailstore load
 	if err == nil {
 		var data struct {
 			Contacts map[string]Contact `json:"contacts"`
 			Threads  map[string]Thread  `json:"threads"`
 			Messages []MessageMeta      `json:"messages"`
 		}
-		if err := json.Unmarshal(raw, &data); err != nil {
-			return nil, err
+		if err = json.Unmarshal(raw, &data); err != nil {
+			return nil, fmt.Errorf("maildb: %s is corrupt: %w", path, err)
 		}
 		if data.Contacts != nil {
 			m.contacts = data.Contacts
@@ -107,6 +110,8 @@ func Open(path string) (*MailDB, error) {
 			m.threads = data.Threads
 		}
 		m.messages = data.Messages
+	} else if os.IsNotExist(err) {
+		// non-existent store is fine — start fresh
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -238,6 +243,10 @@ func (m *MailDB) RecordMessage(sessionIDHex, peer, txid string, at time.Time, pl
 	m.messages = append(m.messages, MessageMeta{
 		TxID: txid, SessionID: sessionIDHex, Peer: peer, At: at.Unix(), Snippet: snippet,
 	})
+	// Index for tokenized search
+	if m.idx != nil {
+		m.idx.Add(txid, peer, at.Unix(), snippet)
+	}
 	return m.saveLocked()
 }
 
