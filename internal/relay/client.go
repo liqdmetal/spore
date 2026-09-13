@@ -67,5 +67,11 @@ func PullFromRelay(ctx context.Context, relayBase string, cid [32]byte) ([]byte,
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("relay pull: status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
 	}
-	return io.ReadAll(resp.Body)
+	const maxBody = 64 << 10 // 64 KiB hard cap per relay body read
+	lr := io.LimitReader(resp.Body, int64(maxBody)+1)
+	body, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, fmt.Errorf("relay pull: read: %w", err)
+	}
+	return body, nil
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/liqdmetal/spore/internal/bounds"
 )
 
 // FileStateStore persists protected ratchet sessions in one endpoint-local
@@ -78,7 +80,7 @@ func (s *FileStateStore) appendLog(id [8]byte, seq uint64, digest [32]byte) erro
 // ignored rather than treated as an error, since a torn write is expected
 // crash behavior and must never itself become a denial-of-service vector.
 func (s *FileStateStore) maxLoggedSequence(id [8]byte) (uint64, error) {
-	data, err := os.ReadFile(s.logPath(id))
+	data, err := bounds.ReadBound(s.logPath(id), 1<<16) // 64 KiB log cap
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
@@ -143,7 +145,7 @@ func (s *FileStateStore) Save(id [8]byte, state []byte) error {
 		// Recover the durable counter after a process restart. Without this,
 		// the first post-restart save reuses sequence 1 and defeats rollback
 		// detection for snapshots copied over the live file.
-		if record, err := os.ReadFile(s.path(id)); err == nil {
+		if record, err := bounds.ReadBound(s.path(id), 64<<10); err == nil { // 64 KiB session blob cap
 			storedSeq, _, err := UnprotectSession(s.protector, id, record)
 			if err != nil {
 				return err
@@ -233,7 +235,7 @@ func (s *FileStateStore) IDs() ([][8]byte, error) {
 func (s *FileStateStore) Load(id [8]byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, err := os.ReadFile(s.path(id))
+	record, err := bounds.ReadBound(s.path(id), 64<<10) // 64 KiB per-session state cap
 	if err != nil {
 		return nil, err
 	}

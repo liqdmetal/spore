@@ -59,7 +59,9 @@ func (s *Server) Handler() http.Handler {
 
 		switch r.Method {
 		case http.MethodPut:
-			body, err := io.ReadAll(r.Body)
+			const maxBody = 64 << 10 // 64 KiB hard cap per body store write
+			lr := io.LimitReader(r.Body, int64(maxBody)+1)
+			body, err := io.ReadAll(lr)
 			if err != nil {
 				http.Error(w, "read", http.StatusBadRequest)
 				return

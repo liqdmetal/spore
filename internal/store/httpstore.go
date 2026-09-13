@@ -88,7 +88,13 @@ func (s *HTTPStore) Get(cid [32]byte) ([]byte, error) {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return io.ReadAll(resp.Body)
+		const maxBody = 64 << 10 // 64 KiB hard cap per body store read
+		lr := io.LimitReader(resp.Body, int64(maxBody)+1)
+		body, err := io.ReadAll(lr)
+		if err != nil {
+			return nil, fmt.Errorf("store: get %s: read: %w", resp.Status, err)
+		}
+		return body, nil
 	case http.StatusNotFound:
 		return nil, ErrNotFound
 	case http.StatusGone:

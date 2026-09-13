@@ -66,7 +66,9 @@ func (c *Client) call(ctx context.Context, method string, params, out interface{
 		return err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	const maxBody = 64 << 10 // 64 KiB hard cap per RPC response
+	lr := io.LimitReader(resp.Body, int64(maxBody)+1)
+	raw, err := io.ReadAll(lr)
 	if err != nil {
 		return err
 	}

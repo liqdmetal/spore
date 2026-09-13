@@ -13,6 +13,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/bounds"
+
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
@@ -66,7 +68,7 @@ func LoadOrCreateDevice(dir string) (*DeviceState, error) {
 		return nil, err
 	}
 	p := filepath.Join(dir, deviceFile)
-	if b, err := os.ReadFile(p); err == nil {
+	if b, err := bounds.ReadBound(p, 1<<10); err == nil { // 1 KiB cap on device state file
 		var d DeviceState
 		if err := json.Unmarshal(b, &d); err != nil {
 			return nil, fmt.Errorf("ratchetwire: corrupt %s: %w", deviceFile, err)
@@ -113,9 +115,9 @@ type syncLedger struct {
 
 func loadLedger(dir string) (*syncLedger, error) {
 	p := filepath.Join(dir, ledgerFile)
-	b, err := os.ReadFile(p)
+	b, err := bounds.ReadBound(p, 1<<16) // 64 KiB cap on sync ledger state
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || errors.Is(err, bounds.ErrTooLarge) {
 			return &syncLedger{Sessions: map[string]SessionLedgerEntry{}}, nil
 		}
 		return nil, err

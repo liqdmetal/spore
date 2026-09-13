@@ -3,6 +3,8 @@ package store
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -103,17 +105,29 @@ func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 }
 
 func (s *DiskStore) Get(cid [32]byte) ([]byte, error) {
-	body, err := os.ReadFile(s.bodyPath(cid))
+	// Body can be arbitrarily large (whisper longmsg payloads); bound reads to prevent
+	// allocation DoS via a crafted store file. Max 4 MiB — enough for any real message
+	// while rejecting pathological inputs.
+	const maxBodyBytes = 4 << 20
+	f, err := os.Open(s.bodyPath(cid))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("diskstore: read body %x: %w", cid, err)
+	}
+	if len(raw) > maxBodyBytes {
+		return nil, fmt.Errorf("diskstore: body %x exceeds %d bytes", cid, maxBodyBytes)
+	}
 	if s.expired(cid) {
 		return nil, ErrExpired
 	}
-	return body, nil
+	return raw, nil
 }
 
 func (s *DiskStore) Delete(cid [32]byte) error {

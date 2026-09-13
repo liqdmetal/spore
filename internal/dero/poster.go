@@ -124,7 +124,9 @@ func (c *Client) call(ctx context.Context, method string, params, out interface{
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("dero: wallet RPC HTTP status %s", resp.Status)
 	}
-	raw, err := io.ReadAll(resp.Body)
+	const maxBody = 64 << 10 // 64 KiB hard cap per RPC response body
+	lr := io.LimitReader(resp.Body, int64(maxBody)+1)
+	raw, err := io.ReadAll(lr)
 	if err != nil {
 		return err
 	}
