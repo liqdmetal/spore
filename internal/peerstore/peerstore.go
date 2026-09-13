@@ -63,6 +63,14 @@ func Fetch(ctx context.Context, addr string, cid [32]byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return classify(payload, cid)
+}
+
+// classify is the pure response-dispatch: status byte, then integrity.
+// Extracted so fuzzing can drive it without sockets (audit H4 — a ciphertext
+// body may legitimately start with ASCII '4' or '5'; only the status byte
+// decides).
+func classify(payload []byte, cid [32]byte) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("peerstore: empty response frame")
 	}

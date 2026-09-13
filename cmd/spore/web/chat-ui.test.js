@@ -56,7 +56,7 @@ global.crypto = { getRandomValues: a => { for (let i = 0; i < a.length; i++) a[i
 
 // capture exported-for-test handles by appending a probe to the script
 const probe = `
-;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join, whisperSend, whisperRecv };
+;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join, whisperSend, whisperRecv, esc };
 `;
 const runner = new Function("globalThis", m[1] + probe);
 let failed = 0;
@@ -122,6 +122,24 @@ t.join("#somewhere").then(async () => {
   await t.whisperRecv();
   ok(calls.some(c => c.url.endsWith("/e2/recv")), "inbox polls /e2/recv (decrypted bodies), not /whisper/recv");
   ok(els.get("wInbox").children.length > 0, "inbox renders a delivered E2 message");
+  // XSS regression: a hostile room line or sender name must render as text,
+  // never as a live <script>/<img onerror> node (stored XSS via public rooms).
+  // esc() contract is string-level: every HTML metacharacter becomes an
+  // entity, so a hostile room line or sender name can never form a live
+  // <script>/<img onerror> node when the string lands in innerHTML.
+  const evil = '<img src=x onerror=window.__pwnd=1><script>window.__pwnd=2</script>';
+  const out = t.esc(evil);
+  if (out.indexOf("<") !== -1 || out.indexOf(">") !== -1 || out.indexOf(evil) !== -1) {
+    failed++; console.log("  FAIL: esc() left raw HTML metacharacters: " + out);
+  } else {
+    console.log("  ok: esc() neutralizes script/img injection (all metachars entity-encoded)");
+  }
+  if (t.esc("<b>x</b>") !== "&lt;b&gt;x&lt;/b&gt;") {
+    failed++; console.log("  FAIL: esc() wrong output for a sender-name injection: " + t.esc("<b>x</b>"));
+  } else {
+    console.log("  ok: esc() output exact for sender names (entity-encoded)");
+  }
+
 
   console.log(failed ? `\n${failed} check(s) FAILED` : "\nall checks passed");
   process.exit(failed ? 1 : 0);

@@ -135,7 +135,7 @@ func runLiveDoctorChecks(o doctorLiveOpts) []doctorCheck {
 		if _, err := dero.ValidateAddress(mainnetSample[:len(mainnetSample)-1] + "a"); err == nil {
 			bad = append(bad, "bad checksum")
 		}
-		if _, err := dero.ValidateAddress("deto1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq"); err == nil {
+		if _, err := dero.ValidateAddress("deto1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgfamjm8"); err == nil {
 			bad = append(bad, "wrong hrp")
 		}
 		if _, err := dero.ValidateAddress(""); err == nil {
