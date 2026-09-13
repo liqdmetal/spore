@@ -1,0 +1,93 @@
+name: Release
+
+permissions:
+  contents: write
+  id-token: write
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build + Release (cross-platform)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            artifact: spore.exe
+          - goos: linux
+            goarch: amd64
+            artifact: spore
+          - goos: darwin
+            goarch: amd64
+            artifact: spore
+          - goos: darwin
+            goarch: arm64
+            artifact: spore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.artifact }} ./cmd/spore
+      - name: Checksum
+        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spore-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Prepare release
+        run: |
+          mkdir -p release
+          for d in artifacts/*/; do
+            cp "$d"/* release/
+          done
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  provenance:
+    name: Provenance (SLSA)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.9.0
+        with:
+          base64-subjects: "${{ toJson(steps.hash.outputs.subjects) }}"
+      - name: Hash artifacts
+        id: hash
+        run: |
+          mkdir -p release
+          for d in artifacts/*/; do
+            cp "$d"/* release/
+          done
+          SUBJECTS=$(cd release && sha256sum * | awk '{print $2" "$1}' | jq -R -s 'split("\n") | map(select(. != "")) | map(split(" ")) | map({(.[0]): "sha256:" + .[1]}) | add')
+          echo "subjects=$SUBJECTS" >> $GITHUB_OUTPUT
