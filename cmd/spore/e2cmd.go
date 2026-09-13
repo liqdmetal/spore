@@ -720,7 +720,9 @@ func msgRecvE2(args []string) {
 	spk := fs.String("spk", "", "our signed-prekey private key file")
 	opk := fs.String("opk", "", "legacy single one-time-prekey private key file")
 	opkPool := fs.String("opk-pool", "", "endpoint-local persistent one-time-prekey pool JSON (preferred)")
-	interval := fs.Duration("interval", 3*time.Second, "poll interval")
+	interval := fs.Duration("interval", 3*time.Second, "poll interval (active cadence)")
+	idleInterval := fs.Duration("idle-interval", 60*time.Second, "adaptive: poll this slowly after -idle-after of silence")
+	idleAfter := fs.Duration("idle-after", 2*time.Minute, "adaptive: silence this long before backing off to -idle-interval (0 disables adaptation)")
 	min := fs.Uint64("min-height", 0, "scan height")
 	autoAck := fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
@@ -994,7 +996,10 @@ func msgRecvE2(args []string) {
 		}
 	}
 
-	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{MinHeight: *min, Interval: *interval})
+	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{
+		MinHeight: *min, Interval: *interval,
+		IdleInterval: *idleInterval, IdleAfter: *idleAfter,
+	})
 	for {
 		select {
 		case inc, ok := <-in:

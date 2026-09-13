@@ -201,7 +201,10 @@
 const BOX = window.location.origin || "";
 const THEME_COLORS = {"#relay":"#38bdf8","#degen":"#f472b6","#build":"#4ade80","#team":"#a78bfa"};
 const MAXBACK = 200;            // lines of history a fresh viewer loads
-const POLL = 2000;              // ms
+const POLL_ACTIVE = 2000;       // ms while the tab is visible (foreground)
+const POLL_IDLE = 60000;        // ms while the tab is hidden (minimized)
+const WHISPER_ACTIVE = 5000;    // ms E2 inbox cadence while visible
+const WHISPER_IDLE = 60000;     // ms E2 inbox cadence while hidden
 
 const $=id=>document.getElementById(id);
 const esc=s=>s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -317,9 +320,23 @@ async function send(){
 }
 function addMsgErr(t){const d=document.createElement("div");d.className="sys";d.style.color="var(--danger)";d.textContent=t;addMsg(d);}
 
-// heartbeat + poll
-setInterval(renderOnline,POLL*3);
-setInterval(poll,POLL);
+// heartbeat + adaptive poll: 2s in the foreground, 60s when the tab is
+// hidden/minimized (document.visibilitychange). The recv/e2 loops reschedule
+// on the same signal so a backgrounded client stops chattering.
+let roomTimer = null, onlineTimer = null, whTimer = null;
+function isHidden(){return typeof document!=="undefined"&&document.visibilityState==="hidden";}
+function pollMs(){return isHidden()?POLL_IDLE:POLL_ACTIVE;}
+function whMs(){return isHidden()?WHISPER_IDLE:WHISPER_ACTIVE;}
+function scheduleLoops(){
+  if(typeof clearInterval!=="undefined"){clearInterval(roomTimer);clearInterval(onlineTimer);clearInterval(whTimer);}
+  roomTimer=setInterval(poll,pollMs());
+  onlineTimer=setInterval(renderOnline,pollMs()*3);
+  whTimer=setInterval(whisperRecv,whMs());
+}
+if(typeof document!=="undefined"&&document.addEventListener){
+  document.addEventListener("visibilitychange",()=>{scheduleLoops();});
+}
+scheduleLoops();
 async function hb(){if(state.active){try{await j("POST","/presence",{channel:state.active,addr:state.nick});}catch(e){}}}
 setInterval(hb,15000);
 hb();
@@ -504,7 +521,6 @@ $("addFriendBtn").onclick=addFriend;
 $("addFriendAddr").addEventListener("keydown",e=>{if(e.key==="Enter")addFriend();});
 $("wMsg").addEventListener("keydown",e=>{if(e.key==="Enter")whisperSend();});
 renderAll();
-setInterval(whisperRecv,5000);
 whisperRecv();
 
 </script>

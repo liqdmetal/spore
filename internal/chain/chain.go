@@ -96,6 +96,14 @@ type Chain interface {
 type WatchOpts struct {
 	MinHeight uint64
 	Interval  time.Duration
+	// IdleInterval + IdleAfter enable ADAPTIVE cadence: after IdleAfter of
+	// silence (a poll that returns no new incoming), the wait backs off to
+	// IdleInterval; the moment anything is delivered the next wait snaps back
+	// to Interval. Zero IdleInterval/IdleAfter keeps the fixed cadence. This
+	// is what makes an always-on phone/client cheap: foreground 3s, quiet
+	// background 60s, wake on delivery.
+	IdleInterval time.Duration
+	IdleAfter    time.Duration
 	// AutoBurn, when true, erases each delivered message from on-chain
 	// mailbox state (via the Burner interface) immediately after it is
 	// emitted to the caller. Compost semantics: once read, it rots — nothing
@@ -117,6 +125,12 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 		if iv <= 0 {
 			iv = 3 * time.Second
 		}
+		idleIv := opts.IdleInterval
+		if idleIv <= 0 {
+			idleIv = iv // unset → fixed cadence
+		}
+		idleAfter := opts.IdleAfter
+		lastDelivered := time.Now()
 		cursor := opts.MinHeight
 		seen := map[string]bool{}
 		for {
@@ -143,6 +157,7 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 					// block-height filter; other backends can fall back to topo.
 					select {
 					case out <- inc:
+						lastDelivered = time.Now()
 						scan := inc.ScanHeight
 						if scan == 0 && inc.TopoHeight > 0 {
 							scan = uint64(inc.TopoHeight)
@@ -162,8 +177,12 @@ func Watch(ctx context.Context, c Chain, opts WatchOpts) (<-chan Incoming, <-cha
 					}
 				}
 			}
+			wait := iv
+			if idleAfter > 0 && time.Since(lastDelivered) > idleAfter {
+				wait = idleIv
+			}
 			select {
-			case <-time.After(iv):
+			case <-time.After(wait):
 			case <-ctx.Done():
 				return
 			}
