@@ -25,6 +25,7 @@ import (
 	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/nostr"
 	"github.com/liqdmetal/spore/internal/notify"
+	"github.com/liqdmetal/spore/internal/peerstore"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/relay"
@@ -130,6 +131,15 @@ func e2Store(url, token, keyFile, relayBase string) (ratchetwire.BodyStore, erro
 			Relays:     relays,
 			IndexPath:  indexPath,
 		})
+	}
+	if rest, ok := strings.CutPrefix(url, "peer://"); ok {
+		if relayBase != "" {
+			return nil, errors.New("-relay does not apply to a peer:// store: the peer hop IS the transport")
+		}
+		if rest == "" || !strings.Contains(rest, ":") {
+			return nil, errors.New("-store peer:// requires the sender's node address, e.g. peer://192.0.2.10:8099 (receive-only: the sender must run `spore-peer serve` on that node)")
+		}
+		return &peerstore.PeerStore{Addr: rest}, nil
 	}
 	inner, err := store.NewHTTPStoreWithToken(url, token)
 	if err != nil {
