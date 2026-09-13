@@ -13,8 +13,8 @@ func TestValidateAddress(t *testing.T) {
 	for _, bad := range []string{
 		"",
 		"dero1abc",
-		"deto1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pn8fq",
-		"dero1qyhfrd0pgtrwmnec9lzeqv38n4dj3q5zrtqrhqlaxngcucfj5vhnkqq6pna",
+		"deto1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgfamjm8",
+		"dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgny827a",
 	} {
 		if _, err := ValidateAddress(bad); err == nil {
 			t.Fatalf("accepted invalid address %q", bad)
