@@ -69,6 +69,8 @@ func msgE2(args []string) {
 		msgInvoiceE2(args[1:])
 	case "pay":
 		msgPayE2(args[1:])
+	case "approve":
+		msgApprove(args[1:])
 	case "receipts":
 		msgReceipts(args[1:])
 	default:
@@ -490,6 +492,9 @@ func msgSendE2(args []string) {
 	// Secure wire flags: envelope v2 wrapping (accessed via fs.Lookup in sendE2Core)
 	_ = fs.String("key", "", "sender identity private key hex for envelope v2 (overrides -identity if set)")
 	_ = fs.String("peer-pub", "", "recipient identity public key hex for envelope v2")
+	fs.String("require-approval", "", "64-hex ed25519 public key of a second device that must approve this send (money 2FA); requires -approval-sig or -approval-file")
+	fs.String("approval-sig", "", "hex ed25519 signature over the payment intent (see `spore msg approve`); required when -require-approval is set")
+	fs.String("approval-file", "", "read the approval signature from this file instead of -approval-sig")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -620,6 +625,11 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	// detectable at all.
 	_, raw, sessID, err := ep.SendFirstSession(id, b, sig, plaintext, time.Now().Add(ttl))
 	if err != nil {
+		return err
+	}
+	// Second-device approval gate (money 2FA): must pass BEFORE any value
+	// moves (the HTLC escrow branch below funds before it posts the pointer).
+	if err := requireApproval(fs, flagValueOr(fs, "chain", ""), to, amount, raw); err != nil {
 		return err
 	}
 	if devState, derr := ratchetwire.LoadOrCreateDevice(stateDir); derr == nil {
