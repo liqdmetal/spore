@@ -28,6 +28,7 @@ import (
 	"github.com/liqdmetal/spore/internal/peerstore"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
+	"github.com/liqdmetal/spore/internal/receipts"
 	"github.com/liqdmetal/spore/internal/relay"
 	"github.com/liqdmetal/spore/internal/sap"
 	"github.com/liqdmetal/spore/internal/store"
@@ -68,6 +69,8 @@ func msgE2(args []string) {
 		msgInvoiceE2(args[1:])
 	case "pay":
 		msgPayE2(args[1:])
+	case "receipts":
+		msgReceipts(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand")
 	}
@@ -737,6 +740,7 @@ func msgRecvE2(args []string) {
 	idleInterval := fs.Duration("idle-interval", 60*time.Second, "adaptive: poll this slowly after -idle-after of silence")
 	idleAfter := fs.Duration("idle-after", 2*time.Minute, "adaptive: silence this long before backing off to -idle-interval (0 disables adaptation)")
 	min := fs.Uint64("min-height", 0, "scan height")
+	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append received invoice/payment envelopes to")
 	autoAck := fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	ackTTL := fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	outDir := fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
@@ -928,6 +932,14 @@ func msgRecvE2(args []string) {
 		if kind, summary, isMoney := parseMoneyEnvelope(plain); isMoney {
 			_ = kind
 			fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
+			if rec, ok := parseMoneyRecord(plain); ok {
+				rec.Direction = "received"
+				rec.Peer = inc.Sender
+				rec.TxID = inc.TxID
+				if err := receipts.Append(*receiptsFile, rec); err != nil {
+					fmt.Fprintln(os.Stderr, "e2 receipts:", err)
+				}
+			}
 			return
 		}
 		// Attachments / keep-a-copy mode: write the decrypted body to a

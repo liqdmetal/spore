@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/ratchetwire"
+	"github.com/liqdmetal/spore/internal/receipts"
 	"github.com/liqdmetal/spore/internal/store"
 )
 
@@ -25,6 +29,7 @@ func msgInvoiceE2(args []string) {
 	forWhat := fs.String("for", "", "what the invoice is for (free text)")
 	due := fs.Duration("due", 0, "payment deadline from now (e.g. 72h); 0 = no deadline")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this invoice to")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -54,6 +59,11 @@ func msgInvoiceE2(args []string) {
 	r, err := c.PostPointer(context.Background(), *to, raw, 1)
 	check(err)
 	fmt.Printf("invoice %s: %s %s for %q sent on tx %s\n", env.ID, formatAmount(env.Asset, env.Atomic), env.Asset, env.For, r.TxID)
+	if err := receipts.Append(*receiptsFile, receipts.Record{At: env.Created, Session: *sessionHex,
+		Peer: *to, Direction: "sent", Kind: "invoice", InvoiceID: env.ID,
+		Asset: env.Asset, Atomic: env.Atomic, For: env.For, TxID: r.TxID}); err != nil {
+		log.Printf("invoice: ledger %s: %v", *receiptsFile, err)
+	}
 }
 
 // msgPayE2 settles an invoice (or pays spontaneously) INTO an existing
@@ -68,6 +78,7 @@ func msgPayE2(args []string) {
 	invoice := fs.String("invoice", "", "invoice id being settled (from the INVOICE line the payee sent); empty = spontaneous payment")
 	note := fs.String("note", "", "optional note for the payee")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
+	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this payment to")
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -109,6 +120,51 @@ func msgPayE2(args []string) {
 	r, err := c.PostPointer(context.Background(), *to, raw, atomic)
 	check(err)
 	fmt.Printf("PAID %s %s tx %s%s\n", formatAmount(asset, atomic), asset, r.TxID, invoiceRef(*invoice))
+	if err := receipts.Append(*receiptsFile, receipts.Record{At: time.Now().Unix(), Session: *sessionHex,
+		Peer: *to, Direction: "sent", Kind: "payment", InvoiceID: *invoice,
+		Asset: asset, Atomic: atomic, Note: *note, TxID: r.TxID}); err != nil {
+		log.Printf("pay: ledger %s: %v", *receiptsFile, err)
+	}
+}
+
+// msgReceipts lists the local invoice/payment ledger (newest first),
+// optionally filtered to one session, and optionally exported as JSON.
+func msgReceipts(args []string) {
+	fs := flag.NewFlagSet("msg receipts", flag.ExitOnError)
+	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to read")
+	sessionHex := fs.String("session", "", "only show records for this 16-hex session")
+	out := fs.String("out", "", "export the filtered ledger to this JSON file")
+	_ = fs.Parse(args)
+	recs, err := receipts.List(*receiptsFile, *sessionHex)
+	check(err)
+	if *out != "" {
+		raw, err := json.MarshalIndent(recs, "", "  ")
+		check(err)
+		check(os.WriteFile(*out, append(raw, '\n'), 0o600))
+		fmt.Printf("exported %d record(s) to %s\n", len(recs), *out)
+		return
+	}
+	if len(recs) == 0 {
+		fmt.Println("no receipts in", *receiptsFile)
+		return
+	}
+	fmt.Printf("%-10s %-8s %-6s %-14s %-10s %-14s %s\n", "WHEN", "KIND", "DIR", "AMOUNT", "INVOICE", "TXID", "NOTE")
+	for _, r := range recs {
+		fmt.Printf("%-10s %-8s %-6s %-14s %-10s %-14s %s\n",
+			time.Unix(r.At, 0).Format("01-02 15:04"), r.Kind, r.Direction,
+			formatAmount(r.Asset, r.Atomic)+" "+r.Asset, shortOrDash(r.InvoiceID),
+			shortTx(r.TxID), shortOrDash(r.Note))
+	}
+}
+
+func shortOrDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	if len(s) > 14 {
+		return s[:14]
+	}
+	return s
 }
 
 func invoiceRef(id string) string {

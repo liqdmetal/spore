@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/liqdmetal/spore/internal/receipts"
 )
 
 // Money envelopes ride the ratcheted session exactly like receipts: typed
@@ -215,6 +217,34 @@ func marshalPayment(invoiceID, asset string, atomic uint64, txid, note string) (
 		Type: paymentType, InvoiceID: invoiceID, Asset: strings.ToLower(asset),
 		Atomic: atomic, TxID: txid, Note: note, At: time.Now().Unix(),
 	})
+}
+
+// parseMoneyRecord extracts a structured ledger record from invoice/payment
+// plaintext. Returns ok=false for anything that is not a money envelope.
+func parseMoneyRecord(b []byte) (receipts.Record, bool) {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(b, &head); err != nil {
+		return receipts.Record{}, false
+	}
+	switch head.Type {
+	case invoiceType:
+		var env invoiceEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.ID == "" || env.Atomic == 0 {
+			return receipts.Record{}, false
+		}
+		return receipts.Record{At: env.Created, Kind: "invoice", InvoiceID: env.ID,
+			Asset: env.Asset, Atomic: env.Atomic, For: env.For}, true
+	case paymentType:
+		var env paymentEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.Atomic == 0 || env.TxID == "" {
+			return receipts.Record{}, false
+		}
+		return receipts.Record{At: env.At, Kind: "payment", InvoiceID: env.InvoiceID,
+			Asset: env.Asset, Atomic: env.Atomic, TxID: env.TxID, Note: env.Note}, true
+	}
+	return receipts.Record{}, false
 }
 
 // parseMoneyEnvelope recognizes invoice/payment plaintext. Returns the kind
