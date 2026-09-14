@@ -114,6 +114,8 @@ func main() {
 		billcmd(os.Args[2:])
 	case "totp":
 		totpcmd(os.Args[2:])
+	case "stripe":
+		stripecmd(os.Args[2:])
 	case "init":
 		initcmd(os.Args[2:])
 	case "prekeybatch":

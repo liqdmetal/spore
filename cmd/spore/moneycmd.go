@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/receipts"
 	"github.com/liqdmetal/spore/internal/store"
@@ -28,6 +29,7 @@ func msgInvoiceE2(args []string) {
 	amount := fs.String("amount", "", "amount to request, whole units + asset suffix (e.g. 25dero)")
 	forWhat := fs.String("for", "", "what the invoice is for (free text)")
 	due := fs.Duration("due", 0, "payment deadline from now (e.g. 72h); 0 = no deadline")
+	email := fs.String("email", "", "also email a courtesy invoice to this address via SMTP (SPORE_NOTIFY_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM env)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "frame retention")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this invoice to")
 	e2Common(fs)
@@ -63,6 +65,19 @@ func msgInvoiceE2(args []string) {
 		Peer: *to, Direction: "sent", Kind: "invoice", InvoiceID: env.ID,
 		Asset: env.Asset, Atomic: env.Atomic, For: env.For, TxID: r.TxID}); err != nil {
 		log.Printf("invoice: ledger %s: %v", *receiptsFile, err)
+	}
+	if *email != "" {
+		nd, err := notify.NewFromEnv(notify.Options{EmailTo: *email})
+		if err != nil {
+			log.Printf("invoice: email %s: %v", *email, err)
+		} else if err := nd.Send(notify.Event{
+			Subject: fmt.Sprintf("spore invoice %s: %s %s — %s", env.ID, formatAmount(env.Asset, env.Atomic), env.Asset, env.For),
+			TxID:    r.TxID,
+		}); err != nil {
+			log.Printf("invoice: email %s: %v", *email, err)
+		} else {
+			fmt.Printf("invoice emailed to %s\n", *email)
+		}
 	}
 }
 
