@@ -24,6 +24,7 @@ import (
 	"github.com/liqdmetal/spore/internal/mailbox"
 	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/safehttp"
+	"github.com/liqdmetal/spore/internal/totp"
 )
 
 // mailboxHost — the hosted multi-user service (Model B), and the command that
@@ -67,6 +68,7 @@ func mailboxHost(args []string) {
 	usersDir := fs.String("users", "", "directory whose SUBDIRECTORIES are each one mailbox dir (required)")
 	listen := fs.String("listen", "127.0.0.1:19292", "single multiplexed HTTP listen address for all users")
 	tokensFile := fs.String("tokens", "", "optional JSON file {\"alice\":\"secret\",...} mapping user -> bearer token; users absent from it get an OPEN mailbox route (refused on non-loopback binds)")
+	totpFile := fs.String("totp", "", "optional JSON file {\"alice\":\"BASE32SECRET\",...} mapping user -> TOTP secret; a user listed here must present a live code (X-Spore-Totp header) in addition to the bearer token")
 	cert := fs.String("cert", "", "TLS cert PEM (serve HTTPS when set with -key)")
 	key := fs.String("key", "", "TLS key PEM (serve HTTPS when set with -cert)")
 	privacy := fs.Bool("privacy", true, "don't record senders in any user's message log (hosted-service default: the operator should not learn who talks to whom)")
@@ -95,6 +97,8 @@ func mailboxHost(args []string) {
 	}
 
 	tokens, err := loadHostTokens(*tokensFile)
+	check(err)
+	totpSecrets, err := loadHostTokens(*totpFile)
 	check(err)
 
 	// Open every user's mailbox up front: a bad user dir must fail loudly at
@@ -164,6 +168,9 @@ func mailboxHost(args []string) {
 		}
 		if notifier := notifiers[n]; notifier != nil {
 			handler = notifyBodyPut(handler, notifier)
+		}
+		if sec := totpSecrets[n]; sec != "" {
+			handler = totpGate(handler, sec)
 		}
 		routes[n] = handler
 	}
@@ -251,10 +258,18 @@ func mailboxHost(args []string) {
 				return
 			}
 			if rest == "/qr" {
+				if r.Method == http.MethodPut && !totpOK(r, totpSecrets[name]) {
+					http.Error(w, "totp required", http.StatusUnauthorized)
+					return
+				}
 				handleUserQR(w, r, filepath.Join(*usersDir, name), box.tok)
 				return
 			}
 			if rest == "/profile.json" {
+				if r.Method == http.MethodPut && !totpOK(r, totpSecrets[name]) {
+					http.Error(w, "totp required", http.StatusUnauthorized)
+					return
+				}
 				handleUserProfileJSON(w, r, filepath.Join(*usersDir, name), box.tok)
 				return
 			}
@@ -397,6 +412,29 @@ func validUserName(name string) bool {
 func writeHostIndex(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintln(w, "spore mailbox host: use /u/<name>/<route>")
+}
+
+// totpGate wraps a mailbox handler so a user with a configured TOTP secret
+// must present a live code (X-Spore-Totp header) alongside the bearer token.
+// The code check runs before the wrapped handler, on every route.
+func totpGate(next http.Handler, secret string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !totpOK(r, secret) {
+			http.Error(w, "totp required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// totpOK verifies the X-Spore-Totp header against the secret when one is
+// configured; a user without a secret always passes.
+func totpOK(r *http.Request, secret string) bool {
+	if secret == "" {
+		return true
+	}
+	code := r.Header.Get("X-Spore-Totp")
+	return code != "" && totp.Verify(code, secret, time.Now())
 }
 
 // clientIP resolves the real client address for the throttle. The listener
