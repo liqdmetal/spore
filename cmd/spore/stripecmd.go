@@ -132,6 +132,9 @@ func stripeInvoiceCreate(args []string) {
 	pdf, _ := finalized["invoice_pdf"].(string)
 	_ = item
 	fmt.Printf("stripe invoice %s created for %s — %s %s\n", invID, *email, *amount, strings.ToUpper(*currency))
+	if *id != "" {
+		fmt.Printf("  mirrors spore invoice %s\n", *id)
+	}
 	fmt.Printf("  client page : %s\n", hosted)
 	fmt.Printf("  pdf        : %s\n", pdf)
 	fmt.Println("  Stripe emails the client the invoice + reminders. Mark settled with:")
