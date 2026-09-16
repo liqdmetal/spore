@@ -3,9 +3,11 @@ package peerstore
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -169,6 +171,35 @@ var _ store.Store = (*SporePeerStore)(nil)
 
 // --- serve (spore-peer JSON subset, WIRE_SPEC §5) ----------------------
 
+// maxServeRequest caps a served REQUEST frame. A legitimate request is the
+// 76-byte {"cid":"<64hex>"} JSON object; 64 KiB leaves orders of magnitude
+// of headroom while making the response to anything larger constant-cost.
+// (The 64 MiB maxFrame cap exists for RESPONSE frames — bodies — not
+// requests; pre-allocating attacker-declared request buffers was a remote
+// memory-exhaustion vector: N idle connections x 64 MiB each.)
+const maxServeRequest = 64 << 10
+
+// readServeFrame reads one request frame, refusing — BEFORE any payload
+// allocation — a length prefix that exceeds maxServeRequest. One request per
+// connection means framing does not need to be preserved past a rejection:
+// the handler answers and closes, so the declared-length bytes never have to
+// be drained.
+func readServeFrame(conn net.Conn) ([]byte, error) {
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		return nil, fmt.Errorf("peerstore: read length: %w", err)
+	}
+	n := binary.LittleEndian.Uint32(lenBuf[:])
+	if n == 0 || n > maxServeRequest {
+		return nil, fmt.Errorf("peerstore: bad request frame length %d", n)
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, fmt.Errorf("peerstore: read payload: %w", err)
+	}
+	return buf, nil
+}
+
 func (s *SporePeerStore) serve() error {
 	ln, err := net.Listen("tcp", s.listen)
 	if err != nil {
@@ -195,10 +226,12 @@ func (s *SporePeerStore) serve() error {
 				if closed {
 					return
 				}
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					continue
-				}
-				return // listener closed or unrecoverable
+				// Transient accept failures (fd pressure, connection
+				// aborted before accept) must not kill the listener:
+				// back off briefly and keep serving. A hostile client can
+				// only ever cost us the backoff, not the endpoint.
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 			s.wg.Add(1)
 			go func() {
@@ -212,12 +245,20 @@ func (s *SporePeerStore) serve() error {
 
 // handleConn answers ONE request frame with ONE response frame, then closes —
 // the reference serve's one-request-per-connection shape.
+//
+// Concurrency posture: one goroutine per connection (cheap; an idle conn
+// blocks in a 4-byte read on a ~8 KB stack — the 64 MiB pre-alloc is gone via
+// maxServeRequest), each hard-deadlined at ioTO, so a slowloris holds only
+// its own goroutine for at most ioTO. File-descriptor exhaustion is the
+// remaining bound and is the OS's to enforce; accept failures are tolerated
+// (see serve) rather than fatal.
 func (s *SporePeerStore) handleConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(ioTO))
 
-	payload, err := readFrame(conn)
+	payload, err := readServeFrame(conn)
 	if err != nil {
+		writeFrameErr(conn, "400 bad frame")
 		return // malformed or abandoned request: nothing useful to answer
 	}
 	cid, ok := parseCIDRequest(payload)

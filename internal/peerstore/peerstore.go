@@ -105,6 +105,9 @@ func classify(payload []byte, cid [32]byte) ([]byte, error) {
 	}
 }
 
+// readFrame reads one length-prefixed frame, growing the buffer as bytes
+// actually arrive (bounded by maxFrame). A hostile server's oversized or lying
+// length prefix therefore costs a 4-byte read, not a maxFrame pre-allocation.
 func readFrame(r io.Reader) ([]byte, error) {
 	var lenBuf [4]byte
 	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
@@ -114,9 +117,15 @@ func readFrame(r io.Reader) ([]byte, error) {
 	if n == 0 || n > maxFrame {
 		return nil, fmt.Errorf("peerstore: bad frame length %d", n)
 	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, fmt.Errorf("peerstore: read payload: %w", err)
+	buf := make([]byte, 0, 4096)
+	for len(buf) < int(n) {
+		want := min(int(n)-len(buf), 32<<10)
+		chunk := make([]byte, want)
+		read, err := io.ReadFull(r, chunk)
+		buf = append(buf, chunk[:read]...)
+		if err != nil {
+			return nil, fmt.Errorf("peerstore: read payload: %w", err)
+		}
 	}
 	return buf, nil
 }
