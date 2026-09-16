@@ -143,12 +143,14 @@ jobs:
           path: dist/
       - name: Generate SHA256 manifest
         # download-artifact@v4 nests each artifact in its own subdirectory
-        # (dist/spore-windows-amd64/spore.exe, ...), so a flat `sha256sum *`
-        # hashes directories and fails. Flatten the payload files first.
+        # (dist/spore-windows-amd64/spore.exe, ...). A flat `sha256sum *`
+        # matches those DIRECTORY names too and exits 1. Flatten every file
+        # up one level, drop the emptied dirs, then hash only top-level files.
         run: |
           cd dist
-          find . -mindepth 2 -type f ! -name '*.sha256' -exec mv {} . \;
-          sha256sum spore* > SHA256SUMS
+          find . -mindepth 2 -type f -exec mv {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          find . -maxdepth 1 -type f -name 'spore*' -print0 | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
