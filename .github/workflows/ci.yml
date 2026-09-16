@@ -246,6 +246,21 @@ jobs:
             exit 1
           fi
 
+  audit-refs:
+    name: audit doc commit refs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The audit docs pin findings to the commits that fixed them; the
+          # check below resolves each cited hash against history, so a
+          # shallow clone would report everything missing.
+          fetch-depth: 0
+      - name: Verify every commit hash referenced in AUDIT-E2.md resolves
+        # Fails on typos, rebases, and stale pins (scripts/check_audit_refs.sh;
+        # mark a non-commit hex string with `no-verify-hash` on its line).
+        run: ./scripts/check_audit_refs.sh AUDIT-E2.md
+
   goimports:
     name: goimports (import-section gate)
     runs-on: ubuntu-latest
