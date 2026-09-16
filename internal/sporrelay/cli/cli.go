@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,7 +89,10 @@ func Execute(args []string) {
 	}
 	
 	objID := args[0]
-	routeIdx := 0 // TODO: parse route index
+	routeIdx, perr := parseRouteIdx(args[1])
+	if perr != nil {
+		check(perr)
+	}
 	
 	cfg := sporrelay.DefaultConfig()
 	cfg.RelayerURL = getRelayerURL()
@@ -107,14 +111,15 @@ func Execute(args []string) {
 		check(fmt.Errorf("discover before execute: %w", err))
 	}
 	
-	if routeIdx >= len(resp.BestRoute) {
-		check(fmt.Errorf("route index %d out of range", routeIdx))
+	route, serr := selectRoute(resp, routeIdx)
+	if serr != nil {
+		check(serr)
 	}
 	
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	
-	result, err := cl.Execute(ctx, obj, resp.BestRoute)
+	result, err := cl.Execute(ctx, obj, route)
 	if err != nil {
 		check(fmt.Errorf("execute: %w", err))
 	}
@@ -181,6 +186,43 @@ func check(err error) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseRouteIdx parses the <route-index> argument of `spore settle execute`.
+// It must be a non-negative integer: the index selects among the routes the
+// discover step printed (Route 0 = the best route, 1..N = alternatives).
+func parseRouteIdx(s string) (int, error) {
+	idx, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("route index %q is not an integer (usage: spore settle execute <objective-id> <route-index>)", s)
+	}
+	if idx < 0 {
+		return 0, fmt.Errorf("route index %d is negative — routes are numbered 0..N", idx)
+	}
+	return idx, nil
+}
+
+// selectRoute picks the route to execute from a discovery response.
+// Index 0 is the relay market's best route (resp.BestRoute); indices 1..N
+// are the ranked alternatives in resp.Candidates (the same numbering
+// printRouteResponse shows). Candidates[0] duplicates the best route, so
+// index 0 intentionally reads BestRoute directly — it stays valid even when
+// the relayer returns no candidate list.
+func selectRoute(resp *sporrelay.RouteDiscoveryResponse, idx int) ([]sporrelay.RouteLeg, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("no route discovery response")
+	}
+	if idx == 0 {
+		if len(resp.BestRoute) == 0 {
+			return nil, fmt.Errorf("no routes discovered for this objective")
+		}
+		return resp.BestRoute, nil
+	}
+	if idx >= len(resp.Candidates) {
+		return nil, fmt.Errorf("route index %d out of range: only %d route(s) discovered (0..%d)",
+			idx, len(resp.Candidates), len(resp.Candidates)-1)
+	}
+	return resp.Candidates[idx].Route, nil
 }
 
 func getRelayerURL() string {
