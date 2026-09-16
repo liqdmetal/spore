@@ -82,6 +82,14 @@ the privacy model there (`secure.Encrypt`, `internal/secure/secure.go`). This
 is applied whenever the user supplies `-key` + `-peer-pub`, and is **mandatory
 (strict)** for receive on public chains (`secureRecvCodec` → `NewRecvCodec`).
 
+> **Scope (E2 audit H1/H2):** the 0xE1 envelope layer belongs to the
+> legacy/one-shot path only. Canonical 0xE2 ratcheted frames do NOT carry it —
+> their authentication is the X3DH handshake + double ratchet
+> (RATCHET.md §6: the outer sig is REPLACED by the ratchet's own
+> authentication). The ratchetwire endpoint takes no envelope wrapper, and
+> the `send-e2`/`recv-e2` CLI commands build symmetric wrapper-free
+> endpoints, so the documented default flags deliver end to end.
+
 ### 2.1 Wire layout (byte-exact)
 
 ```

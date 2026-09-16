@@ -16,7 +16,6 @@ type DurableEndpoint struct {
 	*Endpoint
 	states        *FileStateStore
 	SessionExpiry time.Duration
-	secureWire    *SecureWire // nil = legacy mode (no envelope v2 wrapping)
 
 	// lossMu guards the confirmed-loss ledger. It is a leaf lock: taken only
 	// after Sessions' own lock has been released, never held across it.
@@ -29,27 +28,21 @@ type DurableEndpoint struct {
 // NewDurableEndpoint opens the endpoint-local state directory and restores all
 // sessions already present there. Files that are expired or absent are removed.
 func NewDurableEndpoint(body BodyStore, states *FileStateStore, now time.Time) (*DurableEndpoint, error) {
-	return newDurableEndpoint(body, states, 0, now, nil)
+	return newDurableEndpoint(body, states, 0, now)
 }
 
 // NewDurableEndpointWithExpiry restores endpoint-local state and applies the
 // inactivity policy before the endpoint can process a frame.
 func NewDurableEndpointWithExpiry(body BodyStore, states *FileStateStore, expiry time.Duration, now time.Time) (*DurableEndpoint, error) {
-	return newDurableEndpoint(body, states, expiry, now, nil)
+	return newDurableEndpoint(body, states, expiry, now)
 }
 
-// NewDurableEndpointWithSecureWire restores endpoint-local state with an
-// optional SecureWire for envelope v2 wrapping/unwrapping on every frame.
-func NewDurableEndpointWithSecureWire(body BodyStore, states *FileStateStore, expiry time.Duration, now time.Time, sw *SecureWire) (*DurableEndpoint, error) {
-	return newDurableEndpoint(body, states, expiry, now, sw)
-}
-
-func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Duration, now time.Time, sw *SecureWire) (*DurableEndpoint, error) {
+func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Duration, now time.Time) (*DurableEndpoint, error) {
 	if states == nil {
 		return nil, errors.New("ratchetwire: nil file state store")
 	}
-	ep := NewEndpointWithSecureWire(body, sw)
-	e := &DurableEndpoint{Endpoint: ep, states: states, SessionExpiry: expiry, secureWire: sw}
+	ep := NewEndpoint(body)
+	e := &DurableEndpoint{Endpoint: ep, states: states, SessionExpiry: expiry}
 	ids, err := states.IDs()
 	if err != nil {
 		return nil, err

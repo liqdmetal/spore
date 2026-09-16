@@ -64,6 +64,10 @@ type Mailbox struct {
 	// from the service's on-disk record. Default off (local personal mailboxes
 	// may want to keep the sender).
 	noSenderLog bool
+
+	// prekeyLimiter gates GET /prekey pops per client IP (audit M1). Lazily
+	// initialized under prekeyMu so every HTTP handler shares one budget.
+	prekeyLimiter *prekeyLimiter
 }
 
 // CorruptLogLines reports how many undecryptable log lines were skipped on the
@@ -162,7 +166,7 @@ func Open(dir string, priv []byte) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL, prekey: prekey, batch: batch}, nil
+	return &Mailbox{dir: dir, st: st, ep: ep, log: ml, logTTL: DefaultLogTTL, prekey: prekey, batch: batch, prekeyLimiter: newPrekeyLimiter()}, nil
 }
 
 // Dir returns the mailbox's data directory.

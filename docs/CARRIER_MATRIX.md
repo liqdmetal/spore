@@ -53,12 +53,17 @@ These are mutually exclusive; the CLI refuses both or neither. Discovery is a tr
 
 ## Off-chain body stores: mailbox vs. the serverless commons
 
-The body store is `-store`. Two schemes, one `store.Store` seam:
+The body store is `-store`. Three schemes, one `store.Store` seam:
 
 | `-store` | Who runs it | Best for |
 |---|---|---|
 | `http://host:port` | your mailbox, or a paid Model-B operator | large attachments, guaranteed TTL reaping, a server you control |
-| `nostr://relay1,relay2` | **nobody — a public relay commons** | the no-servers endgame: zero infrastructure, any subset of relays serves a body by CID |
+| `nostr://relay1,relay2` | **nobody — a public relay commons** | zero infrastructure; any subset of relays serves a body by CID |
+| `sporepeer://host:port` | **nobody — only the two endpoints** | the no-SERVERS endgame proper: the sender's node holds and serves; the receiver fetches P2P |
+
+`sporepeer://` rides the spore-peer JSON subset (WIRE_SPEC §5): pair it with `-store-dir ~/.spore/hold` (where YOUR bodies live) and `-store-serve 0.0.0.0:8099` (bind the listener your contact points at). The `spore` binary then serves bodies itself — a drop-in Go replacement for `spore-peer serve --dir` — and fetches from the peer's node by CID, with sha256 verified on every hop and TTL composting on the holder's own disk. Interoperates with the Rust `spore-peer serve/fetch` in both directions, including the old raw-body server fallback.
+
+Honest limits of `sporepeer://`: **both endpoints must be online** for a fetch (the sender's node is the store — that is the privacy property, and the cost); the JSON subset has **no transport auth**, so anyone who can reach the port can fetch whatever ciphertext is still held (inert without the ratchet key; bind to loopback/firewall if that is unacceptable); a fetch fails with `ErrNotFound` when the sender's copy has composted — a retry cannot resurrect a reaped body.
 
 `nostr://` publishes bodies as signed NIP-01 events (`kind 1977`, tags `cid` + `exp`, content = base64 ciphertext) and fetches by content address. It requires `-store-key`: a **dedicated** signing key, because publishing to a commons is linkable by pubkey — reusing the ratchet identity or a chain key would let a relay tie storage activity to messaging identity. `spore init` generates it at `store.key`, and `panic -home` wipes it.
 

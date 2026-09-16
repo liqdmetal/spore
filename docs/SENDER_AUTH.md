@@ -48,6 +48,7 @@ Envelope v1 (kind 0xE0) was anonymous ECDH: anyone who knew your published X2551
 - **First-contact trust** — the first `sig` key exchange is trust-on-first-use unless done out-of-band; key-change transparency (surfacing rotations loudly) is a UX task, not crypto.
 - **Metadata** — sender/recipient remain chain-visible on EVM/Solana (accepted; documented in the README's honest limits).
 - **Key derivation couples secrets** — deriving the signing key from the encryption scalar means one leak compromises both (they live and die together at rest anyway; explicit, documented trade).
+- **Prekey-availability oracle** — a `GET /prekey` response distinguishes "batch has bundles" from "exhausted → static/degraded" from "404", so a prober who knows a mailbox URL can observe refill cadence and (within limits) batch size. On a tokenless self-host mailbox the pop is additionally IP-rate-limited (burst ~30, refill ~10/min) to blunt draining, which forces later senders into degraded no-OPK X3DH (authenticated, but weaker offline resilience). The complete fix for public deployments is `HandlerToken` (see HOME_NODE.md).
 
 ## 6. Tests mapping
 

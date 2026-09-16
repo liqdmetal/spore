@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -52,6 +53,14 @@ func (m *Mailbox) HandlerToken(secret string) http.Handler {
 // non-empty the mux is wrapped in an auth middleware enforcing the Bearer token
 // on every route (/put, /body, /list, /get). Empty secret = open handler.
 func (m *Mailbox) handler(secret string) http.Handler {
+	// Prekey pops are rate-limited per client IP (audit M1): on a tokenless
+	// mailbox this is the only brake on an anonymous drainer exhausting the
+	// single-use bundle batch. When secret is set the bearer gate already
+	// limits who can reach the route at all; the limiter still applies but a
+	// token-holder's senders share the budget — tune with the vars in	// ratelimit.go if a high-volume hosted deployment needs more headroom.
+	// NOTE: one limiter is created per handler() call; hold Handler() and
+	// HandlerToken() for the process lifetime (as every caller does) so the
+	// budget persists across requests.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
@@ -72,7 +81,7 @@ func (m *Mailbox) handler(secret string) http.Handler {
 			}
 			m.handleBody(w, r, cid)
 		case path == "/prekey":
-			m.handlePrekey(w, r)
+			m.prekeyLimited(w, r)
 		case path == "/prekey-batch":
 			m.handlePrekeyBatch(w, r)
 		case path == "/list":
@@ -96,6 +105,24 @@ func (m *Mailbox) handler(secret string) http.Handler {
 		}
 		inner.ServeHTTP(w, r)
 	})
+}
+
+// prekeyLimited applies the per-IP pop budget to GET /prekey (audit M1).
+// PUT /prekey — the owner publishing their own bundle — is never limited:
+// on a tokenless mailbox the owner is typically localhost and throttling
+// their publish would be pure friction.
+func (m *Mailbox) prekeyLimited(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		if !m.prekeyLimiter.allow(time.Now(), host) {
+			http.Error(w, "prekey rate limit exceeded; retry later", http.StatusTooManyRequests)
+			return
+		}
+	}
+	m.handlePrekey(w, r)
 }
 
 func parseCID(w http.ResponseWriter, hexcid string) ([32]byte, bool) {

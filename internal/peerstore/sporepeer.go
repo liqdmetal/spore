@@ -1,0 +1,295 @@
+package peerstore
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/liqdmetal/spore/internal/store"
+)
+
+// SporePeerStore is the bidirectional spore-peer backend for `-store
+// sporepeer://addr`: the sender's node holds and SERVES bodies; the receiver
+// FETCHES them by CID. It closes the roadmap's serverless loop for long
+// bodies — no mailbox operator, no relay commons: the sender's always-on node
+// is the store, and only sender and receiver ever hold the bytes (PEER_SETUP /
+// README: "long bodies are encrypted, held by the sender, and fetched
+// peer-to-peer; then keys rot").
+//
+// Wire: exactly the JSON subset of docs/WIRE_SPEC.md §5, the protocol the
+// reference Rust `spore-peer serve` already speaks — so this store
+// interoperates in BOTH directions:
+//
+//   - as a SERVER it is a drop-in Go replacement for `spore-peer serve
+//     --dir` (same status-byte frames, same 64 MiB cap, same error strings),
+//     so a Rust `spore-peer fetch --addr` can pull from a Go-served node;
+//   - as a CLIENT it fetches from either a Go-served node or a Rust
+//     `spore-peer serve`, with an old-server fallback (WIRE_SPEC §5: a
+//     server that replies with the RAW body and no status byte is accepted
+//     when sha256(whole frame payload) == cid).
+//
+// Semantics per side:
+//
+//   - SENDER (Put): bodies are content-addressed into a local DiskStore with
+//     the burn deadline — the "held by the sender" half. Serve reaps expired
+//     bodies on access, so compost happens on the sender's disk, not just in
+//     the receiver's ratchet.
+//   - RECEIVER (Get): first tries the remote peer by CID (works from either
+//     endpoint's config), then falls back to the local hold — that makes one
+//     store type correct for both `send-e2` and `recv-e2` invocations, since
+//     each side stores what it produces and fetches what the other holds.
+//
+// AUTH HONEST LIMIT: the JSON subset has no authentication — anyone who can
+// reach addr can fetch whatever bodies the node still holds. That is the
+// reference protocol's own posture (ciphertext-by-CID on a public port); the
+// ratchet's per-message keys are what make a leaked body inert after first
+// read. Bind the serve listener to loopback or a firewall-protected interface
+// when that posture is not acceptable.
+
+// SporePeerConfig configures a SporePeerStore.
+type SporePeerConfig struct {
+	// Dir is where bodies this endpoint produces are held (DiskStore layout).
+	// Required — it is the "held by the sender" half of the model.
+	Dir string
+	// Addr is the peer address (host:port) this store fetches from, and the
+	// address advertised as sporepeer://Addr to the other endpoint. Empty is
+	// allowed only for a pure-server endpoint that never fetches remotely.
+	Addr string
+	// Listen, when non-empty, runs a spore-peer JSON-subset server on that
+	// bind address (e.g. ":8099" or "127.0.0.1:8099"). Bodies in Dir are
+	// served by CID until their burn deadline.
+	Listen string
+}
+
+// SporePeerStore implements store.Store over the spore-peer transport: a
+// local hold (DiskStore) for bodies this endpoint produces, a serve listener
+// for what remote peers fetch from us, and a remote fetch for what they hold.
+type SporePeerStore struct {
+	Addr   string // remote peer; "" = fetch falls back to local hold only
+	hold   *store.DiskStore
+	listen string
+
+	mu     sync.Mutex
+	ln     net.Listener
+	closed bool
+	wg     sync.WaitGroup
+}
+
+// NewSporePeerStore opens the local hold and, if Listen is set, starts
+// serving the spore-peer JSON subset on it.
+func NewSporePeerStore(cfg SporePeerConfig) (*SporePeerStore, error) {
+	if cfg.Dir == "" {
+		return nil, errors.New("peerstore: SporePeerConfig.Dir is required (the sender's node must hold the bodies it serves)")
+	}
+	hold, err := store.NewDiskStore(cfg.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("peerstore: open hold: %w", err)
+	}
+	s := &SporePeerStore{Addr: cfg.Addr, hold: hold, listen: cfg.Listen}
+	if cfg.Listen != "" {
+		if err := s.serve(); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// LocalAddr returns the serve listener's resolved address ("127.0.0.1:8099"
+// when bound with :0), or "" when not serving. The CLI prints it so the user
+// knows the exact sporepeer:// address to give their contact.
+func (s *SporePeerStore) LocalAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		return ""
+	}
+	return s.ln.Addr().String()
+}
+
+// Close stops the serve listener, if any, and waits for in-flight
+// connections to finish. Safe to call more than once.
+func (s *SporePeerStore) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	ln := s.ln
+	s.ln = nil
+	s.mu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
+	s.wg.Wait()
+	return nil
+}
+
+// --- Store seam -------------------------------------------------------
+
+// Put holds body under cid locally until deadline. The sender runs this; the
+// serve listener then answers fetches for it.
+func (s *SporePeerStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
+	return s.hold.Put(cid, body, deadline)
+}
+
+// Get fetches a body: remote peer first (that is where the other endpoint
+// held it), then the local hold. Both paths verify sha256 == cid.
+func (s *SporePeerStore) Get(cid [32]byte) ([]byte, error) {
+	if s.Addr != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), ioTO)
+		body, err := Fetch(ctx, s.Addr, cid)
+		cancel()
+		switch {
+		case err == nil:
+			return body, nil
+		case errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrExpired):
+			return nil, err // definitive from the peer: stop, don't mask with local state
+		default:
+			// Transport-level failure (peer down, RST, timeout): fall
+			// through to the local hold before giving up.
+		}
+	}
+	return s.hold.Get(cid)
+}
+
+// Delete removes a body from the local hold. The remote peer's copy is out
+// of reach by design — the owner of that node composts their own hold.
+func (s *SporePeerStore) Delete(cid [32]byte) error { return s.hold.Delete(cid) }
+
+// Reap evicts expired bodies from the local hold.
+func (s *SporePeerStore) Reap(now time.Time) int { return s.hold.Reap(now) }
+
+// Len reports how many bodies the local hold contains.
+func (s *SporePeerStore) Len() int { return s.hold.Len() }
+
+var _ store.Store = (*SporePeerStore)(nil)
+
+// --- serve (spore-peer JSON subset, WIRE_SPEC §5) ----------------------
+
+func (s *SporePeerStore) serve() error {
+	ln, err := net.Listen("tcp", s.listen)
+	if err != nil {
+		return fmt.Errorf("peerstore: listen %s: %w", s.listen, err)
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = ln.Close()
+		return errors.New("peerstore: store already closed")
+	}
+	s.ln = ln
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				s.mu.Lock()
+				closed := s.closed
+				s.mu.Unlock()
+				if closed {
+					return
+				}
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					continue
+				}
+				return // listener closed or unrecoverable
+			}
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.handleConn(conn)
+			}()
+		}
+	}()
+	return nil
+}
+
+// handleConn answers ONE request frame with ONE response frame, then closes —
+// the reference serve's one-request-per-connection shape.
+func (s *SporePeerStore) handleConn(conn net.Conn) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(ioTO))
+
+	payload, err := readFrame(conn)
+	if err != nil {
+		return // malformed or abandoned request: nothing useful to answer
+	}
+	cid, ok := parseCIDRequest(payload)
+	if !ok {
+		writeFrameErr(conn, "400 bad cid")
+		return
+	}
+	// DiskStore.Get enforces the burn deadline itself (expired -> ErrExpired),
+	// so an expired body composts and reports "410 gone" — it is never served.
+	body, err := s.hold.Get(cid)
+	switch {
+	case err == nil:
+		// Status byte 0x00 || body — never a raw body without the status
+		// byte, and never a body whose sha256 != cid (DiskStore keys bodies
+		// by their own hash, so the check below is a belt-and-braces
+		// re-verification on the way out).
+		if sha256.Sum256(body) != cid {
+			writeFrameErr(conn, "500 cid mismatch")
+			return
+		}
+		out := make([]byte, 0, 1+len(body))
+		out = append(out, 0x00)
+		out = append(out, body...)
+		_, _ = conn.Write(frameBytes(out))
+	case errors.Is(err, store.ErrExpired):
+		writeFrameErr(conn, "410 gone")
+	case errors.Is(err, store.ErrNotFound):
+		writeFrameErr(conn, "404 not found")
+	default:
+		writeFrameErr(conn, "500 fetch error")
+	}
+}
+
+// parseCIDRequest validates the {"cid":"<64hex>"} request. Only the exact
+// documented shape is accepted — a hostile client cannot make us fetch or
+// serve anything but a well-formed content address.
+func parseCIDRequest(payload []byte) ([32]byte, bool) {
+	var cid [32]byte
+	s := string(payload)
+	if !strings.HasPrefix(s, `{"cid":"`) || !strings.HasSuffix(s, `"}`) {
+		return cid, false
+	}
+	hexCID := strings.TrimSuffix(strings.TrimPrefix(s, `{"cid":"`), `"}`)
+	if len(hexCID) != 64 {
+		return cid, false
+	}
+	raw, err := hex.DecodeString(hexCID)
+	if err != nil {
+		return cid, false
+	}
+	copy(cid[:], raw)
+	return cid, true
+}
+
+func writeFrameErr(conn net.Conn, msg string) {
+	_, _ = conn.Write(frameBytes(append([]byte{0x01}, msg...)))
+}
+
+// --- old-server fallback (WIRE_SPEC §5) --------------------------------
+
+// classifyWithLegacyFallback accepts a response from an OLD spore-peer
+// server that replies with the RAW body and no status byte: accepted only
+// when sha256(whole frame payload) == cid. New servers carry the status byte
+// and are handled by classify. This exists so a Go client can fetch from any
+// spore-peer distribution it meets on the wire.
+func classifyWithLegacyFallback(payload []byte, cid [32]byte) ([]byte, error) {
+	if len(payload) > 0 && (payload[0] == 0x00 || payload[0] == 0x01) {
+		return classify(payload, cid)
+	}
+	if sha256.Sum256(payload) == cid {
+		return payload, nil
+	}
+	// Neither a valid status-byte frame nor a raw body matching the CID.
+	return nil, fmt.Errorf("peerstore: peer: unrecognizable response (%d bytes)", len(payload))
+}

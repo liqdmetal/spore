@@ -39,15 +39,21 @@ var (
 	ErrUnsupported = errors.New("peerstore: peer transport is receive-only (the sender must run `spore-peer serve` on their own node)")
 )
 
+// Frame request/response framing used by the spore-peer JSON subset. Both
+// sides use it: the client to send requests and read responses, the server
+// (SporePeerStore) to serve bodies from its own hold.
+func frameBytes(payload []byte) []byte {
+	out := make([]byte, 4+len(payload))
+	binary.LittleEndian.PutUint32(out, uint32(len(payload)))
+	copy(out[4:], payload)
+	return out
+}
+
 // Fetch requests the body for cid from the peer at addr and returns it after
 // verifying sha256(body) == cid. Errors map the reference status codes to
 // store sentinels where they exist (404 -> store.ErrNotFound).
 func Fetch(ctx context.Context, addr string, cid [32]byte) ([]byte, error) {
 	req := []byte(`{"cid":"` + hex.EncodeToString(cid[:]) + `"}`)
-	frame := make([]byte, 4+len(req))
-	binary.LittleEndian.PutUint32(frame, uint32(len(req)))
-	copy(frame[4:], req)
-
 	d := net.Dialer{Timeout: dialTO}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -56,14 +62,18 @@ func Fetch(ctx context.Context, addr string, cid [32]byte) ([]byte, error) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(ioTO))
 
-	if _, err := conn.Write(frame); err != nil {
+	if _, err := conn.Write(frameBytes(req)); err != nil {
 		return nil, fmt.Errorf("peerstore: write request: %w", err)
 	}
 	payload, err := readFrame(conn)
 	if err != nil {
 		return nil, err
 	}
-	return classify(payload, cid)
+	// classifyWithLegacyFallback adds the WIRE_SPEC §5 old-server tolerance:
+	// a raw-body response (no status byte) is accepted when the whole payload
+	// hashes to the requested CID. New-style status-byte servers behave
+	// exactly as before.
+	return classifyWithLegacyFallback(payload, cid)
 }
 
 // classify is the pure response-dispatch: status byte, then integrity.

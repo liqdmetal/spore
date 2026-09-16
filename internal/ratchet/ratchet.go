@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
@@ -389,6 +390,14 @@ func (s *Session) dhStep() (ck [32]byte, err error) {
 // Encrypt seals pt under the current sending chain.
 func (s *Session) Encrypt(pt []byte) (Message, error) {
 	var m Message
+	// Defense-in-depth (audit L1): the header message number is a u32. The
+	// skipped-key bounds make reaching this practically impossible, but a
+	// chain that runs to MaxUint32 must fail loudly here rather than wrap the
+	// counter (a wrap would resurrect old message numbers and break replay
+	// detection). Re-key instead.
+	if s.ns == math.MaxUint32 {
+		return m, errors.New("ratchet: sending chain exhausted (message number overflow) — re-key the session")
+	}
 	// First send after a DH ratchet step (or the responder's first send):
 	// generate a FRESH ratchet key and open the sending chain off it (§5).
 	if s.cks == nil {
@@ -446,6 +455,12 @@ func (s *Session) DecryptWithDeadline(m Message, deadline time.Time) ([]byte, er
 }
 
 func (s *Session) decrypt(m Message, deadline time.Time) ([]byte, error) {
+	// Defense-in-depth (audit L1): no legitimate peer can ever send message
+	// number MaxUint32 (Encrypt refuses to emit it), so refuse it before any
+	// state is touched — a wrapped cursor would defeat replay detection.
+	if m.Header.N == math.MaxUint32 {
+		return nil, fmt.Errorf("ratchet: message number overflow refused")
+	}
 	// Ratchet transitions are speculative until AEAD authentication succeeds.
 	// Snapshot the complete state so malformed/tampered messages cannot burn
 	// chain keys, skipped keys, or DH-ratchet state.
@@ -555,6 +570,11 @@ func (s *Session) skipTo(dhPub [32]byte, from, to uint32, deadline time.Time) er
 	gap := int(to - from)
 	if gap == 0 {
 		return nil
+	}
+	// The receiving cursor must never advance onto MaxUint32: consume() would
+	// wrap it to 0 on the next message (audit L1).
+	if to == math.MaxUint32 {
+		return fmt.Errorf("ratchet: receiving chain exhausted (message number overflow) — re-key the session")
 	}
 	if gap > s.MaxSkipPerChain {
 		return fmt.Errorf("ratchet: %d skipped keys exceeds per-chain cap %d — failing closed", gap, s.MaxSkipPerChain)

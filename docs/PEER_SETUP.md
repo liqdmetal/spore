@@ -112,3 +112,45 @@ go install github.com/liqdmetal/spore/cmd/spore@latest
 spore -version
 spore donate --all   # per-chain donation rail
 ```
+
+## Serverless bodies (`sporepeer://`) — nobody holds your bytes but you two
+
+`-store http://mailbox` needs a mailbox; `-store nostr://` publishes to a
+public commons. The third posture needs **neither**: the sender's own node
+holds the body and the receiver pulls it P2P over the spore-peer transport.
+Only the two of you ever hold the bytes.
+
+Sender (you hold and serve your bodies):
+
+```bash
+spore msg send-e2 -to FRIEND_ADDR -identity ~/.spore/identity.key \
+  -bundle ./friend-bundle.json -pinned-sig FRIEND_SIGNING_KEY_HEX \
+  -store sporepeer://FRIEND_IP:8099 \
+  -store-dir ~/.spore/hold -store-serve 0.0.0.0:8099 \
+  -state-dir ~/.spore/state -state-key ~/.spore/state.key
+```
+
+- `-store sporepeer://FRIEND_IP:8099` — the peer to FETCH from (their
+  listener; also where your receive-side pulls land).
+- `-store-dir ~/.spore/hold` — where YOUR bodies are held until their TTL
+  rots them.
+- `-store-serve 0.0.0.0:8099` — bind YOUR spore-peer listener; the startup
+  line prints the exact `sporepeer://` address to give your contact. Use
+  `127.0.0.1:8099` if you only ever fetch locally.
+
+Receiver (keep it running; fetches from the sender's node):
+
+```bash
+spore msg recv-e2 -identity ~/.spore/identity.key -spk ~/.spore/spk.key \
+  -opk-pool ~/.spore/opk-pool.json \
+  -store sporepeer://SENDER_IP:8099 -store-dir ~/.spore/hold \
+  -state-dir ~/.spore/state -state-key ~/.spore/state.key
+```
+
+Honest limits: **both endpoints must be online** for the fetch — the
+sender's node IS the store, which is exactly why no operator exists. The
+transport is unauthenticated by design: anyone who can reach the port can
+fetch the (inert-without-the-ratchet-key) ciphertext, so firewall the port
+if that bothers you. A body whose TTL has passed composts on the holder's
+disk; a late fetch then gets a clean 404, not silence. Interoperates with
+the standalone Rust `spore-peer serve/fetch` binary in both directions.
