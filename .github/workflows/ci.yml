@@ -86,6 +86,43 @@ jobs:
         # Same commit already built and vetted on Windows by `windows`.
         run: go test -race ./...
 
+  # The other half of the wire contract: liqdmetal/spore-peer (Rust) is the
+  # reference transport spore's peerstore speaks (WIRE_SPEC §5). Build it,
+  # run its own test suite, then run Go's peerstore package against the REAL
+  # binary — TestFetchAgainstRealRustPeer is the interop proof, and the
+  # package's hostile-frame tests gain a real server to poke at. Pinned to a
+  # known-good spore-peer commit so this gate can't flake when that repo's
+  # main moves; bump the sha deliberately when the contract changes.
+  spore-peer:
+    name: spore-peer Rust + wire contract
+    runs-on: ubuntu-latest
+    env:
+      # Full 40-char sha on the liqdmetal/spore-peer default branch.
+      SPORE_PEER_PIN: 38643461ce4d8ab9ed5b36c81e79945f159d218f
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check out spore-peer at the pinned commit
+        # Partial clone (no blobs until needed): cheap even with full history,
+        # so the pinned sha always resolves even after main advances.
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/liqdmetal/spore-peer.git ../spore-peer
+          git -C ../spore-peer checkout "$SPORE_PEER_PIN"
+      - name: cargo build --release
+        working-directory: ../spore-peer
+        # --locked: build exactly the committed Cargo.lock resolution.
+        run: cargo build --release --locked
+      - name: cargo test
+        working-directory: ../spore-peer
+        run: cargo test --locked
+      - name: Go wire-contract tests against the real spore-peer binary
+        env:
+          SPORE_PEER_BIN: ${{ github.workspace }}/../spore-peer/target/release/spore-peer
+        run: go test ./internal/peerstore/ -count=1 -v
+
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -98,14 +135,16 @@ jobs:
             target: FuzzContinuityArtifactParsers
           - package: ./internal/anchor
             target: FuzzFromArguments
-          # ratchetwire: the wire codec plus the restored SecureWire seam
-          # targets (pin enforcement, durable state, full roundtrip).
-          - package: ./internal/ratchetwire
+          # wirefuzz: the standalone SPR2 parser targets (OSS-Fuzz mirrors
+          # these; keep the package in sync with projects/spore/build.sh).
+          - package: ./internal/wirefuzz
             target: FuzzFrameParse
-          - package: ./internal/ratchetwire
+          - package: ./internal/wirefuzz
             target: FuzzHandshakeUnmarshal
-          - package: ./internal/ratchetwire
+          - package: ./internal/wirefuzz
             target: FuzzMessageUnmarshal
+          # ratchetwire: the restored SecureWire seam targets (pin
+          # enforcement, durable state, full roundtrip).
           - package: ./internal/ratchetwire
             target: FuzzWireRoundtrip
           - package: ./internal/ratchetwire
