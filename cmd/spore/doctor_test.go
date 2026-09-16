@@ -18,6 +18,10 @@ func TestDoctorAllGood(t *testing.T) {
 	// Hermetic home + config: the key-files check must grade THIS setup,
 	// not whatever the developer's machine happens to have at ~/.spore.
 	home := t.TempDir()
+	// t.TempDir() is 0755 on Linux; the key-files check demands 0700.
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(home, "identity.key"), []byte("k"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +237,11 @@ func TestDoctorKeyFilesCheck(t *testing.T) {
 // passes config + key-files checks together.
 func TestDoctorHomeLayoutPasses(t *testing.T) {
 	home := t.TempDir()
-	// Minimal replica of what `spore init` writes.
+	// Minimal replica of what `spore init` writes. t.TempDir() is 0755 on
+	// Linux; init itself uses MkdirAll(0700), so mirror that here.
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"identity.key", "spk.key", "state.key", "store.key", "opk-pool.json"} {
 		p := filepath.Join(home, name)
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
