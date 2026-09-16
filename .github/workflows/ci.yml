@@ -20,8 +20,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # First signal: the fast, uninstrumented suite. Build/vet/test breakage
+  # surfaces here in minutes; the -race jobs below then double-check the
+  # same commit under the race detector without delaying this result.
   test:
-    name: build + vet + test (race)
+    name: build + vet + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +38,28 @@ jobs:
       - name: Vet
         # Blocking: vet is currently clean, keep it that way.
         run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  # The race pass runs as its own job so its slower instrumented build never
+  # gates the fast signal above. spore is networky (mailbox host, peers) —
+  # race detection is cheap here and catches the cross-goroutine bugs that
+  # matter most. Build and vet already passed on this exact commit in `test`.
+  test-race:
+    name: build + vet + test -race
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Test (race)
-        # spore is networky (mailbox host, peers) — race detection is cheap
-        # here and catches the cross-goroutine bugs that matter most.
+        # -race recompiles everything it needs; no separate build/vet steps.
         run: go test -race ./...
 
   windows:
-    name: Windows build + vet + test (race)
+    name: Windows build + vet + test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +70,20 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  windows-race:
+    name: Windows test -race
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Test (race)
+        # Same commit already built and vetted on Windows by `windows`.
         run: go test -race ./...
 
   fuzz-smoke:
