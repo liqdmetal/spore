@@ -105,13 +105,19 @@ func TestCLIDefaultPathDelivers(t *testing.T) {
 }
 
 // TestRatchetFramesCarryNoOuterEnvelope pins the H2 fix (RATCHET.md §6): a
-// ratcheted frame body must NOT begin with an envelope kind byte — the frame
-// is ratchet wire (header||nonce||ct), never a 0xE0/0xE1 envelope.
+// ratcheted message body is exactly header||nonce||ciphertext — never
+// prefixed with an envelope wrapper. The wire length is checked instead of a
+// leading-byte probe: the ratchet header's first field is a random X25519
+// public key, so a probe would false-positive whenever the key happens to
+// start with an envelope kind byte (~2^-7 of runs — seen as a rare
+// Windows-race CI flake). An envelope wrapper (0xE0/0xE1 kind byte +
+// ephemeral key + nonce + tag) would add >= 57 bytes.
 func TestRatchetFramesCarryNoOuterEnvelope(t *testing.T) {
 	bobID, _, _, bundle, bobSigPub := bobKit(t)
 
 	sender := cliEndpoint(t)
-	ptr, _, _, err := sender.SendFirstSession(bobID, bundle, bobSigPub, []byte("x"), time.Now().Add(time.Hour))
+	const plaintext = "x"
+	ptr, _, _, err := sender.SendFirstSession(bobID, bundle, bobSigPub, []byte(plaintext), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,8 +125,15 @@ func TestRatchetFramesCarryNoOuterEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secure.HasEnvelopeKind(frame.Message.MarshalBinary()) {
-		t.Fatal("ratcheted message begins with an envelope kind byte — double-wrapping regression")
+
+	// Wire layout per ratchet.MarshalBinary: 40-byte header (32 DHPub +
+	// 4 PN + 4 N) + 24-byte nonce + ciphertext (plaintext + 16-byte
+	// XChaCha20-Poly1305 tag). Exact match, no padding, no wrapper.
+	const headerLen, nonceLen, tagLen = 40, 24, 16
+	want := headerLen + nonceLen + len(plaintext) + tagLen
+	got := frame.Message.MarshalBinary()
+	if len(got) != want {
+		t.Fatalf("ratcheted message = %d bytes, want exactly %d (envelope wrapper would add >= 57)", len(got), want)
 	}
 }
 
