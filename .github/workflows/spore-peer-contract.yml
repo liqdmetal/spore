@@ -1,0 +1,82 @@
+name: spore-peer wire contract
+
+run-name: spore-peer wire contract${{ github.event_name == 'repository_dispatch' && format(' for spore-peer@{0}', github.event.client_payload.sha) || '' }}
+
+# The Rust half of the wire contract (liqdmetal/spore-peer is the reference
+# transport spore's peerstore speaks — WIRE_SPEC §5) gates from BOTH repos:
+#
+#   - spore pushes: ci.yml calls this file as a reusable workflow, and
+#   - spore-peer pushes: spore-peer's CI fires a repository_dispatch here
+#     (event type spore-peer-push) carrying the pushed sha in client_payload,
+#     so a Rust change is gated against the Go side the moment it lands.
+#
+# The job body lives only here so the two call sites cannot drift. Bump the
+# audited pin below deliberately, when the contract changes intentionally.
+
+on:
+  workflow_call:
+    inputs:
+      spore_peer_pin:
+        description: spore-peer commit to gate against (defaults to the audited pin)
+        required: false
+        type: string
+  repository_dispatch:
+    types: [spore-peer-push]
+  workflow_dispatch:
+    inputs:
+      spore_peer_pin:
+        description: spore-peer commit to gate against (defaults to the audited pin)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Dispatch runs: only the newest spore-peer main push matters, so a newer
+# dispatch cancels the previous in-flight one. Every other path keys off the
+# spore commit — a unique group per push (no cancellation, and no collision
+# with the caller CI run's own concurrency group, which is ci-CI-<ref>).
+concurrency:
+  group: spore-peer-contract-${{ github.event_name == 'repository_dispatch' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: spore-peer Rust + wire contract
+    runs-on: ubuntu-latest
+    env:
+      # Dispatches gate the pushed sha; workflow_call and manual runs default
+      # to the audited pin. Full 40-char sha on the liqdmetal/spore-peer
+      # default branch.
+      SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '38643461ce4d8ab9ed5b36c81e79945f159d218f' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Pin to the repo's own go.mod directive so CI and dev never drift.
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check out spore-peer at the gated commit
+        # Partial clone (no blobs until needed): cheap even with full history,
+        # so any default-branch sha resolves even after main advances.
+        run: |
+          echo "gating spore-peer@$SPORE_PEER_PIN"
+          echo "trigger: ${{ github.event_name }} | payload: ${{ toJSON(github.event.client_payload) }}"
+          git clone --filter=blob:none --no-checkout https://github.com/liqdmetal/spore-peer.git ../spore-peer
+          git -C ../spore-peer checkout "$SPORE_PEER_PIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache the cloned workspace's target/ (keyed off its Cargo.lock),
+          # not the spore checkout this job runs in.
+          workspaces: ../spore-peer
+      - name: cargo build --release
+        working-directory: ../spore-peer
+        # --locked: build exactly the committed Cargo.lock resolution.
+        run: cargo build --release --locked
+      - name: cargo test
+        working-directory: ../spore-peer
+        run: cargo test --locked
+      - name: Go wire-contract tests against the real spore-peer binary
+        env:
+          SPORE_PEER_BIN: ${{ github.workspace }}/../spore-peer/target/release/spore-peer
+        run: go test ./internal/peerstore/ -count=1 -v
