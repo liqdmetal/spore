@@ -14,9 +14,9 @@ import (
 // Endpoint's existing BodyStore and callers still exchange pointers.
 type DurableEndpoint struct {
 	*Endpoint
-	states         *FileStateStore
-	SessionExpiry  time.Duration
-	secureWire     *SecureWire // nil = legacy mode (no envelope v2 wrapping)
+	states        *FileStateStore
+	SessionExpiry time.Duration
+	secureWire    *SecureWire // nil = legacy mode (no envelope v2 wrapping)
 
 	// lossMu guards the confirmed-loss ledger. It is a leaf lock: taken only
 	// after Sessions' own lock has been released, never held across it.
