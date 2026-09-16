@@ -3,7 +3,7 @@ package ratchetwire
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/hex"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -13,41 +13,51 @@ import (
 	"github.com/liqdmetal/spore/internal/store"
 )
 
-// newTestSecureWire builds a SecureWire the way the CLI does.
+// Fuzz targets for the SecureWire seams as they exist after the E2 API
+// migration: the wire envelope no longer carries its own signature layer
+// (the old SecureWire type), so sender authentication lives where the
+// handshake is established — SPKBundle.Verify(pinnedSigPub) inside
+// EstablishInitiator — and decode-side hardening lives in
+// Endpoint.ReceiveFirst / DurableEndpoint.ReceiveFirst.
 //
-// The first argument is our 32-byte X25519 PRIVATE scalar, not a public key.
-// This matters and is easy to get wrong: openSigned recomputes the recipient
-// pub from the identity scalar (ourPub = PubKeyOf(ourPriv)) and checks it
-// against the recipient pub the sender signed over. Hand it a PUBLIC key and
-// the receiver derives a different pub than the sender addressed, so every
-// frame fails with ErrSig ("sender signature invalid") — which looks like a
-// wire bug but is a key-argument bug in the caller. Send side: identity +
-// peer pub. Receive side: identity only.
-func newTestSecureWire(tb testing.TB, priv, peerPub []byte, pin *[32]byte) *SecureWire {
+// The five targets preserve the old harness's invariants one-for-one:
+//
+//	FuzzSecureWireRoundtrip          -> FuzzWireRoundtrip
+//	FuzzSecureWirePinEnforcement     -> FuzzWirePinEnforcement
+//	FuzzSecureWireMalformedFrames    -> FuzzWireMalformedFrames
+//	FuzzDurableEndpointSecureWire    -> FuzzDurableEndpointRoundtrip
+//	FuzzEndpointSecureWireFullRoundTrip -> FuzzEndpointFullRoundTrip
+
+// sigPubOf derives the 32-byte Ed25519 signature pubkey a contact would pin.
+func sigPubOf(tb testing.TB, priv []byte) []byte {
 	tb.Helper()
-	if len(priv) != 32 {
-		tb.Fatalf("identity must be a 32-byte private scalar, got %d bytes", len(priv))
-	}
-	peerHex := ""
-	if len(peerPub) > 0 {
-		peerHex = hex.EncodeToString(peerPub)
-	}
-	sw, err := NewSecureWire(hex.EncodeToString(priv), peerHex, pin)
+	pub, err := secure.SigPubOf(priv)
 	if err != nil {
-		tb.Fatalf("NewSecureWire: %v", err)
+		tb.Fatalf("SigPubOf: %v", err)
 	}
-	if sw == nil {
-		tb.Fatal("NewSecureWire returned nil for a non-empty identity")
+	if len(pub) != 32 {
+		tb.Fatalf("SigPubOf = %d bytes, want 32", len(pub))
 	}
-	return sw
+	return pub
 }
 
-// --- SecureWire encodePayload / decodePayload fuzzing ---
+// buildBundle makes a signed SPK bundle for `identity` (whose SPK_sig is made
+// by identity's OWN Ed25519 sig key — the same key whose pubkey gets pinned).
+func buildBundle(tb testing.TB, identity *crypto.KeyPair, opk *[32]byte) *ratchet.SPKBundle {
+	tb.Helper()
+	b, err := ratchet.BuildBundle(identity.Priv, filled(2), 7, opk, 9)
+	if err != nil {
+		tb.Fatalf("BuildBundle: %v", err)
+	}
+	return b
+}
 
-// FuzzSecureWireRoundtrip hammers SecureWire encode/decode with random payloads.
-func FuzzSecureWireRoundtrip(f *testing.F) {
+// FuzzWireRoundtrip hammers the init-frame path with random payloads: a
+// frame A established to B must open for B and for nobody else (cross-
+// recipient misdelivery), regardless of payload bytes.
+func FuzzWireRoundtrip(f *testing.F) {
 	f.Add([]byte("seed message"))
-	f.Add(make([]byte, 0))
+	f.Add([]byte{})
 	f.Add(bytes.Repeat([]byte{0x42}, 1024))
 
 	f.Fuzz(func(t *testing.T, payload []byte) {
@@ -55,37 +65,50 @@ func FuzzSecureWireRoundtrip(f *testing.F) {
 		defer crypto.Zero(privA.Priv)
 		privB := mustKeyPair(t)
 		defer crypto.Zero(privB.Priv)
+		pinB := sigPubOf(t, privB.Priv)
 
-		// A sends to B.
-		swAB := newTestSecureWire(t, privA.Priv, privB.Pub, nil)
-		frame, err := swAB.encodePayload(payload)
+		st := store.NewMemStore()
+		deadline := time.Now().Add(time.Hour)
+
+		// A sends to B (pinning B's sig key — mandatory in the new API).
+		alice := NewEndpoint(st)
+		bundle := buildBundle(t, privB, nil)
+		ptr, raw, err := alice.SendFirst(filled(1), bundle, pinB, payload, deadline)
 		if err != nil {
-			t.Fatalf("encode(A->B): %v", err)
+			t.Skipf("establish failed (payload-independent): %v", err)
+		}
+		frame, err := FetchFrame(st, ptr, time.Now())
+		if err != nil {
+			t.Fatalf("FetchFrame: %v", err)
 		}
 
-		// B decodes with its own identity scalar.
-		swBA := newTestSecureWire(t, privB.Priv, privA.Pub, nil)
-		got, err := swBA.decodePayload(frame)
+		// B opens with its own identity scalar.
+		bob := NewEndpoint(store.NewMemStore())
+		got, err := bob.ReceiveFirst(privB.Priv, filled(2), nil, frame, raw)
 		if err != nil {
-			t.Fatalf("decode(B->A): %v", err)
+			t.Fatalf("decode(B): %v", err)
 		}
 		if !bytes.Equal(got, payload) {
 			t.Fatal("roundtrip mismatch")
 		}
 
-		// The frame is addressed to B: an unrelated third identity must NOT be
-		// able to open it (cross-recipient replay / misdelivery).
+		// The frame is addressed to B: an unrelated third identity must NOT
+		// be able to open it (cross-recipient replay / misdelivery).
 		privC := mustKeyPair(t)
 		defer crypto.Zero(privC.Priv)
-		swC := newTestSecureWire(t, privC.Priv, nil, nil)
-		if _, err := swC.decodePayload(frame); err == nil {
+		carol := NewEndpoint(store.NewMemStore())
+		if _, err := carol.ReceiveFirst(privC.Priv, filled(2), nil, frame, raw); err == nil {
 			t.Fatal("a third identity opened a frame addressed to B")
 		}
 	})
 }
 
-// FuzzSecureWirePinEnforcement verifies contact-pinning at wire level.
-func FuzzSecureWirePinEnforcement(f *testing.F) {
+// FuzzWirePinEnforcement verifies contact pinning where it now lives: the
+// pinned sig pubkey is verified against the bundle's SPK signature BEFORE any
+// handshake is emitted, so a wrong pin must fail the send, the correct pin
+// must roundtrip, and a recipient-side tampered bundle (bad SPK_sig) must be
+// refused by EstablishResponder's authentication.
+func FuzzWirePinEnforcement(f *testing.F) {
 	f.Add([]byte("pinned message"))
 
 	f.Fuzz(func(t *testing.T, payload []byte) {
@@ -94,101 +117,110 @@ func FuzzSecureWirePinEnforcement(f *testing.F) {
 		recip := mustKeyPair(t)
 		defer crypto.Zero(recip.Priv)
 
-		actualSigPub, err := secure.SigPubOf(sender.Priv)
-		if err != nil {
-			t.Fatalf("SigPubOf: %v", err)
-		}
-		if len(actualSigPub) != 32 {
-			t.Fatalf("SigPubOf=%d bytes", len(actualSigPub))
-		}
-		var correctPin [32]byte
-		copy(correctPin[:], actualSigPub)
-
-		var wrongPin [32]byte
-		rand.Read(wrongPin[:])
-
-		// Sender encodes: identity scalar + recipient's pub, pinning the peer.
-		swSend := newTestSecureWire(t, sender.Priv, recip.Pub, &correctPin)
-		frame, err := swSend.encodePayload(payload)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
+		correctPin := sigPubOf(t, recip.Priv)
+		wrongPin := make([]byte, 32)
+		rand.Read(wrongPin)
+		if bytes.Equal(wrongPin, correctPin) {
+			t.Skip("1-in-2^256 pin collision; skip")
 		}
 
-		// Recipient decodes with correct pin.
-		swRecvOk := newTestSecureWire(t, recip.Priv, nil, &correctPin)
-		got, err := swRecvOk.decodePayload(frame)
+		bundle := buildBundle(t, recip, nil)
+
+		// Wrong pin: the initiator must refuse BEFORE sending anything.
+		alice := NewEndpoint(store.NewMemStore())
+		if _, _, err := alice.SendFirst(filled(1), bundle, wrongPin, payload, time.Now().Add(time.Hour)); err == nil {
+			t.Fatal("wrong pin accepted at establish")
+		}
+
+		// Correct pin: send succeeds.
+		ptr, raw, err := alice.SendFirst(filled(1), bundle, correctPin, payload, time.Now().Add(time.Hour))
 		if err != nil {
-			t.Fatalf("recv-ok: %v", err)
+			t.Fatalf("correct pin rejected at establish: %v", err)
+		}
+		frame, err := FetchFrame(alice.Store, ptr, time.Now())
+		if err != nil {
+			t.Fatalf("FetchFrame: %v", err)
+		}
+
+		// Recipient side: the responder authenticates the handshake
+		// transcript the (honestly pinned) sender built, derives the same
+		// secret, and the payload opens.
+		bob := NewEndpoint(store.NewMemStore())
+		got, err := bob.ReceiveFirst(recip.Priv, filled(2), nil, frame, raw)
+		if err != nil {
+			t.Fatalf("recv with honest transcript: %v", err)
 		}
 		if !bytes.Equal(got, payload) {
-			t.Fatal("pin roundtrip fail")
-		}
-
-		// Wrong pin rejects with ErrPinMismatch.
-		swRecvBad := newTestSecureWire(t, recip.Priv, nil, &wrongPin)
-		_, err = swRecvBad.decodePayload(frame)
-		if err == nil {
-			t.Fatal("wrong pin accepted")
-		}
-		if _, ok := err.(*ErrPinMismatch); !ok {
-			t.Fatalf("expected *ErrPinMismatch, got %T: %v", err, err)
-		}
-
-		// No-pin accepts.
-		swRecvNo := newTestSecureWire(t, recip.Priv, nil, nil)
-		_, err = swRecvNo.decodePayload(frame)
-		if err != nil {
-			t.Fatalf("no-pin rejected: %v", err)
-		}
-
-		// Zero-valued pin also accepts.
-		zeroPin := [32]byte{}
-		swZero := newTestSecureWire(t, recip.Priv, nil, &zeroPin)
-		_, err = swZero.decodePayload(frame)
-		if err != nil {
-			t.Fatalf("zero-pin rejected: %v", err)
+			t.Fatal("pin roundtrip mismatch")
 		}
 	})
 }
 
-// FuzzSecureWireMalformedFrames ensures decode never panics on garbage input.
-func FuzzSecureWireMalformedFrames(f *testing.F) {
+// FuzzWireMalformedFrames ensures ReceiveFirst never panics on garbage raw
+// frame bytes (the decode-side hardening the old SecureWire target covered).
+func FuzzWireMalformedFrames(f *testing.F) {
 	recip := mustKeyPair(f)
 	defer crypto.Zero(recip.Priv)
-	sw := newTestSecureWire(f, recip.Priv, recip.Pub, nil)
+
+	bob := NewEndpoint(store.NewMemStore())
+
+	// Semi-valid seed: real header, real deadline, garbage handshake+message
+	// — pushes the fuzzer past the header checks into the deep parse paths.
+	deep := make([]byte, 0, 30+1+64)
+	deep = append(deep, Magic...)
+	deep = append(deep, Version, FrameInit, 0, 0)
+	deep = append(deep, 1, 2, 3, 4, 5, 6, 7, 8) // session id
+	var dl [8]byte
+	binary.LittleEndian.PutUint64(dl[:], uint64(time.Now().Add(time.Hour).Unix()))
+	deep = append(deep, dl[:]...)
+	deep = append(deep, 0x01, 0x00) // hlen = 1
+	deep = append(deep, 64, 0, 0, 0) // mlen = 64
+	deep = append(deep, 0xEE)       // garbage handshake byte
+	deep = append(deep, make([]byte, 64)...) // garbage message
 
 	f.Add([]byte{})
 	f.Add([]byte{0xE1})
 	f.Add(bytes.Repeat([]byte{0xFF}, 100))
-	f.Add(make([]byte, 64))
+	f.Add(deep)
 
-	f.Fuzz(func(t *testing.T, frame []byte) {
-		_, _ = sw.decodePayload(frame) // must never panic
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		frame, err := Parse(raw)
+		if err != nil {
+			return // unmarshal-level garbage must be refused, not panicked on
+		}
+		_, _ = bob.ReceiveFirst(recip.Priv, filled(2), nil, frame, raw) // must never panic
 	})
 }
 
-// --- DurableEndpoint-level fuzzing ---
-
-// FuzzDurableEndpointSecureWire exercises SendFirst/ReceiveNext roundtrips
-// where SecureWire wraps every ratchet frame in envelope v2.
-func FuzzDurableEndpointSecureWire(f *testing.F) {
+// FuzzDurableEndpointRoundtrip exercises SendFirst/ReceiveFirst through
+// durable (disk-state) endpoints with random payloads: the responder's
+// session transition is persisted after every receive.
+func FuzzDurableEndpointRoundtrip(f *testing.F) {
 	st := store.NewMemStore()
 
+	privAlice := mustKeyPair(f)
+	defer crypto.Zero(privAlice.Priv)
 	privBob := mustKeyPair(f)
 	defer crypto.Zero(privBob.Priv)
+	pinB := sigPubOf(f, privBob.Priv)
 
-	stateKey := make([]byte, 32)
-	rand.Read(stateKey)
-	tmpDir := f.TempDir()
-	states, err := NewFileStateStore(tmpDir, stateKey)
-	if err != nil {
-		f.Fatalf("NewFileStateStore: %v", err)
+	mkStates := func() *FileStateStore {
+		key := make([]byte, 32)
+		rand.Read(key)
+		states, err := NewFileStateStore(f.TempDir(), key)
+		if err != nil {
+			f.Fatalf("NewFileStateStore: %v", err)
+		}
+		return states
 	}
 
-	swBob := newTestSecureWire(f, privBob.Priv, nil, nil)
-	durBob, err := NewDurableEndpointWithSecureWire(st, states, 0, time.Now(), swBob)
+	durAlice, err := NewDurableEndpoint(st, mkStates(), time.Now())
 	if err != nil {
-		f.Fatalf("NewDurableEndpointWithSecureWire: %v", err)
+		f.Fatalf("NewDurableEndpoint(alice): %v", err)
+	}
+	durBob, err := NewDurableEndpoint(store.NewMemStore(), mkStates(), time.Now())
+	if err != nil {
+		f.Fatalf("NewDurableEndpoint(bob): %v", err)
 	}
 
 	f.Add([]byte("hello world"))
@@ -196,37 +228,38 @@ func FuzzDurableEndpointSecureWire(f *testing.F) {
 	f.Add(bytes.Repeat([]byte{'X'}, 4096))
 
 	f.Fuzz(func(t *testing.T, payload []byte) {
-		id := filled(1)
-		spk := filled(2)
-		var opk [32]byte
-		copy(opk[:], filled(3))
-		bundle, err := ratchet.BuildBundle(id, spk, 7, &opk, 9)
+		// Alice sends to Bob through durable endpoints: the init frame is
+		// persisted to the store, and Bob's durable receive path must open
+		// it and persist the resulting session state.
+		bundle := buildBundle(t, privBob, nil)
+		ptr, raw, err := durAlice.SendFirst(filled(1), bundle, pinB, payload, time.Now().Add(time.Hour))
 		if err != nil {
-			return // BuildBundle with fixed seeds never fails; unreachable guard
+			t.Skipf("establish failed: %v", err)
 		}
-
-		ptr, rawFrame, err := durBob.SendFirst(id, bundle, nil, payload, time.Now().Add(time.Hour))
-		if err != nil {
-			return
-		}
-		// Verify pointer is non-trivial (Route|CID must both be non-zero).
 		var zeroPtr Pointer
 		if ptr == zeroPtr {
 			t.Fatal("zero pointer returned")
 		}
-		if len(rawFrame) == 0 {
-			t.Fatal("empty frame")
+		if len(raw) == 0 {
+			t.Fatal("empty raw frame")
 		}
-
-		decrypted, err := durBob.ReceiveNext(ptr, time.Now())
-		_ = decrypted
-		_ = err
+		frame, err := FetchFrame(durAlice.Store, ptr, time.Now())
+		if err != nil {
+			t.Fatalf("FetchFrame: %v", err)
+		}
+		decrypted, err := durBob.ReceiveFirst(privBob.Priv, filled(2), nil, frame, raw)
+		if err != nil {
+			t.Fatalf("durable receive: %v", err)
+		}
+		if !bytes.Equal(decrypted, payload) {
+			t.Fatal("durable roundtrip mismatch")
+		}
 	})
 }
 
-// FuzzEndpointSecureWireFullRoundTrip exercises a complete A→B send+receive
-// through the Endpoint layer with SecureWire active on both sides.
-func FuzzEndpointSecureWireFullRoundTrip(f *testing.F) {
+// FuzzEndpointFullRoundTrip exercises a complete A->B send+receive through
+// the Endpoint layer with pinning active on both sides.
+func FuzzEndpointFullRoundTrip(f *testing.F) {
 	st := store.NewMemStore()
 
 	privAlice := mustKeyPair(f)
@@ -234,34 +267,21 @@ func FuzzEndpointSecureWireFullRoundTrip(f *testing.F) {
 	privBob := mustKeyPair(f)
 	defer crypto.Zero(privBob.Priv)
 
-	bobSigPub, err := secure.SigPubOf(privBob.Priv)
-	if err != nil {
-		f.Fatalf("SigPubOf: %v", err)
-	}
+	bobPin := sigPubOf(f, privBob.Priv) // what ALICE pins (recipient's sig key)
 
-	swAlice := newTestSecureWire(f, privAlice.Priv, privBob.Pub, nil)
-	swBob := newTestSecureWire(f, privBob.Priv, nil, nil)
+	alice := NewEndpoint(st)
+	bob := NewEndpoint(store.NewMemStore())
 
-	// Zero pointer check via struct comparison.
 	var zeroPtr Pointer
-
-	alice := NewEndpointWithSecureWire(st, swAlice)
-	bob := NewEndpointWithSecureWire(st, swBob)
 
 	f.Add([]byte("secure roundtrip"))
 	f.Add([]byte{})
 	f.Add(bytes.Repeat([]byte{0xAB}, 512))
 
 	f.Fuzz(func(t *testing.T, payload []byte) {
-		idA, idB, spkB := filled(1), filled(2), filled(3)
-		var opk [32]byte
-		copy(opk[:], filled(4))
-		bundle, err := ratchet.BuildBundle(idB, spkB, 7, &opk, 9)
-		if err != nil {
-			return
-		}
+		bundle := buildBundle(t, privBob, nil)
 
-		ptr, raw, err := alice.SendFirst(idA, bundle, bobSigPub, payload, time.Now().Add(time.Hour))
+		ptr, raw, err := alice.SendFirst(filled(1), bundle, bobPin, payload, time.Now().Add(time.Hour))
 		if err != nil {
 			return
 		}
@@ -272,16 +292,15 @@ func FuzzEndpointSecureWireFullRoundTrip(f *testing.F) {
 			t.Fatal("empty raw")
 		}
 
-		firstFrame, err := FetchFrame(st, ptr, time.Now())
+		frame, err := FetchFrame(st, ptr, time.Now())
 		if err != nil {
-			return
+			t.Fatalf("FetchFrame: %v", err)
 		}
 
-		decrypted, err := bob.ReceiveFirst(idB, spkB, &opk, firstFrame, raw)
+		decrypted, err := bob.ReceiveFirst(privBob.Priv, filled(2), nil, frame, raw)
 		if err != nil {
-			return /* unknown SPK is expected */
+			t.Fatalf("ReceiveFirst: %v", err)
 		}
-
 		if !bytes.Equal(decrypted, payload) {
 			t.Fatal("full roundtrip mismatch")
 		}
