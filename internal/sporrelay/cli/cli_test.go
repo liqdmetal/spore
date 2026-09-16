@@ -40,7 +40,7 @@ func TestParseRouteIdx(t *testing.T) {
 		{"0", 0, ""},
 		{"1", 1, ""},
 		{"42", 42, ""},
-		{"007", 7, ""}, // leading zeros are still integers
+		{"007", 7, ""},               // leading zeros are still integers
 		{" 2 ", 0, "not an integer"}, // Atoi is strict: no whitespace tolerance
 		{"", 0, "not an integer"},
 		{"abc", 0, "not an integer"},

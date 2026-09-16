@@ -14,26 +14,26 @@ import (
 // Contract IDs (64-char hex) for mainnet-deployed relay-dex contracts.
 // These are the deployed SC IDs from relay-dex; set via env or config at runtime.
 var (
-	HTLCContractID         = "" // RelayHTLC.dvm
-	DEXContractID          = "" // RelayDEX.dvm
-	WrappedDeroContractID  = "" // RelayWrappedDero.dvm
+	HTLCContractID        = "" // RelayHTLC.dvm
+	DEXContractID         = "" // RelayDEX.dvm
+	WrappedDeroContractID = "" // RelayWrappedDero.dvm
 )
 
 // SC argument names per DVM source
 const (
 	// HTLC
-	HTLCArgHash        = "h"
-	HTLCArgRecipient   = "recipient"
-	HTLCArgExpiry      = "exp"
-	HTLCArgPreimage    = "pre"
+	HTLCArgHash      = "h"
+	HTLCArgRecipient = "recipient"
+	HTLCArgExpiry    = "exp"
+	HTLCArgPreimage  = "pre"
 
 	// DEX
-	DEXArgTokenA       = "ta"
-	DEXArgTokenB       = "tb"
-	DEXArgAmountOut    = "mo"
+	DEXArgTokenA    = "ta"
+	DEXArgTokenB    = "tb"
+	DEXArgAmountOut = "mo"
 
 	// WrappedDero
-	WDArgAmount        = "a" // implicit via DEROVALUE()
+	WDArgAmount = "a" // implicit via DEROVALUE()
 )
 
 // HTLCFund funds an HTLC contract: locks DERO behind hash + expiry + recipient.

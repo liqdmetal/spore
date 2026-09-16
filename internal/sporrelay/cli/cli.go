@@ -1,11 +1,12 @@
 // Package cli provides Spore CLI subcommands that integrate with SporRelay's
 // settlement infrastructure. Currently implements:
-//   spore settle discover <source-amount> <dest-address>
-//     Query RelayOS for multi-chain routes
-//   spore settle execute <objective-id> <route-index>
-//     Execute a discovered route through the relayer
-//   spore settle assurance <objective-id> [none|light|full]
-//     Generate ZK proof for a settled objective
+//
+//	spore settle discover <source-amount> <dest-address>
+//	  Query RelayOS for multi-chain routes
+//	spore settle execute <objective-id> <route-index>
+//	  Execute a discovered route through the relayer
+//	spore settle assurance <objective-id> [none|light|full]
+//	  Generate ZK proof for a settled objective
 package cli
 
 import (
@@ -30,15 +31,15 @@ func Discover(args []string) {
 
 	cfg := sporrelay.DefaultConfig()
 	cfg.RelayerURL = getRelayerURL()
-	
+
 	srcAmount := args[0]
 	destAddr := args[1]
-	
+
 	asset, atomic, err := sporrelay.ParseAmount(srcAmount)
 	if err != nil {
 		check(fmt.Errorf("parse amount: %w", err))
 	}
-	
+
 	var destChain string
 	for i := 2; i < len(args); i++ {
 		switch strings.ToLower(args[i]) {
@@ -57,7 +58,7 @@ func Discover(args []string) {
 			}
 		}
 	}
-	
+
 	obj := sporrelay.NewObjective(
 		sporrelay.Source{
 			Chain:  "dero", // sender's chain
@@ -71,13 +72,13 @@ func Discover(args []string) {
 		},
 		cfg.FeePct*100, // max fee pct
 	)
-	
+
 	cl := sporrelay.NewClient(cfg)
 	resp, err := cl.DiscoverRoutes(context.Background(), obj)
 	if err != nil {
 		check(fmt.Errorf("discover: %w", err))
 	}
-	
+
 	printRouteResponse(resp)
 }
 
@@ -87,16 +88,16 @@ func Execute(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: spore settle execute <objective-id> <route-index>")
 		return
 	}
-	
+
 	objID := args[0]
 	routeIdx, perr := parseRouteIdx(args[1])
 	if perr != nil {
 		check(perr)
 	}
-	
+
 	cfg := sporrelay.DefaultConfig()
 	cfg.RelayerURL = getRelayerURL()
-	
+
 	// First discover to get the route
 	obj := sporrelay.NewObjective(
 		sporrelay.Source{Token: "", Amount: 0},
@@ -104,26 +105,26 @@ func Execute(args []string) {
 		cfg.FeePct*100,
 	)
 	obj.ID = objID
-	
+
 	cl := sporrelay.NewClient(cfg)
 	resp, err := cl.DiscoverRoutes(context.Background(), obj)
 	if err != nil {
 		check(fmt.Errorf("discover before execute: %w", err))
 	}
-	
+
 	route, serr := selectRoute(resp, routeIdx)
 	if serr != nil {
 		check(serr)
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	
+
 	result, err := cl.Execute(ctx, obj, route)
 	if err != nil {
 		check(fmt.Errorf("execute: %w", err))
 	}
-	
+
 	printSettlementResult(result)
 }
 
@@ -133,48 +134,48 @@ func Assurance(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: spore settle assurance <objective-id> [none|light|full]")
 		return
 	}
-	
+
 	objID := args[0]
 	mode := sporrelay.AssuranceLight
 	if len(args) > 1 {
 		mode = args[1]
 	}
-	
+
 	cfg := sporrelay.DefaultConfig()
 	cfg.RelayerURL = getRelayerURL()
 	cfg.AssuranceMode = mode
-	
+
 	cl := sporrelay.NewClient(cfg)
-	
+
 	obj := sporrelay.NewObjective(
 		sporrelay.Source{Token: "", Amount: 0},
 		sporrelay.Destination{Address: ""},
 		cfg.FeePct*100,
 	)
 	obj.ID = objID
-	
+
 	// Get result first
 	ctx := context.Background()
 	resp, err := cl.DiscoverRoutes(ctx, obj)
 	if err != nil {
 		check(fmt.Errorf("lookup result: %w", err))
 	}
-	
+
 	result := &sporrelay.SettlementResult{ObjectiveID: objID}
 	if resp != nil && len(resp.Candidates) > 0 {
 		result.Status = "complete" // assume completed for proof gen
 	}
-	
+
 	proof, err := cl.GenerateAssurance(ctx, result)
 	if err != nil {
 		check(fmt.Errorf("assurance: %w", err))
 	}
-	
+
 	if proof == nil {
 		fmt.Println("No proof generated (assurance mode = none)")
 		return
 	}
-	
+
 	data, _ := json.MarshalIndent(proof, "", "  ")
 	fmt.Println(string(data))
 }
@@ -238,7 +239,7 @@ func printRouteResponse(resp *sporrelay.RouteDiscoveryResponse) {
 	fmt.Printf("Best Route: %d legs, total fees %.3f%%\n",
 		len(resp.BestRoute), resp.TotalFees*100)
 	fmt.Printf("Est Duration: %v\n\n", resp.EstDuration)
-	
+
 	for i, leg := range resp.BestRoute {
 		fmt.Printf("Leg %d: %s → %s\n", i, leg.FromChain, leg.ToChain)
 		fmt.Printf("  %s → %s\n", leg.AssetIn, leg.AssetOut)
@@ -247,7 +248,7 @@ func printRouteResponse(resp *sporrelay.RouteDiscoveryResponse) {
 		fmt.Printf("  Contract: %s (%s)\n", leg.ContractAddr, leg.Method)
 		fmt.Printf("\n")
 	}
-	
+
 	if len(resp.Candidates) > 1 {
 		fmt.Printf("Also considered %d alternative routes:\n", len(resp.Candidates)-1)
 		for j, c := range resp.Candidates[1:] {
@@ -262,21 +263,21 @@ func printSettlementResult(r *sporrelay.SettlementResult) {
 	if r.Status == "failed" {
 		statusEmoji = "✗"
 	}
-	
+
 	fmt.Printf("\n=== Settlement [%s] ===\n", statusEmoji)
 	fmt.Printf("Objective: %s\n", r.ObjectiveID)
 	fmt.Printf("Status: %s\n", r.Status)
 	fmt.Printf("Fees Paid: %.6f\n", r.FeesPaid)
 	fmt.Printf("Confirms: %d tx%s\n", len(r.TxHashes), plural(len(r.TxHashes)))
-	
+
 	for i, hash := range r.TxHashes {
 		fmt.Printf("  #%d: %s\n", i+1, hash)
 	}
-	
+
 	if r.Error != "" {
 		fmt.Printf("Error: %s\n", r.Error)
 	}
-	
+
 	if r.Proof != nil {
 		fmt.Printf("\nZK Proof:\n")
 		fmt.Printf("  Type: %s (depth %d)\n", r.Proof.ProofType, r.Proof.Depth)

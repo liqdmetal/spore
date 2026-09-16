@@ -173,9 +173,9 @@ func FuzzWireMalformedFrames(f *testing.F) {
 	var dl [8]byte
 	binary.LittleEndian.PutUint64(dl[:], uint64(time.Now().Add(time.Hour).Unix()))
 	deep = append(deep, dl[:]...)
-	deep = append(deep, 0x01, 0x00) // hlen = 1
-	deep = append(deep, 64, 0, 0, 0) // mlen = 64
-	deep = append(deep, 0xEE)       // garbage handshake byte
+	deep = append(deep, 0x01, 0x00)          // hlen = 1
+	deep = append(deep, 64, 0, 0, 0)         // mlen = 64
+	deep = append(deep, 0xEE)                // garbage handshake byte
 	deep = append(deep, make([]byte, 64)...) // garbage message
 
 	f.Add([]byte{})

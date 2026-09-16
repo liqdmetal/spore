@@ -55,18 +55,18 @@ const maxSnippetLen = 512 // cap per-message snippet before tokenization
 func (idx *InvertedIndex) Add(txid, peerAddr string, atUnix int64, snippet string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	
+
 	// Truncate snippet to prevent unbounded token accumulation from a single message.
 	if len(snippet) > maxSnippetLen {
 		snippet = snippet[:maxSnippetLen]
 	}
-	
+
 	toks := tokenize(snippet)
 	msgIdx := len(idx.msgAt)
 	idx.msgAt = append(idx.msgAt, atUnix)
 	idx.snip = append(idx.snip, snippet)
 	idx.peer = append(idx.peer, strings.ToLower(peerAddr))
-	
+
 	for _, tok := range toks {
 		s := idx.tokens[tok]
 		if s == nil {
@@ -75,7 +75,7 @@ func (idx *InvertedIndex) Add(txid, peerAddr string, atUnix int64, snippet strin
 		}
 		s[msgIdx] = struct{}{}
 	}
-	
+
 	idx.n++
 }
 
@@ -83,25 +83,25 @@ func (idx *InvertedIndex) Add(txid, peerAddr string, atUnix int64, snippet strin
 func (idx *InvertedIndex) SearchAnd(terms []string) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	
+
 	if len(terms) == 0 {
 		return nil
 	}
-	
+
 	// Find smallest term first (optimisation: start with most-restrictive set).
 	smallest := ""
 	smallCount := ^int(0)
 	for _, t := range terms {
 		set := idx.tokens[t]
 		if set == nil {
-					return nil // early-out: missing term => no hits
-				}
+			return nil // early-out: missing term => no hits
+		}
 		if len(set) < smallCount {
 			smallCount = len(set)
 			smallest = t
 		}
 	}
-	
+
 	base := idx.tokens[smallest]
 	result := make([]int, 0, smallCount)
 	for mIdx := range base {
@@ -126,11 +126,11 @@ func (idx *InvertedIndex) SearchAnd(terms []string) []int {
 func (idx *InvertedIndex) SearchOr(terms []string) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	
+
 	if len(terms) == 0 {
 		return nil
 	}
-	
+
 	hits := make(map[int]struct{})
 	for _, tok := range terms {
 		if set := idx.tokens[tok]; set != nil {
@@ -139,7 +139,7 @@ func (idx *InvertedIndex) SearchOr(terms []string) []int {
 			}
 		}
 	}
-	
+
 	result := make([]int, 0, len(hits))
 	for mIdx := range hits {
 		result = append(result, mIdx)
@@ -151,16 +151,16 @@ func (idx *InvertedIndex) SearchOr(terms []string) []int {
 func (idx *InvertedIndex) SearchNot(results []int, exclude []string) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	
+
 	if len(exclude) == 0 || len(results) == 0 {
 		return results
 	}
-	
+
 	exclMap := make(map[string]bool)
 	for _, e := range exclude {
 		exclMap[e] = true
 	}
-	
+
 	filtered := make([]int, 0, len(results))
 	for _, mIdx := range results {
 		snippet := strings.ToLower(idx.snip[mIdx])
@@ -183,11 +183,11 @@ func (idx *InvertedIndex) SearchNot(results []int, exclude []string) []int {
 func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	
+
 	if window <= 0 || window > 10 {
 		window = 3 // default window
 	}
-	
+
 	words := tokenize(phrase)
 	if len(words) == 0 {
 		return nil
@@ -195,24 +195,24 @@ func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 	if len(words) == 1 {
 		return idx.SearchOr(words)
 	}
-	
+
 	// Build candidate positions using the first term as anchor, then verify subsequent terms fall within window.
 	first := idx.tokens[words[0]]
 	if first == nil {
 		return nil
 	}
-	
+
 	var hits []int
 	seen := make(map[int]bool)
-	
+
 	for pos := range first {
 		snip := idx.snip[pos]
 		lower := strings.ToLower(snip)
-		
+
 		start := 0
 		prevEnd := -1
 		found := 1
-		
+
 		for i := 1; i < len(words); i++ {
 			nextStart := strings.Index(lower[start:], words[i])
 			if nextStart == -1 {
@@ -220,17 +220,17 @@ func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 			}
 			actualPos := start + nextStart
 			endOfWord := actualPos + len(words[i])
-			
+
 			// Check if this term falls within window of previous match
 			if prevEnd >= 0 && actualPos-prevEnd > window*10 {
 				break // too far
 			}
-			
+
 			found++
 			prevEnd = endOfWord
 			start = nextStart + 1
 		}
-		
+
 		if found == len(words) {
 			if !seen[pos] {
 				hits = append(hits, pos)
@@ -238,7 +238,7 @@ func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 			}
 		}
 	}
-	
+
 	return hits
 }
 
@@ -246,7 +246,7 @@ func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 func (idx *InvertedIndex) SegmentByDate(week int) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	
+
 	idx.seg = make(map[int]string, len(idx.msgAt))
 	for i, ts := range idx.msgAt {
 		sec := uint64(ts) / uint64(week*7*86400)

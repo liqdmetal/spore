@@ -12,11 +12,11 @@ import (
 // decoder must never panic and must never accept a payload without a
 // version (the V==0 rejection in Decode).
 func FuzzDecode(f *testing.F) {
-	f.Add(Prefix + "eyJ2IjoxfQ")                       // minimal {"v":1}
-	f.Add(Prefix)                                       // empty body
-	f.Add(Prefix + strings.Repeat("A", 10000))          // oversized
-	f.Add(Prefix + "!!!not-base64!!!")                  // bad encoding
-	f.Add("not-an-invite")                              // wrong prefix
+	f.Add(Prefix + "eyJ2IjoxfQ")                                            // minimal {"v":1}
+	f.Add(Prefix)                                                           // empty body
+	f.Add(Prefix + strings.Repeat("A", 10000))                              // oversized
+	f.Add(Prefix + "!!!not-base64!!!")                                      // bad encoding
+	f.Add("not-an-invite")                                                  // wrong prefix
 	f.Add(Prefix + base64.RawURLEncoding.EncodeToString([]byte(`{"v":0}`))) // version 0
 	f.Add(Prefix + base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"unknown_field":[]}`)))
 	f.Add(Prefix + base64.RawURLEncoding.EncodeToString([]byte(`null`)))

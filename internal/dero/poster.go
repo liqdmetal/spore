@@ -460,12 +460,12 @@ func (c *Client) IncomingAnchors(ctx context.Context, minHeight uint64, interval
 // ringsize is the anonymity set, fees is explicit fees (0 = auto).
 func (c *Client) InvokeSC(ctx context.Context, scid string, rpcArgs anchor.Arguments, deroDeposit, tokenDeposit, ringsize, fees uint64) (string, error) {
 	params := struct {
-		SCID            string          `json:"scid"`
-		SC_RPC          anchor.Arguments `json:"sc_rpc"`
-		SC_DERO_Deposit uint64          `json:"sc_dero_deposit"`
-		SC_TOKEN_Deposit uint64         `json:"sc_token_deposit"`
-		Ringsize        uint64          `json:"ringsize"`
-		Fees            uint64          `json:"fees"`
+		SCID             string           `json:"scid"`
+		SC_RPC           anchor.Arguments `json:"sc_rpc"`
+		SC_DERO_Deposit  uint64           `json:"sc_dero_deposit"`
+		SC_TOKEN_Deposit uint64           `json:"sc_token_deposit"`
+		Ringsize         uint64           `json:"ringsize"`
+		Fees             uint64           `json:"fees"`
 	}{
 		SCID:             scid,
 		SC_RPC:           rpcArgs,

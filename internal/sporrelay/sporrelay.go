@@ -22,7 +22,7 @@ import (
 // --- Configuration -----------------------------------------------------------
 
 const (
-	AssuranceNone = "none"
+	AssuranceNone  = "none"
 	AssuranceLight = "light"
 	AssuranceFull  = "full"
 )
@@ -48,7 +48,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		RelayerURL:    "",
 		APIToken:      "",
-		FeePct:        0.002,     // 20bps default cut
+		FeePct:        0.002, // 20bps default cut
 		AssuranceMode: AssuranceLight,
 	}
 }
@@ -81,11 +81,11 @@ func (c *Config) Validate() error {
 
 // Source represents a chain source token/asset being routed out.
 type Source struct {
-	Chain    string  // "dero", "evm", "solana", etc.
-	Address  string  // sender address on that chain
-	Token    string  // asset identifier ("DERO", "USDC", etc.)
-	Amount   uint64  // atomic amount
-	RingSize uint64  // anonymity set (0 = chain default)
+	Chain    string // "dero", "evm", "solana", etc.
+	Address  string // sender address on that chain
+	Token    string // asset identifier ("DERO", "USDC", etc.)
+	Amount   uint64 // atomic amount
+	RingSize uint64 // anonymity set (0 = chain default)
 }
 
 // Destination represents where value should arrive.
@@ -98,21 +98,21 @@ type Destination struct {
 
 // RouteLeg represents one hop in a multi-chain swap.
 type RouteLeg struct {
-	Index         int       // position in route (0-based)
-	FromChain     string    // source chain of this leg
-	ToChain       string    // target chain of this leg
-	FromAddress   string    // who sends this leg
-	ToAddress     string    // who receives this leg
-	AssetIn       string    // asset entering this leg
-	AssetOut      string    // asset exiting this leg
-	AmountIn      uint64    // input amount
-	AmountOut     uint64    // output amount (after spread + fee)
-	FeePct        float64   // platform fee taken on this leg
-	TxID          string    // txid after submission
-	ContractAddr  string    // smart contract used (if any)
-	Method        string    // contract method invoked
-	BlockHeight   uint64    // confirming block on target
-	Confirmations uint64    // confirmations received
+	Index         int     // position in route (0-based)
+	FromChain     string  // source chain of this leg
+	ToChain       string  // target chain of this leg
+	FromAddress   string  // who sends this leg
+	ToAddress     string  // who receives this leg
+	AssetIn       string  // asset entering this leg
+	AssetOut      string  // asset exiting this leg
+	AmountIn      uint64  // input amount
+	AmountOut     uint64  // output amount (after spread + fee)
+	FeePct        float64 // platform fee taken on this leg
+	TxID          string  // txid after submission
+	ContractAddr  string  // smart contract used (if any)
+	Method        string  // contract method invoked
+	BlockHeight   uint64  // confirming block on target
+	Confirmations uint64  // confirmations received
 }
 
 // ExchangeRate captures the quoted price at route-building time.
@@ -129,11 +129,11 @@ type ExchangeRate struct {
 // Objective is what gets sent to RelayOS for route finding.
 // See OpenRelay Assurance 4.0 RC84 docs.
 type Objective struct {
-	ID        string        `json:"id"`             // unique objective UUID
+	ID        string        `json:"id"` // unique objective UUID
 	Source    Source        `json:"source"`
 	Dest      Destination   `json:"destination"`
-	MaxFeePct float64       `json:"max_fee_pct"`    // upper bound on total fees
-	Timeout   time.Duration `json:"timeout"`        // max wait for completion
+	MaxFeePct float64       `json:"max_fee_pct"` // upper bound on total fees
+	Timeout   time.Duration `json:"timeout"`     // max wait for completion
 	CreatedAt time.Time     `json:"created_at"`
 }
 
@@ -159,6 +159,7 @@ func NewObjective(src Source, dst Destination, maxFeePct float64) Objective {
 //     millisecond early (rollover borrow),
 //   - the system clock regresses -> generation freezes at the last minted
 //     timestamp instead of following it backwards.
+//
 // Uniqueness never rides on the counter alone: rand_b is fresh random per
 // ID, so two IDs collide only if both counter AND 62 random bits match.
 // The guarantee is per-process; two hosts minting concurrently get no
@@ -206,8 +207,8 @@ func generateObjID() string {
 // Monotonic generator state (guarded by objIDMu; mutated only under it).
 var (
 	objIDMu      sync.Mutex
-	objIDLastMS  int64 = math.MinInt64 // timestamp (ms) minted most recently
-	objIDCounter uint16                // rand_a counter within objIDLastMS
+	objIDLastMS  int64  = math.MinInt64 // timestamp (ms) minted most recently
+	objIDCounter uint16                 // rand_a counter within objIDLastMS
 )
 
 // objIDRandA seeds the 12-bit counter from fresh randomness.
@@ -240,50 +241,50 @@ type RouteDiscoveryResponse struct {
 
 // Candidate represents one discovered route with its scoring metadata.
 type Candidate struct {
-	Route         []RouteLeg `json:"route"`
-	TotalFeesPct  float64    `json:"total_fees_pct"`
-	SlippageBps   uint64     `json:"slippage_bps"`
-	Efficiency    float64    `json:"efficiency"` // lower = better; combines fee + time + risk
-	AgentIDs      []string   `json:"agent_ids"`  // which agents would execute each leg
-	TrustScore    float64    `json:"trust_score"`
+	Route        []RouteLeg `json:"route"`
+	TotalFeesPct float64    `json:"total_fees_pct"`
+	SlippageBps  uint64     `json:"slippage_bps"`
+	Efficiency   float64    `json:"efficiency"` // lower = better; combines fee + time + risk
+	AgentIDs     []string   `json:"agent_ids"`  // which agents would execute each leg
+	TrustScore   float64    `json:"trust_score"`
 }
 
 // AssuranceProof wraps the output of recursive ZK proof generation.
 type AssuranceProof struct {
-	ObjectiveID      string    `json:"objective_id"`
-	ProofData        string    `json:"proof_data"`   // base64-encoded ZK proof blob
-	VerificationKey  string    `json:"verification_key"`
-	ProofType        string    `json:"proof_type"`   // "nova_ivc", "stark", "groth16_batch"
-	Depth            uint      `json:"depth"`        // recursion layers (Nova folding rounds)
-	GeneratedAt      time.Time `json:"generated_at"`
+	ObjectiveID     string    `json:"objective_id"`
+	ProofData       string    `json:"proof_data"` // base64-encoded ZK proof blob
+	VerificationKey string    `json:"verification_key"`
+	ProofType       string    `json:"proof_type"` // "nova_ivc", "stark", "groth16_batch"
+	Depth           uint      `json:"depth"`      // recursion layers (Nova folding rounds)
+	GeneratedAt     time.Time `json:"generated_at"`
 }
 
 // SettlementResult captures final state after all legs settle.
 type SettlementResult struct {
-	ObjectiveID   string         `json:"objective_id"`
-	Status        string         `json:"status"`       // "complete", "partial", "failed", "refund"
-	Route         []RouteLeg     `json:"route"`
-	TxHashes      []string       `json:"tx_hashes"`    // one per confirmed leg
-	FeesPaid      float64        `json:"fees_paid"`    // total fees extracted
-	Proof         *AssuranceProof `json:"proof,omitempty"`
-	CompletedAt   time.Time      `json:"completed_at"`
-	Error         string         `json:"error,omitempty"`
+	ObjectiveID string          `json:"objective_id"`
+	Status      string          `json:"status"` // "complete", "partial", "failed", "refund"
+	Route       []RouteLeg      `json:"route"`
+	TxHashes    []string        `json:"tx_hashes"` // one per confirmed leg
+	FeesPaid    float64         `json:"fees_paid"` // total fees extracted
+	Proof       *AssuranceProof `json:"proof,omitempty"`
+	CompletedAt time.Time       `json:"completed_at"`
+	Error       string          `json:"error,omitempty"`
 }
 
 // --- Client ------------------------------------------------------------------
 
 // Client talks to a RelayOS daemon over HTTP (the standard protocol).
 type Client struct {
-	cfg   *Config
-	http  *http.Client
+	cfg     *Config
+	http    *http.Client
 	baseURL string
 }
 
 // NewClient builds a SporRelay client backed by the given config.
 func NewClient(cfg *Config) *Client {
 	return &Client{
-		cfg:   cfg.Clone(),
-		http:  &http.Client{Timeout: 60 * time.Second},
+		cfg:     cfg.Clone(),
+		http:    &http.Client{Timeout: 60 * time.Second},
 		baseURL: cfg.RelayerURL,
 	}
 }
@@ -336,7 +337,7 @@ func (cl *Client) Execute(ctx context.Context, obj Objective, route []RouteLeg) 
 
 	endpoint := fmt.Sprintf("%s/api/v1/objectives/%s/execute", cl.baseURL, obj.ID)
 	type execReq struct {
-		Objective Objective `json:"objective"`
+		Objective Objective  `json:"objective"`
 		Route     []RouteLeg `json:"route"`
 	}
 
@@ -435,9 +436,9 @@ func (cl *Client) GenerateAssurance(ctx context.Context, result *SettlementResul
 
 	endpoint := fmt.Sprintf("%s/api/v1/objectives/%s/assure", cl.baseURL, result.ObjectiveID)
 	type assureReq struct {
-		Result  SettlementResult `json:"result"`
-		Depth   uint             `json:"depth"`
-		Type    string           `json:"proof_type"` // "nova_ivc"
+		Result SettlementResult `json:"result"`
+		Depth  uint             `json:"depth"`
+		Type   string           `json:"proof_type"` // "nova_ivc"
 	}
 
 	payload, err := json.Marshal(assureReq{Result: *result, Depth: depth, Type: "nova_ivc"})

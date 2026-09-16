@@ -24,10 +24,10 @@ func TestResolveChain(t *testing.T) {
 
 func TestParseAmount(t *testing.T) {
 	tests := []struct {
-		input     string
-		wantAsset string
+		input      string
+		wantAsset  string
 		wantAtomic uint64
-		wantErr   bool
+		wantErr    bool
 	}{
 		{"50USDC", "USDC", 50000000, false},
 		{"2.5DERO", "DERO", 250000, false},

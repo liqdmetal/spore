@@ -3,8 +3,9 @@
 package main
 
 import (
-	"golang.org/x/sys/windows"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 func replaceFile(from, to string) error {
