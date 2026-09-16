@@ -256,10 +256,11 @@ jobs:
           # check below resolves each cited hash against history, so a
           # shallow clone would report everything missing.
           fetch-depth: 0
-      - name: Verify every commit hash referenced in AUDIT-E2.md resolves
-        # Fails on typos, rebases, and stale pins (scripts/check_audit_refs.sh;
-        # mark a non-commit hex string with `no-verify-hash` on its line).
-        run: ./scripts/check_audit_refs.sh AUDIT-E2.md
+      - name: Verify every commit hash cited in the manifest docs resolves
+        # Fails on typos, rebases, stale pins, and ambiguous short hashes
+        # (.github/actions/doc-refs; mark a non-commit hex string with
+        # `no-verify-hash` on its line). Manifest: docs/refs.yml.
+        uses: ./.github/actions/doc-refs
 
   goimports:
     name: goimports (import-section gate)
