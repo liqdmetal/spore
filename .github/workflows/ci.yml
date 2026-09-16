@@ -5,10 +5,11 @@ permissions:
 
 
 on:
-  # Push runs only on main: a bare push trigger fires on every commit twice
-  # (push + PR event), which burns private-repo Actions minutes.
+  # Every push runs the gate. (Was main-only when the repo was private and
+  # Actions minutes cost money; spore is public now. PR branches run twice —
+  # push event + PR merge-ref event — which is free, and the concurrency
+  # group still cancels superseded runs on the same ref.)
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -54,18 +55,44 @@ jobs:
       - name: Test (race)
         run: go test -race ./...
 
-  continuity-fuzz-smoke:
-    name: Continuity fuzz smoke
+  fuzz-smoke:
+    name: Fuzz smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
+    strategy:
+      # One target finding a crash must not mask the others.
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/continuity
+            target: FuzzContinuityArtifactParsers
+          - package: ./internal/anchor
+            target: FuzzFromArguments
+          # ratchetwire: the wire codec plus the restored SecureWire seam
+          # targets (pin enforcement, durable state, full roundtrip).
+          - package: ./internal/ratchetwire
+            target: FuzzFrameParse
+          - package: ./internal/ratchetwire
+            target: FuzzHandshakeUnmarshal
+          - package: ./internal/ratchetwire
+            target: FuzzMessageUnmarshal
+          - package: ./internal/ratchetwire
+            target: FuzzWireRoundtrip
+          - package: ./internal/ratchetwire
+            target: FuzzWirePinEnforcement
+          - package: ./internal/ratchetwire
+            target: FuzzWireMalformedFrames
+          - package: ./internal/ratchetwire
+            target: FuzzDurableEndpointRoundtrip
+          - package: ./internal/ratchetwire
+            target: FuzzEndpointFullRoundTrip
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Fuzz continuity artifacts
-        run: go test ./internal/continuity -run=^$ -fuzz=FuzzContinuityArtifactParsers -fuzztime=15s
-      - name: Fuzz DERO anchor arguments
-        run: go test ./internal/anchor -run=^$ -fuzz=FuzzFromArguments -fuzztime=15s
+      - name: Fuzz ${{ matrix.target }} (15s smoke)
+        # Anchored -fuzz pattern: must match exactly one target per package.
+        run: go test ${{ matrix.package }} -run=^$ -fuzz=^${{ matrix.target }}$ -fuzztime=15s
 
 
   windows-release:
