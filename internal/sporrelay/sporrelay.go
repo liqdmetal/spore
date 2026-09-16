@@ -8,10 +8,14 @@ package sporrelay
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -145,7 +149,85 @@ func NewObjective(src Source, dst Destination, maxFeePct float64) Objective {
 	}
 }
 
-func generateObjID() string { return "" } // TODO: cryptographically random UUID v7
+// generateObjID returns a UUIDv7 (RFC 9562) with §6.2 monotonic ordering:
+// within one process, an ID minted later sorts strictly greater than every
+// ID minted before it — even inside the same millisecond. Layout: 48 bits
+// of Unix-millisecond timestamp, a 12-bit rand_a counter (re-initialized
+// randomly each new millisecond), and 62 bits of fresh crypto/rand in
+// rand_b. Clock rules (both RFC-sanctioned):
+//   - counter exhausts inside one millisecond -> the timestamp advances one
+//     millisecond early (rollover borrow),
+//   - the system clock regresses -> generation freezes at the last minted
+//     timestamp instead of following it backwards.
+// Uniqueness never rides on the counter alone: rand_b is fresh random per
+// ID, so two IDs collide only if both counter AND 62 random bits match.
+// The guarantee is per-process; two hosts minting concurrently get no
+// relative ordering. Unguessability caveat: within a busy millisecond the
+// counter is predictable once observed (the price of ordering).
+func generateObjID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is unrecoverable (broken OS CSPRNG); the
+		// alternative — an empty or predictable ID — is worse.
+		panic(fmt.Sprintf("sporrelay: generateObjID: crypto/rand unavailable: %v", err))
+	}
+	objIDMu.Lock()
+	defer objIDMu.Unlock()
+	now := time.Now().UnixMilli()
+	if now > objIDLastMS {
+		// New millisecond (or first mint): random counter start keeps IDs
+		// unguessable and avoids systematic low-counter skew.
+		objIDLastMS = now
+		objIDCounter = objIDRandA(b)
+	} else {
+		// Same millisecond as the last mint — or the clock moved backwards
+		// (either way: freeze the timestamp, count forward).
+		objIDCounter++
+		if objIDCounter == 1<<12 {
+			// 12-bit counter exhausted inside one millisecond: borrow a
+			// millisecond (advance the timestamp ahead of the clock).
+			objIDLastMS++
+			objIDCounter = objIDRandA(b)
+		}
+	}
+	ms := uint64(objIDLastMS)
+	b[0] = byte(ms >> 40)
+	b[1] = byte(ms >> 32)
+	b[2] = byte(ms >> 24)
+	b[3] = byte(ms >> 16)
+	b[4] = byte(ms >> 8)
+	b[5] = byte(ms)
+	b[6] = 0x70 | byte(objIDCounter>>8) // version 7 + counter high nibble
+	b[7] = byte(objIDCounter)           // counter low byte
+	b[8] = (b[8] & 0x3f) | 0x80         // RFC 4122 variant
+	return formatUUID(b)
+}
+
+// Monotonic generator state (guarded by objIDMu; mutated only under it).
+var (
+	objIDMu      sync.Mutex
+	objIDLastMS  int64 = math.MinInt64 // timestamp (ms) minted most recently
+	objIDCounter uint16                // rand_a counter within objIDLastMS
+)
+
+// objIDRandA seeds the 12-bit counter from fresh randomness.
+func objIDRandA(b [16]byte) uint16 {
+	return uint16(b[6]&0x0f)<<8 | uint16(b[7])
+}
+
+func formatUUID(b [16]byte) string {
+	dst := make([]byte, 36)
+	hex.Encode(dst[0:8], b[0:4])
+	dst[8] = '-'
+	hex.Encode(dst[9:13], b[4:6])
+	dst[13] = '-'
+	hex.Encode(dst[14:18], b[6:8])
+	dst[18] = '-'
+	hex.Encode(dst[19:23], b[8:10])
+	dst[23] = '-'
+	hex.Encode(dst[24:36], b[10:16])
+	return string(dst)
+}
 
 // RouteDiscoveryResponse mirrors the RelayOS agent-market reply.
 type RouteDiscoveryResponse struct {
