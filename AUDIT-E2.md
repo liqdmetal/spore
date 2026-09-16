@@ -4,16 +4,15 @@
 Ratchet, wire frames, durable state, prekey serving, CLI send/recv wiring — checked
 against the claims in `SENDER_AUTH.md`, `RATCHET.md`, and `WIRE_SPEC.md`.*
 
-> **FIX STATUS (2026-09-16): every finding is fixed.** H1/H2 — SecureWire removed
+> **FIX STATUS (2026-09-16): every finding is fixed — landed in commit `25206a2`.** H1/H2 — SecureWire removed
 > from the ratcheted path (see the "Remediation" section at the bottom); M1 —
 > per-IP prekey-pop rate limiter (`internal/mailbox/ratelimit.go`); M2 —
 > documented in SENDER_AUTH.md §5; L1 — u32 wrap guards (`internal/ratchet/
 > ratchet.go`); L2 — moot with the SecureWire removal. Regression tests:
 > `cli_asymmetry_test.go`, `e2cmd_flags_test.go`, `overflow_test.go`,
-> `ratelimit_test.go`, `fuzz_wire_test.go`. L3 and INFO items needed no action.
-> Known follow-up: `TestDoctorAllGood` depends on `doctorKeyFilesCheck("")`
-> resolving the real user home — it should pass an explicit `-home` (pre-existing
-> doctor-check issue, outside this audit's scope).
+> `ratelimit_test.go`, `internal/wirefuzz/wirefuzz_test.go`. L3 and INFO items needed no action.
+> Known follow-up resolved: `TestDoctorAllGood` is now hermetic (explicit
+> temp-dir `Home`/`Config`; doctor tests hardened in commit `257073c`).
 
 ---
 
@@ -176,6 +175,9 @@ hobby-protocol standards.
 
 ## Remediation (2026-09-16)
 
+All fixes below landed in commit `25206a2` ("fix(e2): drop SecureWire
+double-wrap; add sporepeer:// store backend").
+
 **H1 + H2 — SecureWire removed from the ratcheted path.** Per RATCHET.md §6, the
 0xE2 envelope's authentication is the X3DH handshake plus the double-ratchet
 chain; the per-frame 0xE1 wrapper is gone.
@@ -198,8 +200,10 @@ chain; the per-frame 0xE1 wrapper is gone.
   `TestE2SendFlagsetHasNoSecureWireFlags`, `TestE2RecvFlagsetHasNoSecureWireFlags`.
   The obsolete `fuzz_secure_wire_test.go` was removed; its three durable-parser
   fuzz targets were re-homed as standalone byte-level targets in
-  `fuzz_wire_test.go` (Frame.Parse, UnmarshalHandshake, UnmarshalMessage) with
-  invariant + round-trip assertions.
+  `internal/wirefuzz/wirefuzz_test.go` (Frame.Parse, UnmarshalHandshake,
+  UnmarshalMessage) with invariant + round-trip assertions — the dedicated
+  package also insulates the OSS-Fuzz build from the main package's test-file
+  layout.
 
 **M1 — prekey-pop rate limiting.** `internal/mailbox/ratelimit.go`: per-client-IP
 token bucket (burst 30, refill 1/6s, bounded map) applied to `GET /prekey` only —
@@ -219,6 +223,6 @@ touched; `skipTo` refuses to park the receiving cursor at MaxUint32. Tests:
 
 **L2** — moot: the single-contact pin field was part of SecureWire.
 
-Not touched (pre-existing uncommitted work by the owner, discovered mid-fix):
-`cmd/spore/doctorcmd.go` + `doctor_test.go` (doctor checks 4–7) and
-`internal/sporrelay/sporrelay.go` (UUIDv7 object IDs).
+Not touched (pre-existing work by the owner, discovered mid-fix; since landed
+in separate commits): `cmd/spore/doctorcmd.go` + `doctor_test.go` (doctor
+checks 4–7) and `internal/sporrelay/sporrelay.go` (UUIDv7 object IDs).
