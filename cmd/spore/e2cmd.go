@@ -23,13 +23,10 @@ import (
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/maildb"
-	"github.com/liqdmetal/spore/internal/nostr"
 	"github.com/liqdmetal/spore/internal/notify"
-	"github.com/liqdmetal/spore/internal/peerstore"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/receipts"
-	"github.com/liqdmetal/spore/internal/relay"
 	"github.com/liqdmetal/spore/internal/sap"
 	"github.com/liqdmetal/spore/internal/store"
 )
@@ -122,87 +119,8 @@ func flagValueOr(fs *flag.FlagSet, name, def string) string {
 // token-gated mailbox, would also hand the sender read access to it. nostr://
 // bodies already publish to a relay commons and sporepeer:// IS the transport,
 // so combining either with -relay is refused.
-func e2Store(url, token, keyFile, relayBase, holdDir, serveAddr string) (ratchetwire.BodyStore, error) {
-	if url == "" {
-		return nil, errors.New("-store is required (E2 never uses a local-only implicit store)")
-	}
-	if rest, ok := strings.CutPrefix(url, "nostr://"); ok {
-		if relayBase != "" {
-			return nil, errors.New("-relay applies to an http(s) mailbox only: -store nostr:// already publishes bodies to a relay commons, so pick one (drop -relay for the nostr path)")
-		}
-		var relays []string
-		for _, r := range strings.Split(rest, ",") {
-			if r = strings.TrimSpace(r); r != "" {
-				if !strings.HasPrefix(r, "wss://") && !strings.HasPrefix(r, "ws://") {
-					r = "wss://" + r
-				}
-				relays = append(relays, r)
-			}
-		}
-		if len(relays) == 0 {
-			return nil, errors.New("-store nostr:// requires at least one relay (e.g. -store nostr://relay.damus.io,nos.lol)")
-		}
-		if keyFile == "" {
-			return nil, errors.New("-store nostr:// requires -store-key (a DEDICATED body-store signing key file; `spore init` writes one at store.key — do not reuse your identity or chain key, publishing is linkable by pubkey)")
-		}
-		k, err := readHexFile(keyFile, 32)
-		if err != nil {
-			return nil, err
-		}
-		// Index next to the key so Delete/Reap survive restarts. Without it
-		// we could still Get, but Reap would have nothing to iterate — i.e.
-		// bodies would never be cleaned up from the commons.
-		indexPath := ""
-		if dir := filepath.Dir(keyFile); dir != "" && dir != "." {
-			indexPath = filepath.Join(dir, "nostrstore-index.json")
-		}
-		return nostr.NewNostrStore(nostr.NostrStoreConfig{
-			PrivateKey: hex.EncodeToString(k),
-			Relays:     relays,
-			IndexPath:  indexPath,
-		})
-	}
-	if rest, ok := strings.CutPrefix(url, "peer://"); ok {
-		if relayBase != "" {
-			return nil, errors.New("-relay does not apply to a peer:// store: the peer hop IS the transport")
-		}
-		if rest == "" || !strings.Contains(rest, ":") {
-			return nil, errors.New("-store peer:// requires the sender's node address, e.g. peer://192.0.2.10:8099 (receive-only: the sender must run `spore-peer serve` on that node)")
-		}
-		return &peerstore.PeerStore{Addr: rest}, nil
-	}
-	if rest, ok := strings.CutPrefix(url, "sporepeer://"); ok {
-		if relayBase != "" {
-			return nil, errors.New("-relay does not apply to a sporepeer:// store: the peer hop IS the transport")
-		}
-		if rest == "" || !strings.Contains(rest, ":") {
-			return nil, errors.New("-store sporepeer:// requires the peer's node address, e.g. sporepeer://192.0.2.10:8099 (the OTHER endpoint's spore-peer listener; pair it with -store-serve on your own side so they can fetch from you)")
-		}
-		if holdDir == "" {
-			return nil, errors.New("-store sporepeer:// requires -store-dir (a directory where THIS node holds the bodies it produces; the sender's hold is what the receiver fetches from)")
-		}
-		st, err := peerstore.NewSporePeerStore(peerstore.SporePeerConfig{
-			Dir:    holdDir,
-			Addr:   rest,
-			Listen: serveAddr,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if serveAddr != "" {
-			fmt.Fprintf(os.Stderr, " spore-peer serving on %s — your contact uses -store sporepeer://%s\n", st.LocalAddr(), st.LocalAddr())
-		}
-		return st, nil
-	}
-	inner, err := store.NewHTTPStoreWithToken(url, token)
-	if err != nil {
-		return nil, err
-	}
-	if relayBase == "" {
-		return inner, nil
-	}
-	return relay.NewRelayStore(relayBase, url, inner)
-}
+// Body-store plumbing (flags, options, backend dispatch) lives in
+// e2store.go; this command file owns only the E2 message flows.
 func deroRingSizeFromFlags(fs *flag.FlagSet, chainName string) (uint64, error) {
 	if !strings.EqualFold(chainName, "dero") {
 		return 0, nil
@@ -446,12 +364,7 @@ func e2Common(fs *flag.FlagSet) {
 	fs.String("message-field", "", "Cosmos message field")
 	fs.String("recipient-field", "", "Cosmos recipient field")
 	fs.Bool("delivery-guaranteed", false, "assert carrier preserves exact pointer delivery")
-	fs.String("store", "", "off-chain frame store: http(s)://mailbox, nostr://relay1,relay2 (public commons), or sporepeer://host:port (P2P: the other endpoint's node; pair with -store-serve)")
-	fs.String("store-token", "", "bearer token for an HTTP store (ignored for nostr:// and sporepeer://)")
-	fs.String("store-dir", "", "directory where THIS node holds the bodies it produces (required for sporepeer://; `spore init` layouts can use ~/.spore/hold)")
-	fs.String("store-serve", "", "bind address for this node's spore-peer listener, e.g. 0.0.0.0:8099 (sporepeer:// only): your contact points -store sporepeer://<your-addr>:<port> at it")
-	fs.String("relay", "", "anonymous relay hop base URL (e.g. https://relay.example.org): route off-chain body WRITES through this relay instead of PUTting straight to -store — the mailbox sees the relay's IP and you never need the mailbox's own token. The relay operator must allowlist your destination (-allow-dest). HTTP stores only")
-	fs.String("store-key", "", "file with a 32-byte hex DEDICATED signing key for -store nostr:// (do NOT reuse identity/chain keys — publishing is linkable by pubkey; `spore init` writes one)")
+	registerE2StoreFlags(fs)
 	fs.String("state-dir", "", "encrypted endpoint session state directory (required)")
 	fs.String("state-key", "", "file containing 32-byte hex state encryption key (required)")
 	fs.Duration("session-ttl", 0, "inactivity TTL for durable E2 sessions (zero disables expiry)")
@@ -625,7 +538,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if len(plaintext) == 0 {
 		return errors.New("send-e2: empty plaintext")
 	}
-	st, err := e2Store(flagValueOr(fs, "store", ""), flagValueOr(fs, "store-token", ""), flagValueOr(fs, "store-key", ""), flagValueOr(fs, "relay", ""), flagValueOr(fs, "store-dir", ""), flagValueOr(fs, "store-serve", ""))
+	st, err := newE2BodyStore(e2StoreOptionsFromFlags(fs))
 	if err != nil {
 		return err
 	}
@@ -885,7 +798,7 @@ func msgRecvE2(args []string) {
 	if *identity == "" || *spk == "" {
 		check(errors.New("recv-e2 requires -identity and -spk"))
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""), fs.Lookup("store-dir").Value.String(), flagValueOr(fs, "store-serve", ""))
+	st, err := newE2BodyStore(e2StoreOptionsFromFlags(fs))
 	check(err)
 	ik, err := readHexFile(*identity, 32)
 	check(err)
@@ -1177,7 +1090,7 @@ func msgReplyE2(args []string) {
 	if len(plaintext) == 0 {
 		check(errors.New("reply-e2: empty plaintext"))
 	}
-	st, err := e2Store(fs.Lookup("store").Value.String(), fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""), fs.Lookup("store-dir").Value.String(), flagValueOr(fs, "store-serve", ""))
+	st, err := newE2BodyStore(e2StoreOptionsFromFlags(fs))
 	check(err)
 	stateDir := fs.Lookup("state-dir").Value.String()
 	stateKeyFile := fs.Lookup("state-key").Value.String()
@@ -1224,8 +1137,8 @@ func msgSessions(args []string) {
 	// Listing sessions never touches the off-chain body store, so -store is
 	// optional here: fall back to an in-memory store when omitted.
 	var st ratchetwire.BodyStore
-	if storeURL := fs.Lookup("store").Value.String(); storeURL != "" {
-		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""), fs.Lookup("store-dir").Value.String(), flagValueOr(fs, "store-serve", ""))
+	if storeOpts := e2StoreOptionsFromFlags(fs); storeOpts.URL != "" {
+		s, err := newE2BodyStore(storeOpts)
 		check(err)
 		st = s
 	} else {

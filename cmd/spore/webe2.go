@@ -87,7 +87,7 @@ func newWebE2(dir, storeURL, storeTok, relayBase string, ringsize ...uint64) (*w
 			return nil, fmt.Errorf("maildb: %w", err)
 		}
 	}
-	st, err := e2Store(storeURL, storeTok, "", relayBase, "", "")
+	st, err := newE2BodyStore(e2StoreOptions{URL: storeURL, Token: storeTok, RelayBase: relayBase})
 	if err != nil {
 		return nil, err
 	}

@@ -215,8 +215,8 @@ func dueTime(d time.Duration) time.Time {
 // avoid churn). Fails via check() like the other CLI helpers.
 func durableEndpointFromFlags(fs *flag.FlagSet) (*ratchetwire.DurableEndpoint, ratchetwire.BodyStore) {
 	var st ratchetwire.BodyStore
-	if storeURL := fs.Lookup("store").Value.String(); storeURL != "" {
-		s, err := e2Store(storeURL, fs.Lookup("store-token").Value.String(), fs.Lookup("store-key").Value.String(), flagValueOr(fs, "relay", ""), fs.Lookup("store-dir").Value.String(), flagValueOr(fs, "store-serve", ""))
+	if storeOpts := e2StoreOptionsFromFlags(fs); storeOpts.URL != "" {
+		s, err := newE2BodyStore(storeOpts)
 		check(err)
 		st = s
 	} else {
