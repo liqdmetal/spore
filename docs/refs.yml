@@ -4,3 +4,4 @@
 # repository; a line containing `no-verify-hash` is exempt.
 docs:
   - path: AUDIT-E2.md
+  - path: AUDIT-SPOREPEER.md
