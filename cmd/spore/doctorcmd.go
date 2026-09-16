@@ -8,7 +8,14 @@
 //  2. data dir: exists, readable, writable (body store + message log live here).
 //  3. listen bind: the address you would pass to daemon/web/mailbox is a
 //     loopback-safe bind (or would be refused — doctor explains why).
-//  4. chain (optional): RPC/wallet reachable, address + height fetched.
+//  4. config: config.json parses (strict — unknown fields are typos) and
+//     every path it references exists on disk.
+//  5. listen port: the -listen port is bindable now (free, or already held
+//     by what is probably your running daemon).
+//  6. key files: the spore home's secret key files exist and are mode 0600
+//     (identity/spk/state/store keys, opk pool, config, maildb) — the P0-4
+//     "defaults do not leak" gate for data at rest.
+//  7. chain (optional): RPC/wallet reachable, address + height fetched.
 //
 // Exit 0 only if nothing is broken. It is the first thing you run after
 // installing spore and the first thing you run when something "just stopped
@@ -20,7 +27,11 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/safehttp"
@@ -40,6 +51,8 @@ type doctorOpts struct {
 	Priv   string // hex medium-term privkey ("" = skip)
 	Dir    string // data dir ("" = skip)
 	Listen string // bind address to evaluate ("" = skip)
+	Config string // config.json path ("" = default resolution)
+	Home   string // spore home dir for key-file perms ("" = default resolution)
 }
 
 // runDoctorChecks executes the offline checks. Chain probing is handled by the
@@ -103,7 +116,160 @@ func runDoctorChecks(o doctorOpts) []doctorCheck {
 			Note: fmt.Sprintf("%s is NOT loopback — every listener on it requires a -token and exposes plaintext HTTP to the network", o.Listen)})
 	}
 
+	// 4. config.json validity (optional file; corrupt or lying = fail).
+	out = append(out, doctorConfigCheck(o.Config))
+
+	// 5. listen port availability (can a daemon actually bind it now?).
+	out = append(out, doctorListenPortCheck(o.Listen))
+
+	// 6. key files on disk: present and mode 0600 (data-at-rest, P0-4/P0-5).
+	out = append(out, doctorKeyFilesCheck(o.Home))
+
 	return out
+}
+
+// doctorConfigCheck validates config.json: strict parse (LoadConfig rejects
+// unknown fields, so a typo like "identty" is caught, not silently ignored)
+// and every referenced path exists. A MISSING config is fine — every command
+// works flag-driven without one (LoadConfig: missing = nil, nil) — so the
+// check passes with a pointer to `spore init`. A config that PARSES but
+// references files that do not exist is a lie that would surface as a
+// mid-send failure; doctor catches it up front.
+func doctorConfigCheck(explicit string) doctorCheck {
+	path := explicit
+	if path == "" {
+		path = configPath("")
+	}
+	if path == "" {
+		return doctorCheck{Name: "config", OK: true, Note: "skipped (no config path resolvable)"}
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return doctorCheck{Name: "config", OK: true,
+			Note: fmt.Sprintf("none at %s (optional — flag-driven setup works; `spore init` writes one)", path)}
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return doctorCheck{Name: "config", OK: false,
+			Note: fmt.Sprintf("%s is INVALID: %v (fix or remove it — a corrupt config makes your defaults silently not apply)", path, err)}
+	}
+	// Every non-empty path field must exist on disk. StateDir must be a dir.
+	refs := []struct{ name, path string }{
+		{"dir", cfg.Dir}, {"identity", cfg.Identity}, {"spk", cfg.SPK},
+		{"opk_pool", cfg.OpkPool}, {"store_key", cfg.StoreKey},
+		{"state_key", cfg.StateKey}, {"maildb", cfg.Maildb},
+	}
+	var missing []string
+	for _, r := range refs {
+		if r.path == "" {
+			continue
+		}
+		if _, err := os.Stat(r.path); err != nil {
+			missing = append(missing, fmt.Sprintf("%s=%s", r.name, r.path))
+		}
+	}
+	if len(missing) > 0 {
+		return doctorCheck{Name: "config", OK: false,
+			Note: fmt.Sprintf("%s references missing file(s): %s", path, strings.Join(missing, ", "))}
+	}
+	if cfg.StateDir != "" {
+		if st, err := os.Stat(cfg.StateDir); err == nil && !st.IsDir() {
+			return doctorCheck{Name: "config", OK: false,
+				Note: fmt.Sprintf("state_dir %s is not a directory", cfg.StateDir)}
+		}
+	}
+	return doctorCheck{Name: "config", OK: true,
+		Note: fmt.Sprintf("ok  %s (parses, referenced paths exist)", path)}
+}
+
+// doctorListenPortCheck answers the deployment question check 3 cannot:
+// "can something actually bind this address right now?" Free = fine. Held =
+// fine if it is your own daemon/mailbox/web (the common healthy case), so
+// OK with a caveat — a hard fail here would fire for everyone running the
+// thing doctor is validating. Unbindable for other reasons (permissions,
+// malformed address) = fail.
+func doctorListenPortCheck(addr string) doctorCheck {
+	if addr == "" {
+		return doctorCheck{Name: "listen-port", OK: true, Note: "skipped (no -listen given)"}
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return doctorCheck{Name: "listen-port", OK: false,
+			Note: fmt.Sprintf("cannot parse a port from %q (want host:port)", addr)}
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		ln.Close()
+		return doctorCheck{Name: "listen-port", OK: true,
+			Note: fmt.Sprintf("port %s free — a daemon can bind %s", port, addr)}
+	}
+	errStr := err.Error()
+	inUse := strings.Contains(errStr, "in use") || strings.Contains(errStr, "Only one usage")
+	if inUse {
+		return doctorCheck{Name: "listen-port", OK: true,
+			Note: fmt.Sprintf("port %s in use — ok if that is your running daemon/mailbox/web; otherwise pick another port", port)}
+	}
+	return doctorCheck{Name: "listen-port", OK: false,
+		Note: fmt.Sprintf("cannot bind %s: %v", addr, err)}
+}
+
+// doctorKeyFilesCheck walks the spore home (~/.spore or -home) and verifies
+// the data-at-rest story: identity.key exists, and every secret-bearing file
+// (identity/spk/state/store keys, opk pool, config.json — it holds
+// store_token — and mail.json, which holds decrypted snippets) is mode 0600.
+// Mode bits are meaningless on Windows, so there the check reports what it
+// found without grading (the init/panic paths still write 0600 where the OS
+// honors it).
+func doctorKeyFilesCheck(home string) doctorCheck {
+	if home == "" {
+		d, err := DefaultConfigDir()
+		if err != nil {
+			return doctorCheck{Name: "key-files", OK: false, Note: fmt.Sprintf("cannot resolve spore home: %v", err)}
+		}
+		home = d
+	}
+	st, err := os.Stat(home)
+	switch {
+	case os.IsNotExist(err):
+		return doctorCheck{Name: "key-files", OK: false,
+			Note: fmt.Sprintf("no spore home at %s (run `spore init`)", home)}
+	case err != nil:
+		return doctorCheck{Name: "key-files", OK: false, Note: fmt.Sprintf("%s: %v", home, err)}
+	case !st.IsDir():
+		return doctorCheck{Name: "key-files", OK: false, Note: fmt.Sprintf("%s is not a directory", home)}
+	}
+	if _, err := os.Stat(filepath.Join(home, "identity.key")); os.IsNotExist(err) {
+		return doctorCheck{Name: "key-files", OK: false,
+			Note: fmt.Sprintf("identity.key missing in %s (run `spore init` or point -home at your spore home)", home)}
+	}
+	if runtime.GOOS == "windows" {
+		return doctorCheck{Name: "key-files", OK: true,
+			Note: fmt.Sprintf("ok  %s (identity.key present; mode bits not enforced on windows)", home)}
+	}
+	// Secrets that must be 0600 if present.
+	secrets := []string{
+		"identity.key", "spk.key", "state.key", "store.key",
+		"opk-pool.json", "config.json", "mail.json",
+	}
+	var bad []string
+	for _, name := range secrets {
+		p := filepath.Join(home, name)
+		fi, err := os.Stat(p)
+		if err != nil || fi.IsDir() {
+			continue // absent is fine (except identity.key, checked above)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			bad = append(bad, fmt.Sprintf("%s=%o (want 600)", name, fi.Mode().Perm()))
+		}
+	}
+	if dst, err := os.Stat(home); err == nil && dst.Mode().Perm() != 0o700 {
+		bad = append(bad, fmt.Sprintf("home dir=%o (want 700)", dst.Mode().Perm()))
+	}
+	if len(bad) > 0 {
+		return doctorCheck{Name: "key-files", OK: false,
+			Note: fmt.Sprintf("overly-wide permissions in %s: %s — fix with chmod 600", home, strings.Join(bad, ", "))}
+	}
+	return doctorCheck{Name: "key-files", OK: true,
+		Note: fmt.Sprintf("ok  %s (key files present, modes private)", home)}
 }
 
 func doctorcmd(args []string) {
@@ -111,6 +277,8 @@ func doctorcmd(args []string) {
 	priv := fs.String("priv", "", "our medium-term privkey (hex) to verify")
 	dir := fs.String("dir", "", "data dir to check")
 	listen := fs.String("listen", "127.0.0.1:19191", "bind address to evaluate")
+	config := fs.String("config", "", "config.json to validate (default: -config flag/SPORE_CONFIG/~/.spore/config.json)")
+	home := fs.String("home", "", "spore home dir to scan for key files and permissions (default ~/.spore or $SPORE_HOME)")
 	timeout := fs.Duration("timeout", 5*time.Second, "chain probe timeout")
 	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet, wallet receive-readiness)")
 	storeURL := fs.String("store", "", "with -live: mailbox base URL (https://host/u/<name>) for a real store round-trip")
@@ -134,7 +302,7 @@ func doctorcmd(args []string) {
 		}
 	}
 
-	report(runDoctorChecks(doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen}))
+	report(runDoctorChecks(doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen, Config: *config, Home: *home}))
 
 	// Self-tests: prove this build still decodes what the network sends.
 	if *live {
