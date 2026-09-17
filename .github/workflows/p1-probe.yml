@@ -1,0 +1,14 @@
+name: ReleaseP1
+permissions:
+  contents: write
+  id-token: write
+  actions: read
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "p1 full release.yml header"

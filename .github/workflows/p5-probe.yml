@@ -1,0 +1,16 @@
+name: ReleaseP5
+permissions:
+  contents: write
+  id-token: write
+  actions: read
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "p5 calls a local reusable workflow"
+  probe-call:
+    uses: ./.github/workflows/p5c-called.yml

@@ -1,0 +1,13 @@
+name: ReleaseP2
+permissions:
+  contents: write
+  id-token: write
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "p2 no actions:read"
