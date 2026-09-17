@@ -1,0 +1,49 @@
+name: ReleaseD
+
+permissions:
+  contents: write
+  id-token: write
+  actions: read # required by the SLSA generator to detect the calling workflow
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build + Release (cross-platform)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            artifact: spore.exe
+          - goos: linux
+            goarch: amd64
+            artifact: spore
+          - goos: darwin
+            goarch: amd64
+            artifact: spore
+          - goos: darwin
+            goarch: arm64
+            artifact: spore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.artifact }} ./cmd/spore
+      - name: Checksum
+        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spore-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+
