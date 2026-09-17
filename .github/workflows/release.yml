@@ -107,6 +107,9 @@ jobs:
     # `uses:` must not contain runs-on/steps. The previous version called the
     # generator from a step, so GitHub rejected this entire workflow at parse
     # time and every push produced a failed release run with no logs.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.9.0
+    # v2.1.0: the v1.9.0 line pins actions/upload-artifact v3 internally,
+    # which GitHub now auto-fails (deprecated runtime) — the generator job
+    # died before doing anything. v2 uses the v4 artifact actions.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.hash.outputs.subjects }}"
