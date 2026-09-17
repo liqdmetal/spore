@@ -14,38 +14,38 @@ jobs:
   build:
     name: Build + Release (cross-platform)
     runs-on: ubuntu-latest
+    # Distinct per-platform file names: the release/hash jobs flatten all
+    # matrix artifacts into one directory, so bare "spore" from linux and
+    # both darwin targets would overwrite each other (found by v0.0.0-ci).
+    env:
+      BIN: spore-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
     strategy:
       matrix:
         include:
           - goos: windows
             goarch: amd64
-            artifact: spore.exe
           - goos: linux
             goarch: amd64
-            artifact: spore
           - goos: darwin
             goarch: amd64
-            artifact: spore
           - goos: darwin
             goarch: arm64
-            artifact: spore
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Build
-        run: |
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.artifact }} ./cmd/spore
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o "$BIN" ./cmd/spore
       - name: Checksum
-        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+        run: sha256sum "$BIN" > "$BIN.sha256"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spore-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ env.BIN }}
           path: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.sha256
+            ${{ env.BIN }}
+            ${{ env.BIN }}.sha256
 
   release:
     name: Create GitHub Release
@@ -89,8 +89,11 @@ jobs:
             cp "$d"/* release/
           done
           # generator_generic_slsa3 expects one "name sha256:digest" line per
-          # subject, base64-encoded (NOT a JSON map).
-          SUBJECTS=$(cd release && sha256sum * | awk '{print $2 " sha256:" $1}' | base64 -w0)
+          # subject, base64-encoded (NOT a JSON map). Exclude the *.sha256
+          # checksum files: their CONTENT ("<hash>  <name>") is not in that
+          # format, and feeding them to the generator fails attest with
+          # "sha: unexpected sha256 hash format" (found by v0.0.0-ci).
+          SUBJECTS=$(cd release && find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\0' | xargs -0 sha256sum | awk '{print $2 " sha256:" $1}' | base64 -w0)
           echo "subjects=$SUBJECTS" >> "$GITHUB_OUTPUT"
 
   provenance:
@@ -113,3 +116,7 @@ jobs:
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.hash.outputs.subjects }}"
+      # Attach the signed provenance to the GitHub Release (this workflow
+      # only ever runs on v* tags, which is the generator's condition for
+      # uploading assets).
+      upload-assets: true
