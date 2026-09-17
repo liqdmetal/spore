@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,7 +20,13 @@ import (
 // Layout under dir:
 //
 //	<cid hex>.body   raw ciphertext
-//	<cid hex>.exp    unix-seconds deadline as decimal text
+//	<cid hex>.exp    unix-seconds deadline as decimal text (the floor of the
+//	                 true deadline; the old-format record every version reads)
+//	<cid hex>.expms  unix-millis deadline as decimal text (optional
+//	                 refinement written by current versions so mid-second
+//	                 deadlines are enforced and reaped promptly; older
+//	                 binaries ignore the file entirely and keep working off
+//	                 the seconds floor — the conservative direction)
 type DiskStore struct {
 	dir string
 }
@@ -40,6 +47,10 @@ func (s *DiskStore) bodyPath(cid [32]byte) string {
 }
 func (s *DiskStore) expPath(cid [32]byte) string {
 	return filepath.Join(s.dir, hex.EncodeToString(cid[:])+".exp")
+}
+
+func (s *DiskStore) expPathMS(cid [32]byte) string {
+	return filepath.Join(s.dir, hex.EncodeToString(cid[:])+".expms")
 }
 
 func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
@@ -79,6 +90,37 @@ func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 	if err := os.Rename(expTmpName, s.expPath(cid)); err != nil {
 		os.Remove(expTmpName)
 		return err
+	}
+
+	// Sub-second refinement, same temp+rename discipline, still BEFORE the
+	// body so a crash can only leave dangling expiry files (harmless), never
+	// a body without them. .expms carries the exact millisecond deadline so
+	// mid-second TTLs are enforced at read time and reaped on the tick that
+	// crosses them, not on the second rollover. Zero deadlines write no
+	// .expms: absent falls back to the seconds record ("0" = never).
+	if !deadline.IsZero() {
+		msTmp, err := os.CreateTemp(s.dir, "putexpms-*")
+		if err != nil {
+			return err
+		}
+		msTmpName := msTmp.Name()
+		if _, err := msTmp.Write([]byte(strconv.FormatInt(deadline.UnixMilli(), 10))); err != nil {
+			msTmp.Close()
+			os.Remove(msTmpName)
+			return err
+		}
+		if err := msTmp.Close(); err != nil {
+			os.Remove(msTmpName)
+			return err
+		}
+		if err := os.Chmod(msTmpName, 0o600); err != nil {
+			os.Remove(msTmpName)
+			return err
+		}
+		if err := os.Rename(msTmpName, s.expPathMS(cid)); err != nil {
+			os.Remove(msTmpName)
+			return err
+		}
 	}
 
 	// Write body to a temp file then rename, so a crash never leaves a
@@ -144,42 +186,70 @@ func (s *DiskStore) Delete(cid [32]byte) error {
 	}
 	rm(s.bodyPath(cid))
 	rm(s.expPath(cid))
+	rm(s.expPathMS(cid))
 	return nil
 }
 
 // Reap removes every body whose deadline has passed. Returns count removed.
+// Resolves deadlines exactly like expired() (ms refinement over the seconds
+// floor), so a body is reaped on the first pass after its true deadline —
+// including mid-second deadlines — and never earlier than it would be
+// refused at read.
 func (s *DiskStore) Reap(now time.Time) int {
 	matches, _ := filepath.Glob(filepath.Join(s.dir, "*.exp"))
 	n := 0
 	for _, expFile := range matches {
-		raw, err := os.ReadFile(expFile)
-		if err != nil {
+		base := expFile[:len(expFile)-len(".exp")]
+		raw, err := hex.DecodeString(filepath.Base(base))
+		if err != nil || len(raw) != 32 {
 			continue
 		}
-		sec, err := strconv.ParseInt(string(raw), 10, 64)
-		if err != nil || sec == 0 {
-			continue // no deadline (0): never reap; malformed: leave it
+		var cid [32]byte
+		copy(cid[:], raw)
+		d, ok := s.deadlineFor(cid)
+		if !ok || !now.After(d) {
+			continue
 		}
-		if now.Unix() > sec {
-			base := expFile[:len(expFile)-len(".exp")]
-			os.Remove(base + ".body")
-			os.Remove(expFile)
-			n++
-		}
+		os.Remove(base + ".body")
+		os.Remove(base + ".expms")
+		os.Remove(expFile)
+		n++
 	}
 	return n
 }
 
-func (s *DiskStore) expired(cid [32]byte) bool {
+// deadlineFor resolves the effective burn deadline for cid: the millisecond
+// .expms file is authoritative when present and parseable; otherwise the
+// seconds floor in .exp applies. ok=false means "no deadline" (never
+// expires): missing .exp, a "0" in either file, or a malformed record with
+// no usable refinement. expired() and Reap BOTH go through this, so a body
+// is never served past its deadline while its bytes remain on disk and is
+// never reaped while it would still be served — the two can no longer
+// disagree about a mid-second boundary.
+func (s *DiskStore) deadlineFor(cid [32]byte) (time.Time, bool) {
+	if raw, err := os.ReadFile(s.expPathMS(cid)); err == nil {
+		if ms, perr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); perr == nil {
+			if ms == 0 {
+				return time.Time{}, false
+			}
+			return time.UnixMilli(ms), true
+		}
+		// malformed .expms: fall through to the seconds record
+	}
 	raw, err := os.ReadFile(s.expPath(cid))
 	if err != nil {
-		return false
+		return time.Time{}, false // missing .exp: never expires (crash ordering)
 	}
-	sec, err := strconv.ParseInt(string(raw), 10, 64)
+	sec, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
 	if err != nil || sec == 0 {
-		return false
+		return time.Time{}, false
 	}
-	return time.Now().Unix() > sec
+	return time.Unix(sec, 0), true
+}
+
+func (s *DiskStore) expired(cid [32]byte) bool {
+	d, ok := s.deadlineFor(cid)
+	return ok && time.Now().After(d)
 }
 
 // Len reports the number of stored bodies by counting .body files.
