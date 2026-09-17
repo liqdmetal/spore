@@ -1,8 +1,9 @@
 # Relay fabric — the pointer-forwarding half (design)
 
-*Status: design, not shipped. Roadmap row #8. The body half it builds on is
-shipped: `sporepeer://` + `spore serve` (see
-[`WIRE_SPEC.md`](WIRE_SPEC.md) §5/§7, [`PEER_SETUP.md`](PEER_SETUP.md),
+*Status: slice F1 (relay verbs + envelope, vector-pinned) **shipped**; F2
+(Go client, drain loop, cross-binary interop) is next. Roadmap row #8. The
+body half it builds on is shipped: `sporepeer://` + `spore serve` (see
+[`WIRE_SPEC.md`](WIRE_SPEC.md) §5/§7/§8, [`PEER_SETUP.md`](PEER_SETUP.md),
 [`AUDIT-SPOREPEER.md`](../AUDIT-SPOREPEER.md)).*
 
 ## The problem, precisely
@@ -153,7 +154,7 @@ contract + the fabric index persisted temp+rename, exactly
 
 | Slice | Delivers | Gate |
 |---|---|---|
-| **F1** | envelope + store/reap reuse; `freg`/`fput`/`fpop` in spore-peer behind `-fabric`; hostile-frame tests (wrong-length pointers, deadline abuse, handle/token mismatches, cap eviction) | new vectors in `interop-vectors.json` first (the CONTRIBUTING rule) — including handle-derivation vectors so Go and Rust derive byte-identical handles from `(seed, epoch, sid)`; Rust + Go consumers |
+| **F1** — **shipped** | envelope + store/reap reuse; `freg`/`fput`/`fpop` in spore-peer behind `-fabric`; hostile-frame tests (wrong-length pointers, deadline abuse, handle/token mismatches, cap eviction) | **done**: `fabric_v1` vectors in `interop-vectors.json` ([`WIRE_SPEC.md`](WIRE_SPEC.md) §8) generated first, then consumed by Go (`internal/fabric` + `internal/secure` conformance) and Rust (spore-peer `fabric` mod) — byte-identical handles from `(seed, epoch, sid)` proven, negatives refused |
 | **F2** | Go side: `internal/fabric` client, `spore fabric subscribe` drain loop → E2 ingestion, `-route-fabric` on send; **both-direction cross-binary interop tests** mirroring `sporepeer_interop_test.go` (Rust `fput` → Go drain, Go `fput` → Rust hold) | the contract workflow exercises them on every push, as the body interop does now |
 | **F3** | N-relay redundancy + drain-union dedupe by CID, per-handle quotas + jitter, durable fabric index, `AUDIT-RELAYFABRIC.md` with the same hash-pinned remediation treatment | doc-refs CI over the new audit |
 | **F4** | transport adapters (Iroh/Waku) behind `FabricTransport`; cover traffic; multi-hop onion publish; CBOR method variants | separate design addendum per adapter, same audit discipline |

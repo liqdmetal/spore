@@ -102,10 +102,17 @@ ever reshaped into a 404).
 - `spore_peer_frame` — transport frames computed from the layout above,
   including the hardened server's `400 bad frame` and `410 gone` error
   strings (`expected_bad_frame*`, `expected_gone*`).
+- `fabric_v1` — relay-fabric derivations and codec (§8): handles, reg
+  tokens, envelope, plus negative vectors (`handle_negative_epoch8_hex`,
+  `reg_token_negative_other_nonce_hex`, `envelope_negative_bad_version_hex`,
+  `pointer_negative_len73_hex`) that a conformant implementation MUST
+  fail against.
 
 A new implementation is conformant when, given `fixed_scalars`, it reproduces
 every `expected_*` byte-for-byte, and when its receiver accepts the committed
 v2 envelopes while rejecting tampered, cross-recipient, and unsigned variants.
+For `fabric_v1`, conformance additionally means failing on every
+`*_negative_*` vector.
 
 ## 7. Appendix: the spore-peer hold layout (DiskStore)
 
@@ -151,3 +158,64 @@ Semantics:
   privacy posture). Delete removes the body and both expiry records; reap
   is best-effort glob-read-remove — removal errors are ignored and the
   next pass retries.
+
+## 8. Relay-fabric verbs (freg/fput/fpop) — slice F1
+
+The fabric rides the §5 frame and socket unchanged (one socket, three verbs;
+RELAY_FABRIC.md design law 1). Verbs are JSON objects dispatched per-frame,
+served ONLY on nodes started with `-fabric`; others answer
+`0x01 + "501 fabric disabled"`. Requests carry `"verb"` — a `§5` `{"cid":…}`
+request never does, so the paths are disjoint.
+**FabricHandle derivation (the decided handle-epoch scheme):**
+
+    FabricHandle = HKDF-SHA256-Expand(HKDF-SHA256-Extract(zero-salt, seed),
+                                      "spore/fabric/v1/handle" || epoch_be || sid, 32)
+
+- `seed` — 32 random bytes per contact, riding the contact card.
+- `epoch` — u32 big-endian, incremented on prekey-batch rotation.
+- `sid` — the ratchet session id. The POINTER's Route stays `RouteKey(sid)`
+  (§2 pointer plane untouched); the fabric handle is the lookup key only.
+  HKDF is one-way: relays index by handle and never learn sid.
+- The zero-salt Extract is load-bearing: Go's `hkdf.New(sha256.New, ikm, nil,
+  info)` zero-fills the salt block (RFC 5869 default); a salted Rust Extract
+  would derive different handles than every Go peer. Pinned by vector.
+
+**Possession token (no signatures, on purpose):**
+
+    token = hex(HMAC-SHA256(seed, "spore/fabric/v1/reg" || handle || server_nonce))
+
+Computed by the recipient (the only seed holder); the relay stores and
+echoes it. A signature scheme would hand relays a cross-relay identity key —
+the exact linkage epochs exist to break (RELAY_FABRIC.md hijacker row).
+
+**Envelope v1 (the queued-pointer object, persisted as `<sha256(envelope)>.fenv`):**
+
+    version u8 = 1 | handle 32 | pointer 74 | received_at u64 LE   (116 bytes)
+
+`pointer` is the 74-byte PointerPayload verbatim (`01 00 | Route 32 | CID 32
+| BurnDeadline u64 LE`). Envelopes are content-addressed into the hold with
+the §7 contract: temp+rename writes, rebuilt into the index on restart,
+compost-on-read at fpop.
+
+**Verbs (frame payload = JSON request; response = §5 status-prefixed):**
+
+    freg {handle, token, nonce?, lease}  → 0x00 {"token":…,"expires":…}
+        Register/refresh handle against the possession token. Lease capped
+        at min(requested, 7d). Malformed handle → 400.
+    fput {handle, pointer_hex, deadline} → 0x00 {"queued":true}
+        Checks in order: handle registered (404, lease expired 404), per-IP
+        rate (429), pointer exactly 74 bytes with v1 header (400), nonzero
+        deadline (400), deadline in future (410). Dedupe on (handle,
+        pointer): re-publishing refreshes the deadline, never duplicates.
+        Over the per-handle cap (default 32): evict oldest — compost, don't
+        hoard.
+    fpop {handle, token, max}            → 0x00 {"pointers":["<74B hex>"…]}
+        Drain oldest-first, max capped at 64, deleting on read. Wrong/
+        missing token → 403 (constant-time compare); unknown handle → 404.
+        Returned pointers feed E2 ingestion unchanged, where FetchFrame
+        re-checks RouteKey(sid) == p.Route — the ratchet is the filter
+        (design law 4); relays never validate pointer semantics.
+
+Conformance: the `fabric_v1` vector section pins every derivation and the
+envelope codec byte-for-byte across Go (internal/fabric) and Rust
+(spore-peer fabric mod), including the negative vectors.
