@@ -5,11 +5,14 @@ permissions:
 
 
 on:
-  # Every push runs the gate. (Was main-only when the repo was private and
-  # Actions minutes cost money; spore is public now. PR branches run twice —
-  # push event + PR merge-ref event — which is free, and the concurrency
-  # group still cancels superseded runs on the same ref.)
+  # Pushes to main run the gate. Tag pushes don't: a tag fires the Release
+  # workflow, whose pipeline is the tag's gate, and the tagged commit's CI
+  # already ran when it landed on main — running CI on the tag ref only ever
+  # duplicated that run. PRs run on their merge-refs; the concurrency group
+  # still cancels superseded runs on the same ref.
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
