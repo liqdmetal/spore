@@ -212,7 +212,8 @@ its cargo build/fmt/clippy/test gates plus the `-race` cross-binary interop
 run against the freshly built Rust binary:
 
 ```
-scripts/gates.sh
+scripts/gates.sh           # the full suite
+scripts/gates.sh --quick   # inner loop: skips the Rust gates and -race/interop
 ```
 
 ## Sustainability (FOSS, grassroots — no VC, no token)

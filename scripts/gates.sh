@@ -1,7 +1,7 @@
 #!/bin/bash -eu
 # Run the full pre-push gate suite locally: everything CI checks, without CI.
 #
-#   usage: scripts/gates.sh [spore-checkout] [spore-peer-checkout]
+#   usage: scripts/gates.sh [--quick] [spore-checkout] [spore-peer-checkout]
 #
 # Both arguments are optional. The spore checkout defaults to the repo this
 # script lives in. The spore-peer checkout defaults to SPORE_PEER_DIR, then a
@@ -9,6 +9,11 @@
 # exists the spore-peer gates are skipped with a loud note. (The layout
 # assumption: a checkout root containing the `spore` repo and — optionally —
 # a `spore-peer` checkout either as a sibling or under `_review_tmp/`.)
+#
+# --quick skips the spore-peer (Rust) gates and the -race + cross-binary
+# interop run for fast inner-loop feedback; everything else (gofmt/
+# goimports, build+vet+test, doc-refs) still runs. It complements the full
+# suite — a push is still gated by the full run, never by --quick.
 #
 # Gates, in order:
 #   spore       gofmt / goimports, go build ./..., go vet ./..., go test ./...
@@ -30,10 +35,21 @@
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-SPORE_DIR="${1:-$SELF_DIR/..}"
+
+QUICK=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --quick) QUICK=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+
+SPORE_DIR="${ARGS[0]:-$SELF_DIR/..}"
 SPORE_DIR="$(cd "$SPORE_DIR" && pwd)"
 
-if [ -n "${2:-}" ]; then PEER_DIR="$2"
+if [ "$QUICK" -eq 1 ]; then PEER_DIR=""   # quick mode never enters the Rust gates
+elif [ -n "${ARGS[1]:-}" ]; then PEER_DIR="${ARGS[1]}"
 elif [ -n "${SPORE_PEER_DIR:-}" ]; then PEER_DIR="$SPORE_PEER_DIR"
 elif [ -d "$SPORE_DIR/../spore-peer" ]; then PEER_DIR="$SPORE_DIR/../spore-peer"
 elif [ -d "$SPORE_DIR/../_review_tmp/spore-peer" ]; then PEER_DIR="$SPORE_DIR/../_review_tmp/spore-peer"
@@ -74,7 +90,10 @@ echo "-- go test ./... --"
 go test ./...
 
 PEER_BIN=""
-if [ -n "$PEER_DIR" ] && [ -d "$PEER_DIR" ]; then
+if [ "$QUICK" -eq 1 ]; then
+  echo
+  echo "== quick mode: spore-peer gates skipped (--quick) =="
+elif [ -n "$PEER_DIR" ] && [ -d "$PEER_DIR" ]; then
   PEER_DIR="$(cd "$PEER_DIR" && pwd)"
   cd "$PEER_DIR"
   echo
@@ -104,7 +123,10 @@ fi
 
 cd "$SPORE_DIR"
 
-if [ -n "$PEER_BIN" ]; then
+if [ "$QUICK" -eq 1 ]; then
+  echo
+  echo "== quick mode: -race + cross-binary interop skipped (--quick) =="
+elif [ -n "$PEER_BIN" ]; then
   echo
   echo "== go test -race + cross-binary interop (SPORE_PEER_BIN=$PEER_BIN) =="
   SPORE_PEER_BIN="$PEER_BIN" go test -race -count=1 ./internal/store ./internal/peerstore
@@ -118,8 +140,11 @@ echo
 echo "== doc-refs checker =="
 bash .github/actions/doc-refs/verify_doc_refs.sh
 
+MODE=""
+if [ "$QUICK" -eq 1 ]; then MODE=" (quick)"; fi
+
 echo
-echo "ALL GATES GREEN — spore@$(git -C "$SPORE_DIR" rev-parse --short HEAD)"
+echo "ALL GATES GREEN${MODE} — spore@$(git -C "$SPORE_DIR" rev-parse --short HEAD)"
 if [ -n "$PEER_BIN" ]; then
   echo "              spore-peer@$(git -C "$PEER_DIR" rev-parse --short HEAD)"
 fi
