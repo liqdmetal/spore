@@ -186,11 +186,14 @@ jobs:
         if: ${{ needs.release.result == 'skipped' }}
         run: |
           mkdir -p release
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir release
-          # One subdirectory per artifact — flatten into release/ so the set
-          # looks exactly like the published release would.
-          find release -mindepth 2 -type f -exec mv {} release/ \;
-          find release -mindepth 1 -type d -empty -delete
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir download_tmp
+          # gh run download nests one subdirectory per artifact — and those
+          # dir names EQUAL the binary names inside (spore-darwin-amd64/
+          # spore-darwin-amd64), so flattening in place would mv a file onto
+          # a directory of the same name and fail. Flatten into the separate
+          # release/ tree instead.
+          find download_tmp -mindepth 2 -type f -exec mv {} release/ \;
+          find download_tmp -mindepth 1 -type d -empty -delete
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.run_id }}
