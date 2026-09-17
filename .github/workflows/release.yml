@@ -88,12 +88,14 @@ jobs:
           for d in artifacts/*/; do
             cp "$d"/* release/
           done
-          # generator_generic_slsa3 expects one "name sha256:digest" line per
-          # subject, base64-encoded (NOT a JSON map). Exclude the *.sha256
-          # checksum files: their CONTENT ("<hash>  <name>") is not in that
-          # format, and feeding them to the generator fails attest with
-          # "sha: unexpected sha256 hash format" (found by v0.0.0-ci).
-          SUBJECTS=$(cd release && find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\0' | xargs -0 sha256sum | awk '{print $2 " sha256:" $1}' | base64 -w0)
+          # generator_generic_slsa3's attest takes a standard `sha256sum`
+          # subjects file, base64-encoded: "<digest>  <name>" per line
+          # (generic.go parses field 1 as the digest). The earlier awk
+          # transform to "name sha256:digest" was exactly backwards — attest
+          # failed with "sha: unexpected sha256 hash format" on every tag
+          # (found by v0.0.0-ci). Exclude the *.sha256 checksum files: their
+          # own content is not a sha256sum line either.
+          SUBJECTS=$(cd release && find . -maxdepth 1 -type f ! -name '*.sha256' -print0 | xargs -0 sha256sum | base64 -w0)
           echo "subjects=$SUBJECTS" >> "$GITHUB_OUTPUT"
 
   provenance:
