@@ -128,6 +128,8 @@ func main() {
 		doctorcmd(os.Args[2:])
 	case "invite":
 		invitecmd(os.Args[2:])
+	case "serve":
+		servecmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -154,6 +156,7 @@ func usage() {
   spore msg send -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-msg-file F|-] ...   (DERO alias for canonical forward-private E2; default ring 16)
   spore msg send -chain evm|xmr|solana ...                         (REFUSED — use msg send-e2 explicitly)
   spore msg recv -chain dero -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; bare form reads old native mail)
+  spore serve -dir HOLD_DIR [-listen :ADDR] [-reap-every 10m]   (always-on spore-peer body store; sporepeer:// counterpart: your contact points -store sporepeer://<your-addr>:<port> at it)
   spore msg recv -chain evm|xmr|solana ...                              (legacy receive compatibility)
   spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
   spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
@@ -202,6 +205,7 @@ func usage() {
   spore mailbox get -dir DIR <cid-or-txid>      (print one decrypted message)
   spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
              (store-and-forward hop for opaque bodies: push via X-Relay-Dest, forward to the mailbox)
+  spore serve -dir HOLD_DIR [-listen :ADDR] [-reap-every 10m]   (always-on spore-peer body store: your node IS the store — drop-in Go replacement for spore-peer serve --dir)
   spore relay -h, --help                         (relay help)`)
 }
 
