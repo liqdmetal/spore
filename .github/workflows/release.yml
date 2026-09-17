@@ -144,15 +144,22 @@ jobs:
   # Verify the release the way a consumer would: download the published
   # Release assets (not build intermediates), then check every binary against
   # the signed provenance that was actually attached to that Release. On
-  # dry-runs (workflow_dispatch or v0.0.0* tags) this auto-skips: `release`
-  # is gated off, and a skipped need fails the gate unless explicitly
-  # allowed (so no `if` is wanted here). A red run here means consumers
-  # running slsa-verifier would reject it.
+  # dry-runs (workflow_dispatch or v0.0.0* tags) `release` is gated off, so
+  # this verifies OFFLINE instead: the run's own artifacts (binaries + the
+  # signed provenance) are downloaded and checked without tag binding — the
+  # verifier's --source-tag is optional; --source-uri is still enforced — so
+  # the consumer check is exercised on every dry-run with nothing published.
+  # A red run here means consumers running slsa-verifier would reject it.
   # Job-level permissions are fine on a normal job (the startup quirk noted
   # above applies only to `uses:` jobs); this job needs no write access.
   verify-provenance:
     name: Verify provenance (slsa-verifier)
     needs: [release, provenance]
+    # Run on real releases (consumer path) and on dry-runs, where `release`
+    # is skipped (offline path). A FAILED `release` still skips this job:
+    # its own redness is the signal and the consumer download would just
+    # double-fail confusingly.
+    if: ${{ !cancelled() && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -172,6 +179,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+      - name: Download run artifacts (offline dry-run)
+        if: ${{ needs.release.result == 'skipped' }}
+        run: |
+          mkdir -p release
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir release
+          # One subdirectory per artifact — flatten into release/ so the set
+          # looks exactly like the published release would.
+          find release -mindepth 2 -type f -exec mv {} release/ \;
+          find release -mindepth 1 -type d -empty -delete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
       - name: Verify every binary against the signed provenance
         run: |
           PROV=release/multiple.intoto.jsonl
@@ -184,9 +203,12 @@ jobs:
           test -n "$BINARIES"
           # word splitting is intentional: one verifier invocation covers all
           # binaries, which must all be subjects of the same provenance file.
+          # Tag binding only applies to real releases; dry-runs have no tag.
+          EXTRA=""
+          if [ -n "$SOURCE_TAG" ]; then EXTRA="--source-tag $SOURCE_TAG"; fi
           "$RUNNER_TEMP/slsa-verifier-linux-amd64" verify-artifact $BINARIES \
             --provenance-path "$PROV" \
             --source-uri "github.com/$GITHUB_REPOSITORY" \
-            --source-tag "$TAG"
+            $EXTRA
         env:
-          TAG: ${{ github.ref_name }}
+          SOURCE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
