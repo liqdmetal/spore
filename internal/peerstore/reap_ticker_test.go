@@ -144,6 +144,16 @@ func TestReapTickerCompostsOnTheMillisecondDeadline(t *testing.T) {
 	addr := s.LocalAddr()
 
 	deadline := time.Now().Truncate(time.Second).Add(time.Second + 300*time.Millisecond)
+	// The seconds-floor read path refuses anything after the deadline's
+	// second boundary, so the whole pre-deadline phase (two Puts, the .expms
+	// stat, two wire fetches) must finish inside the anchor second. On a
+	// loaded -race runner that setup can outlive a late-anchored window and
+	// the first fetch would misreport "expired" (seen once on CI). When less
+	// than 700ms of the window remains, use the NEXT second's boundary:
+	// ≥1.3s of margin, same millisecond-precision assertions.
+	if time.Until(deadline) < 700*time.Millisecond {
+		deadline = deadline.Add(time.Second)
+	}
 
 	alive := []byte("ticker must never touch me (unexpired)")
 	aliveCID := sha256.Sum256(alive)
