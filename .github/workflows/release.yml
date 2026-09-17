@@ -96,10 +96,13 @@ jobs:
   provenance:
     name: Provenance (SLSA)
     needs: hash
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
+    # NOTE: no job-level `permissions:` here. Empirically (14-probe bisect,
+    # v0.0.0-ci exercise), GitHub startup-fails ANY workflow that sets
+    # permissions on a `uses:` job — even though some docs suggest it is
+    # valid. The called generator inherits this workflow's top-level
+    # permissions, which already grant exactly what it needs:
+    # id-token: write (OIDC), actions: read (caller detection),
+    # contents: read (implied by write).
     # Reusable workflows may ONLY be invoked at the job level: a job with
     # `uses:` must not contain runs-on/steps. The previous version called the
     # generator from a step, so GitHub rejected this entire workflow at parse
