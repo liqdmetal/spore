@@ -285,4 +285,9 @@ attaches the signed provenance to the release — commit `c877e4fbac6a8d259f0d51
 
 **Guardrail follow-up:** gate the release/`upload-assets` jobs on the tag not
 being a `0.0.0.*` dry-run, so throwaway exercises never publish a public
-release.
+release. **Landed:** `release.yml` gates `Create GitHub Release` and the
+generator's asset upload off for `v0.0.0*` tags — build, subjects hashing,
+and detached keyless signing still run on a dry-run tag, and the skipped
+publish propagates to provenance verification. Proven live with a throwaway
+`v0.0.0-gate` tag: all build/hash/provenance jobs green, both publish jobs
+skipped, no release created — commit `33106b1bbfc0aaaf09cdcdd50b5582f5844dfa0b`.
