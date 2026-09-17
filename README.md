@@ -216,6 +216,9 @@ scripts/gates.sh           # the full suite
 scripts/gates.sh --quick   # inner loop: skips the Rust gates and -race/interop
 ```
 
+A lefthook pre-push hook runs the full suite automatically on every
+`git push` (escape hatches: `LEFTHOOK=0 git push …` or `--no-verify`).
+
 ## Sustainability (FOSS, grassroots — no VC, no token)
 
 Spore is BSD-3 free software. It stays free. The operator (not the protocol)
