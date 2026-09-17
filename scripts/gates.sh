@@ -19,6 +19,14 @@
 # timing table prints before the final banner — slow gates are visible at
 # a glance, not buried in total runtime.
 #
+# Timings are also appended to a CSV so gate latency can be tracked over
+# time: one row per gate per run (including failed gates), long format:
+#
+#   timestamp,mode,spore_sha,peer_sha,gate,duration_ms,status
+#
+# Default location: .gate-timings.csv in the spore repo root (gitignored).
+# Override with GATE_TIMINGS_CSV=<path>, or disable with GATE_TIMINGS_CSV=off.
+#
 # The -race gate needs cgo enabled (the default on most dev boxes). Exit code
 # is 0 only if every gate that ran passed; skips are printed, not hidden.
 #
@@ -42,6 +50,8 @@ done
 
 SPORE_DIR="${ARGS[0]:-$SELF_DIR/..}"
 SPORE_DIR="$(cd "$SPORE_DIR" && pwd)"
+MODE_CSV=full
+[ "$QUICK" -eq 1 ] && MODE_CSV=quick
 
 if [ "$QUICK" -eq 1 ]; then PEER_DIR=""   # quick mode never enters the Rust gates
 elif [ -n "${ARGS[1]:-}" ]; then PEER_DIR="${ARGS[1]}"
@@ -72,6 +82,32 @@ fmt_ms() {
   fi
 }
 
+# ---- CSV latency log -------------------------------------------------------
+# Long format, one row per gate per run, appended as each gate finishes (so
+# even a run that fails mid-way records the gates that completed). Raw
+# integer duration_ms keeps the file analysis-friendly.
+if [ "${GATE_TIMINGS_CSV:-}" = "off" ] || [ "${GATE_TIMINGS_CSV:-}" = "0" ]; then
+  CSV_PATH=""
+elif [ -n "${GATE_TIMINGS_CSV:-}" ]; then
+  CSV_PATH="$GATE_TIMINGS_CSV"
+else
+  CSV_PATH="$SPORE_DIR/.gate-timings.csv"
+fi
+
+csv_init() {
+  [ -n "$CSV_PATH" ] || return 0
+  if [ ! -f "$CSV_PATH" ]; then
+    printf 'timestamp,mode,spore_sha,peer_sha,gate,duration_ms,status\n' > "$CSV_PATH"
+  fi
+}
+
+csv_row() {  # csv_row GATE DURATION_MS STATUS
+  [ -n "$CSV_PATH" ] || return 0
+  printf '%s,%s,%s,%s,"%s",%s,%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MODE_CSV" "${SPORE_SHA:--}" "${PEER_SHA:--}" \
+    "$1" "$2" "$3" >> "$CSV_PATH"
+}
+
 TIMINGS=""
 
 # run_gate LABEL CMD... — run CMD, print its duration, remember it for the
@@ -89,8 +125,10 @@ run_gate() {
   printf -- '-- %s — %s\n' "$label" "$(fmt_ms "$dt")"
   if [ "$rc" -ne 0 ]; then
     echo "FAIL $label (exit $rc)"
+    csv_row "$label" "$dt" fail
     exit "$rc"
   fi
+  csv_row "$label" "$dt" ok
 }
 
 check_gofmt() {
@@ -126,6 +164,9 @@ echo "spore: $SPORE_DIR"
 
 cd "$SPORE_DIR"
 
+SPORE_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo -)"
+csv_init
+
 run_gate gofmt check_gofmt
 
 if command -v goimports >/dev/null 2>&1; then
@@ -147,6 +188,7 @@ if [ "$QUICK" -eq 1 ]; then
 elif [ -n "$PEER_DIR" ] && [ -d "$PEER_DIR" ]; then
   PEER_DIR="$(cd "$PEER_DIR" && pwd)"
   cd "$PEER_DIR"
+  PEER_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo -)"
   echo
   echo "== spore-peer gates ($PEER_DIR) =="
 
@@ -195,7 +237,12 @@ MODE=""
 if [ "$QUICK" -eq 1 ]; then MODE=" (quick)"; fi
 
 echo
-echo "ALL GATES GREEN${MODE} — spore@$(git -C "$SPORE_DIR" rev-parse --short HEAD)"
+echo "ALL GATES GREEN${MODE} — spore@$SPORE_SHA"
 if [ -n "$PEER_BIN" ]; then
-  echo "              spore-peer@$(git -C "$PEER_DIR" rev-parse --short HEAD)"
+  echo "              spore-peer@$PEER_SHA"
+fi
+
+if [ -n "$CSV_PATH" ]; then
+  rows=$(( $(wc -l < "$CSV_PATH") - 1 ))
+  echo "gate latency log: $CSV_PATH ($rows rows)"
 fi
