@@ -226,3 +226,64 @@ touched; `skipTo` refuses to park the receiving cursor at MaxUint32. Tests:
 Not touched (pre-existing work by the owner, discovered mid-fix; since landed
 in separate commits): `cmd/spore/doctorcmd.go` + `doctor_test.go` (doctor
 checks 4–7) and `internal/sporrelay/sporrelay.go` (UUIDv7 object IDs).
+
+---
+
+## Release pipeline remediation (2026-09-17)
+
+The throwaway `v0.0.0-ci` tag (five attempts, all on the same tag name) was the
+first end-to-end exercise of `.github/workflows/release.yml` — cross-compile,
+GitHub Release, SLSA provenance — after the SLSA parse-time restructure. It
+found five real defects. All fixes are on `main`; the final run of the exercise
+was fully green, the provenance was verified as a sigstore bundle (predicate
+`https://slsa.dev/provenance/v0.2`, builder `generator_generic_slsa3.yml` of
+the SLSA generator at its v2.1.0 tag, four subject digests, Fulcio certificate,
+one Rekor transparency-log entry), and the release + tags were deleted after
+verification.
+
+**R1 — startup_failure on every tag: `action-gh-release@v1`.** GitHub
+refuses to start any workflow referencing an action that runs on the
+decommissioned node16 runtime; the whole Release run died at startup with no
+jobs and no logs (run 35167009653), so the defect was invisible to every
+job-level check. Found by actionlint's runner-too-old rule while triaging.
+Fixed by bumping to `@v2` — commit `8c192aa723e39a8ad3ddadfd265158e60df260ea`.
+
+**R2 — startup_failure, second cause: job-level `permissions:` on a
+reusable-workflow-call (`uses:`) job.** The SLSA call job carried a
+`permissions:` block; GitHub rejects the workflow at startup despite some docs
+describing that as valid. Isolated by a 14-probe bisect: five temporary
+workflows per throwaway tag, each isolating one construct (header variants,
+local vs external `uses:`, verbatim/truncated copies, per-key deltas of the
+provenance job). Every variant keeping the block startup-failed; every variant
+without it started. Probe scaffolding: commits `20876e7f8ab7b8327c6824b83b1c9d47a476c646`,
+`9dbda4323cd9a9373eb2bd272620830fb16e75f3`, `8133ce36402ea2820488466445852232d9011719`,
+and `495340ae0b490c5f6f813b7d4a3a5baa7bfe525a`; all probe files removed in
+commit `0777c6c47bb3f49ea34b849703488b58c11d697b`, which also drops the
+redundant block (the generator inherits the workflow's top-level permissions,
+which already grant `id-token: write`, `actions: read`, and `contents: read`).
+The quirk is documented in the workflow comment.
+
+**R3 — generator job failed before signing: SLSA generator v1.9.0 pins
+`actions/upload-artifact` v3 internally,** which GitHub now auto-fails at step
+setup (deprecated runtime). Not fixable from this repo; fixed by bumping the
+generator to its v2.1.0 line — commit `b925f99634132ed78fb4d0261ad600145de8af0d`.
+
+**R4 — attest rejected the subjects file: the format was backwards from the
+file's first commit.** The generic builder parses field 1 of each subjects
+line as the digest (generic.go: `shaDigest = parts[0]`, name = `parts[1]`) and
+expects plain `sha256sum` output; the hash job transformed it to
+"name sha256:digest" via awk, so attest died with `sha: unexpected sha256
+hash format` and every downstream job cascaded (empty provenance name →
+upload-artifact "path required" → final exit 27). The hash job now passes
+sha256sum lines through untransformed, excluding the `*.sha256` files whose
+content is not a sha256sum line — commit `ba1f0555ddb1cc3d9f13b25e5ff4d1fe4314381e`.
+
+**R5 — silent artifact collision in the release itself.** The build matrix
+produced bare `spore` for linux and both darwin targets; flattening artifacts
+for release/hash would overwrite all but one Unix binary while every job stayed
+green. Artifacts are now `spore-<os>-<arch>[.exe]`, and `upload-assets: true`
+attaches the signed provenance to the release — commit `4e8cceb3c0ab9fe43d98bc3bb92875296dbcbcfa`.
+
+**Guardrail follow-up:** gate the release/`upload-assets` jobs on the tag not
+being a `0.0.0.*` dry-run, so throwaway exercises never publish a public
+release.
