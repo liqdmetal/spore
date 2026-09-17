@@ -139,7 +139,7 @@ continuity strict decode with size caps).
 | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
 | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
 | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
-| 8 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh. The body half is shipped (spore-peer); the pointer-forwarding half is **designed** — see [`docs/RELAY_FABRIC.md`](docs/RELAY_FABRIC.md): `freg`/`fput`/`fpop` on the spore-peer socket, handle registration bound to route-key possession, staged F1–F4 slices gated by shared vectors and cross-binary interop. |
+| 8 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh. The body half is shipped (spore-peer); the pointer-forwarding half is **designed** — see [`docs/RELAY_FABRIC.md`](docs/RELAY_FABRIC.md): `freg`/`fput`/`fpop` on the spore-peer socket, epoch-salted fabric handles (rotation rides prekey-batch epochs, zero coordination via dual-publish), registration bound to contact-seed possession, staged F1–F4 slices gated by shared vectors and cross-binary interop. |
 | 9 | **More chains** (Zcash / ARRR / Decred / Verge) | Each a `chain.Chain` backend reusing the envelope/relay pattern. |
 | 10 | **Cross-chain identity proof** (DERO↔EVM) | Research crypto — the hard piece. Gates true interchain messaging. |
 
