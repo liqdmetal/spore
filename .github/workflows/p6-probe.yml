@@ -1,0 +1,16 @@
+name: ReleaseP6
+permissions:
+  contents: write
+  id-token: write
+  actions: read
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "p6 external reusable call at v1.9.0"
+  probe-call:
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.9.0
