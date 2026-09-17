@@ -15,7 +15,10 @@ import (
 	"os"
 	"testing"
 
+	"encoding/binary"
+
 	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/fabric"
 	"github.com/liqdmetal/spore/internal/whisper"
 )
 
@@ -53,6 +56,78 @@ func sporePeerFrameVectors() map[string]string {
 		"expected_bad_frame":      frame(badFramePayload),
 		"expected_gone_text":      string(goneText),
 		"expected_gone_frame":     frame(gonePayload),
+	}
+}
+
+// fabricV1Vectors builds the relay-fabric vectors (WIRE_SPEC §8;
+// RELAY_FABRIC.md open question 1, DECIDED): epoch-salted handle derivation,
+// HMAC registration token, envelope codec. Fixed seed/epoch/sid/nonce; the
+// pointer reuses the §2 canonical CID. The *_negative entries are rejected-
+// by-construction values: an implementation that derives a different-epoch
+// handle, omits the nonce from the reg HMAC, accepts a wrong-version
+// envelope, or takes a wrong-length pointer MUST fail against them.
+func fabricV1Vectors() map[string]string {
+	seedSum := sha256.Sum256([]byte("spore-vector-fabric-seed"))
+	var seed [32]byte
+	copy(seed[:], seedSum[:])
+	sidSum := sha256.Sum256([]byte("spore-vector-fabric-sid"))
+	var sid [8]byte
+	copy(sid[:], sidSum[:8])
+	const epoch = 7
+	handle, err := fabric.FabricHandle(seed, epoch, sid)
+	if err != nil {
+		panic(err)
+	}
+	handle8, err := fabric.FabricHandle(seed, epoch+1, sid) // negative
+	if err != nil {
+		panic(err)
+	}
+	const regNonce = "server-nonce-vector"
+	token := fabric.RegToken(seed, handle, regNonce)
+	tokenOther := fabric.RegToken(seed, handle, regNonce+"-x") // negative
+
+	cidSum := sha256.Sum256([]byte("spore-vector-body"))
+	var cid [32]byte
+	copy(cid[:], cidSum[:])
+	// routeKey and the 74-byte pointer marshal are inlined here as the
+	// independent §2 reference (importing ratchetwire would cycle through
+	// ratchet -> secure). Both are frozen wire format; the fabric_v1
+	// pointer_hex vector simultaneously re-pins them.
+	routeSum := sha256.Sum256(append([]byte("spore/dr/v1/route"), sid[:]...))
+	var route [32]byte
+	route = routeSum
+	pointerBytes := make([]byte, 74)
+	pointerBytes[0] = 1 // PointerV1
+	pointerBytes[1] = 0
+	copy(pointerBytes[2:34], route[:])
+	copy(pointerBytes[34:66], cid[:])
+	binary.LittleEndian.PutUint64(pointerBytes[66:74], 4102444800) // 2100-01-01, nonzero per pointer policy
+
+	var ptrArr [74]byte
+	copy(ptrArr[:], pointerBytes)
+	env := fabric.Envelope{Handle: handle, Pointer: ptrArr, ReceivedAt: 1700000000}
+	envBytes := env.MarshalBinary()
+	badVersion := append([]byte(nil), envBytes...)
+	badVersion[0] = 2 // negative: wrong envelope version
+	shortPtr := make([]byte, 73)
+	shortPtr[0] = 1 // PointerV1 — negative: 73-byte "pointer"
+
+	return map[string]string{
+		"seed_hex":                           h32(seed),
+		"epoch":                              "7",
+		"sid_hex":                            h(sid[:]),
+		"reg_server_nonce":                   regNonce,
+		"handle_hex":                         h32(handle),
+		"handle_negative_epoch8_hex":         h32(handle8),
+		"reg_token_hex":                      token,
+		"reg_token_negative_other_nonce_hex": tokenOther,
+		"pointer_route_hex":                  h32(route),
+		"pointer_deadline":                   "4102444800",
+		"pointer_hex":                        h(pointerBytes),
+		"envelope_received_at":               "1700000000",
+		"envelope_hex":                       h(envBytes),
+		"envelope_negative_bad_version_hex":  h(badVersion),
+		"pointer_negative_len73_hex":         h(shortPtr),
 	}
 }
 
@@ -142,6 +217,10 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 		// payload) — cross-implementation Go<->Rust. Frames computed, not
 		// hardcoded, so the length prefixes are authoritative.
 		"spore_peer_frame": sporePeerFrameVectors(),
+		// relay-fabric v1 (WIRE_SPEC §8): epoch-salted handles, reg tokens,
+		// envelopes. Go (internal/fabric) and Rust (spore-peer fabric mod)
+		// must agree byte-for-byte — the decided handle-epoch scheme.
+		"fabric_v1": fabricV1Vectors(),
 	}
 	out, _ := json.MarshalIndent(doc, "", "  ")
 	t.Logf("vectors:\n%s", out)
