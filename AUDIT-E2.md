@@ -257,7 +257,7 @@ local vs external `uses:`, verbatim/truncated copies, per-key deltas of the
 provenance job). Every variant keeping the block startup-failed; every variant
 without it started. The probe scaffolding and the throwaway tags were removed
 from history after triage (main was rewritten to drop them); the surviving
-remediation is commit `d228097cace13739b51f38d8b5b9225fc5b6720a`, which drops
+remediation is commit `a7ad5f8ed0d93b8478be94146de9f4c85e50f3f9`, which drops
 the redundant block (the generator inherits the workflow's top-level permissions,
 which already grant `id-token: write`, `actions: read`, and `contents: read`).
 The quirk is documented in the workflow comment.
@@ -265,7 +265,7 @@ The quirk is documented in the workflow comment.
 **R3 — generator job failed before signing: SLSA generator v1.9.0 pins
 `actions/upload-artifact` v3 internally,** which GitHub now auto-fails at step
 setup (deprecated runtime). Not fixable from this repo; fixed by bumping the
-generator to its v2.1.0 line — commit `7c7fe371f60641adf0bd7fa2f298a7dda7604b13`.
+generator to its v2.1.0 line — commit `e20cda26ded9ebdaa3f2db73b9f6e0f4a51eace8`.
 
 **R4 — attest rejected the subjects file: the format was backwards from the
 file's first commit.** The generic builder parses field 1 of each subjects
@@ -275,13 +275,13 @@ expects plain `sha256sum` output; the hash job transformed it to
 hash format` and every downstream job cascaded (empty provenance name →
 upload-artifact "path required" → final exit 27). The hash job now passes
 sha256sum lines through untransformed, excluding the `*.sha256` files whose
-content is not a sha256sum line — commit `25ce9f8c3a52a09a7b6060187e42b9188f55aff6`.
+content is not a sha256sum line — commit `2dd05f873f0d4f9debee375fe9f456a65d6dd13d`.
 
 **R5 — silent artifact collision in the release itself.** The build matrix
 produced bare `spore` for linux and both darwin targets; flattening artifacts
 for release/hash would overwrite all but one Unix binary while every job stayed
 green. Artifacts are now `spore-<os>-<arch>[.exe]`, and `upload-assets: true`
-attaches the signed provenance to the release — commit `f40c9f55f1b6ac85f47e764f8b5c140dba0c96fc`.
+attaches the signed provenance to the release — commit `c877e4fbac6a8d259f0d5161d837d1b9b64a19cd`.
 
 **Guardrail follow-up:** gate the release/`upload-assets` jobs on the tag not
 being a `0.0.0.*` dry-run, so throwaway exercises never publish a public
