@@ -106,10 +106,11 @@ and garbage probes, then a well-formed fetch must succeed.
    the listener to loopback or a firewall-protected interface today; a
    `HandlerToken`-style gate is the later fix if the posture changes. (Mirrors
    the per-IP rate-limit treatment the mailbox prekey pop got in AUDIT-E2's M1.)
-2. **WIRE_SPEC §5 lists** `"404 not found"`, `"400 bad cid"`, and
-   `"500 cid mismatch"` — but not the two error strings this surface now
-   emits: `"400 bad frame"` (oversized/malformed request frame) and
-   `"410 gone"` (expired body). The spec owes those two lines.
+2. ~~**WIRE_SPEC §5 lists**~~ **RESOLVED (commit `a5f0657`)**: §5 originally
+   listed only `"404 not found"`, `"400 bad cid"`, and `"500 cid mismatch"` —
+   not the two error strings this surface emits. §5 now documents
+   `"400 bad frame"` and `"410 gone"` with committed interop vectors
+   (`expected_bad_frame*`, `expected_gone*`) and conformance-test coverage.
 3. **Long-lived serving nodes should run a periodic `Reap`**: expired bodies
    linger on disk until a `Reap` runs, and the serve path reaps only on access
    to the expired CID. The demo in `cmd/spore/main.go` reaps explicitly; a
