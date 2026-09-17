@@ -122,3 +122,50 @@ jobs:
       # only ever runs on v* tags, which is the generator's condition for
       # uploading assets).
       upload-assets: true
+
+  # Verify the release the way a consumer would: download the published
+  # Release assets (not build intermediates), then check every binary against
+  # the signed SLSA provenance that was actually attached to that Release.
+  # A red run here means consumers running slsa-verifier would reject it.
+  # Job-level permissions are fine on a normal job (the startup quirk noted
+  # above applies only to `uses:` jobs); this job needs no write access.
+  verify-provenance:
+    name: Verify provenance (slsa-verifier)
+    needs: [release, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Pin the verifier binary to the official v2.7.0 release and check its
+      # sha256 before use (computed from the official release asset), so the
+      # tooling doing the verification has a known-good identity.
+      - name: Install slsa-verifier (hash-pinned)
+        run: |
+          VERIFIER="$RUNNER_TEMP/slsa-verifier-linux-amd64"
+          curl -fsSLo "$VERIFIER" \
+            "https://github.com/slsa-framework/slsa-verifier/releases/download/v2.7.0/slsa-verifier-linux-amd64"
+          echo "499befb675efcca9001afe6e5156891b91e71f9c07ab120a8943979f85cc82e6  $VERIFIER" | sha256sum -c -
+          chmod +x "$VERIFIER"
+      - name: Download release assets (consumer-style)
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+      - name: Verify every binary against the signed provenance
+        run: |
+          PROV=release/multiple.intoto.jsonl
+          test -f "$PROV"
+          # Binaries only: the *.sha256 checksum files and the provenance
+          # itself are not provenance subjects. Fail loudly if this ever
+          # matches nothing instead of verifying an empty set.
+          BINARIES=$(find release -maxdepth 1 -type f \
+            ! -name '*.sha256' ! -name '*.intoto.jsonl')
+          test -n "$BINARIES"
+          # word splitting is intentional: one verifier invocation covers all
+          # binaries, which must all be subjects of the same provenance file.
+          "$RUNNER_TEMP/slsa-verifier-linux-amd64" verify-artifact $BINARIES \
+            --provenance-path "$PROV" \
+            --source-uri "github.com/$GITHUB_REPOSITORY" \
+            --source-tag "$TAG"
+        env:
+          TAG: ${{ github.ref_name }}
