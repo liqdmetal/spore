@@ -184,7 +184,9 @@ read argv) — use `-msg-file` or stdin. Run `spore` with no args for full usage
 | Trade-off | 256 KiB body cap, deletion is best-effort (the ratchet is the real erasure) | needs an always-on box | you trust the operator with metadata |
 
 The serverless posture is the no-servers endgame: point `-store` at
-`nostr://` relays, exchange bundles out-of-band, and no one operates anything
+`sporepeer://` (the two endpoints run everything — see the store table
+above) or at `nostr://` relays, exchange bundles out-of-band, and no one
+operates anything
 for you. Bodies are content-addressed ciphertext on a public commons; deletion
 is best-effort, so the **ratchet's erased keys are what actually makes old
 messages unreadable** — see
@@ -236,9 +238,10 @@ forever-free.
 See [`ROADMAP.md`](ROADMAP.md). Shipped recently: E2 (0xE2) forward-private
 transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
 (contacts/threads/search), offline compose queue, single-use prekey batches,
-one-shot onboarding, panic wipe, and multi-device state sync via
-`e2-device`. Next: serverless bodies over `spore-peer`, tokenized search, and
-real-chain EVM deployment.
+one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, and
+serverless bodies over `spore-peer` (`sporepeer://` store backend, `spore
+serve` daemon, cross-binary Go↔Rust interop tests). Next: tokenized search,
+in-chat settlement (escrow/swap), and real-chain EVM deployment.
 
 ## License
 
