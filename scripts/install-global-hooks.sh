@@ -165,6 +165,10 @@ call_lefthook()
       devbox run lefthook "$@"
     else
       echo "Can't find lefthook in PATH"
+      echo "ERROR: Operation is aborted due to lefthook settings."
+      echo "Make sure lefthook is available in your environment and re-try."
+      echo "To skip these checks use --no-verify git argument or set LEFTHOOK=0 env variable."
+      exit 1
     fi
   fi
 }
@@ -242,6 +246,10 @@ call_lefthook()
       devbox run lefthook "$@"
     else
       echo "Can't find lefthook in PATH"
+      echo "ERROR: Operation is aborted due to lefthook settings."
+      echo "Make sure lefthook is available in your environment and re-try."
+      echo "To skip these checks use --no-verify git argument or set LEFTHOOK=0 env variable."
+      exit 1
     fi
   fi
 }
@@ -319,7 +327,7 @@ call_lefthook()
       devbox run lefthook "$@"
     else
       echo "Can't find lefthook in PATH"
-      dir="$(git rev-parse --show-toplevel 2>/dev/null)"
+      dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
       # Fail CLOSED when this repo actually uses lefthook but no binary was
       # found: exiting 0 would silently skip the pre-push gate. Repos that
       # do not use lefthook stay a silent no-op (exit 0).
