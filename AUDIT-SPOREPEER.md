@@ -111,10 +111,12 @@ and garbage probes, then a well-formed fetch must succeed.
    not the two error strings this surface emits. §5 now documents
    `"400 bad frame"` and `"410 gone"` with committed interop vectors
    (`expected_bad_frame*`, `expected_gone*`) and conformance-test coverage.
-3. **Long-lived serving nodes should run a periodic `Reap`**: expired bodies
-   linger on disk until a `Reap` runs, and the serve path reaps only on access
-   to the expired CID. The demo in `cmd/spore/main.go` reaps explicitly; a
-   serving daemon needs the same on a ticker or cron.
+3. ~~**Long-lived serving nodes should run a periodic `Reap`**~~ **RESOLVED
+   (commit `422f5a2`)**: expired bodies no longer wait for their CID to be
+   asked for — `SporePeerConfig.ReapEvery` (CLI: `-store-reap-every`,
+   sporepeer:// only) runs a background compost ticker bounded by `Close()`,
+   with the on-access-only behavior unchanged as the default. Expiry
+   enforcement remains read-time either way.
 
 ---
 
