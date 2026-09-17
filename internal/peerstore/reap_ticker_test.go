@@ -8,7 +8,12 @@ package peerstore
 // liveness, and the disabled/clamped cadences.
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -117,5 +122,110 @@ func TestReapTickerDisabledAndClamped(t *testing.T) {
 			t.Fatalf("ReapEvery=%v: expired get err = %v, want store.ErrExpired", every, err)
 		}
 		s.Close()
+	}
+}
+
+// TestReapTickerCompostsOnTheMillisecondDeadline combines the two compost
+// mechanisms end to end: the ReapEvery ticker driven by a body whose
+// deadline carries a SUB-SECOND component (.expms record, written by the
+// real Put path). The deadline is anchored at next-second-boundary + 300ms,
+// so its sub-second part is always nonzero and the old seconds-floor logic
+// alone could never authorize a reap inside the test window — every
+// assertion below genuinely distinguishes millisecond precision from the
+// floor. If this test ever flakes, the "same wall-clock second" guard will
+// say so explicitly instead of failing mysteriously.
+func TestReapTickerCompostsOnTheMillisecondDeadline(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSporePeerStore(SporePeerConfig{Dir: dir, Listen: "127.0.0.1:0", ReapEvery: 25 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	addr := s.LocalAddr()
+
+	deadline := time.Now().Truncate(time.Second).Add(time.Second + 300*time.Millisecond)
+
+	alive := []byte("ticker must never touch me (unexpired)")
+	aliveCID := sha256.Sum256(alive)
+	mortal := []byte("composted mid-second by the ticker")
+	mortalCID := sha256.Sum256(mortal)
+	if err := s.Put(aliveCID, alive, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(mortalCID, mortal, deadline); err != nil {
+		t.Fatal(err)
+	}
+
+	// The real Put path wrote the ms refinement the ticker acts on, at the
+	// documented §7 hold path.
+	msPath := filepath.Join(dir, hex.EncodeToString(mortalCID[:])+".expms")
+	if _, err := os.Stat(msPath); err != nil {
+		t.Fatalf("Put did not write the .expms refinement: %v", err)
+	}
+
+	// Before the deadline the body is served over the wire byte-for-byte,
+	// and the unexpired companion must never be disturbed.
+	got, err := Fetch(context.Background(), addr, mortalCID)
+	if err != nil {
+		t.Fatalf("pre-deadline fetch: %v", err)
+	}
+	if !bytes.Equal(got, mortal) {
+		t.Fatal("pre-deadline body mismatch")
+	}
+	if _, err := Fetch(context.Background(), addr, aliveCID); err != nil {
+		t.Fatalf("unexpired body disturbed before its time: %v", err)
+	}
+
+	// Cross the millisecond deadline (5ms spin — the whole test window stays
+	// inside one wall-clock second).
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The ticker must compost within a few ticks. While the bytes are still
+	// on disk the read path classifies them expired (410 semantics); the
+	// moment the ticker has acted, the SAME cid reads as not-found (404).
+	// Under seconds-floor logic alone neither the read-refusal-then-gone
+	// flip NOR the reap itself could happen before the next boundary.
+	composted := false
+	budget := time.Now().Add(300 * time.Millisecond)
+	for !composted {
+		_, err := s.hold.Get(mortalCID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			composted = true
+		case errors.Is(err, store.ErrExpired):
+			// still on disk, read-refused: correct interim state
+		case err == nil:
+			t.Fatal("body read back after its millisecond deadline")
+		default:
+			t.Fatalf("hold get: %v", err)
+		}
+		if composted {
+			break
+		}
+		if time.Now().After(budget) {
+			t.Fatal("ticker did not compost within 300ms of the ms deadline")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Everything above happened in the SAME wall-clock second as the
+	// deadline: the seconds floor alone could not have authorized any reap
+	// yet, so the ms record demonstrably drove the composting.
+	if time.Now().Unix() != deadline.Unix() {
+		t.Fatalf("test window crossed a second boundary (%d vs %d): timing assumptions broken",
+			time.Now().Unix(), deadline.Unix())
+	}
+
+	// Over the wire the composted body is now definitively 404 — never
+	// served again, never reshaped — and the unexpired companion still
+	// serves byte-for-byte after all of it.
+	if _, err := Fetch(context.Background(), addr, mortalCID); err != store.ErrNotFound {
+		t.Fatalf("post-compost fetch err = %v, want ErrNotFound (404)", err)
+	}
+	gotAlive, err := Fetch(context.Background(), addr, aliveCID)
+	if err != nil || !bytes.Equal(gotAlive, alive) {
+		t.Fatalf("unexpired body after the whole sequence: %q, %v", gotAlive, err)
 	}
 }
