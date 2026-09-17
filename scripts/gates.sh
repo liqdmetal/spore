@@ -27,6 +27,12 @@
 # Default location: .gate-timings.csv in the spore repo root (gitignored).
 # Override with GATE_TIMINGS_CSV=<path>, or disable with GATE_TIMINGS_CSV=off.
 #
+# The summary also flags any gate slower than GATE_SLOW_RATIO (default 2)
+# times its historical median from prior rows of the CSV — this machine's
+# own baseline, never the run being judged. Informational only: a slow-but-
+# green run still exits 0. A gate needs >= 3 prior samples before its
+# median is trusted; gate labels are compared across quick and full modes.
+#
 # The -race gate needs cgo enabled (the default on most dev boxes). Exit code
 # is 0 only if every gate that ran passed; skips are printed, not hidden.
 #
@@ -93,6 +99,7 @@ elif [ -n "${GATE_TIMINGS_CSV:-}" ]; then
 else
   CSV_PATH="$SPORE_DIR/.gate-timings.csv"
 fi
+GATE_SLOW_RATIO="${GATE_SLOW_RATIO:-2.0}"
 
 csv_init() {
   [ -n "$CSV_PATH" ] || return 0
@@ -165,6 +172,12 @@ cd "$SPORE_DIR"
 
 SPORE_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo -)"
 csv_init
+# Snapshot of the log BEFORE this run appends anything: the slow-gate check
+# must judge this run against history, not against itself.
+PRE_ROWS=0
+if [ -n "$CSV_PATH" ] && [ -f "$CSV_PATH" ]; then
+  PRE_ROWS=$(( $(wc -l < "$CSV_PATH") ))
+fi
 
 run_gate gofmt check_gofmt
 
@@ -230,6 +243,52 @@ if [ -n "$TIMINGS" ]; then
   printf '%s' "$TIMINGS" | sort -rn | while IFS=' ' read -r ms label; do
     printf '  %8s  %s\n' "$(fmt_ms "$ms")" "$label"
   done
+fi
+
+# ---- slow-gate check: this run vs this machine's own history ---------------
+if [ -n "$CSV_PATH" ] && [ "$PRE_ROWS" -ge 2 ]; then
+  HIST=$(head -n "$PRE_ROWS" "$CSV_PATH" | awk -F',' '
+    NR > 1 {
+      g = $5; gsub(/^"|"$/, "", g)
+      c[g]++
+      v[g "," c[g]] = $6 + 0
+    }
+    END {
+      for (g in c) {
+        if (c[g] < 3) continue            # a median needs >= 3 samples
+        k = 0
+        for (i = 1; i <= c[g]; i++) buf[k++] = v[g "," i]
+        for (i = 0; i < k - 1; i++)       # insertion sort; k is small
+          for (j = i + 1; j < k; j++)
+            if (buf[j] < buf[i]) { t = buf[i]; buf[i] = buf[j]; buf[j] = t }
+        m = (k % 2) ? buf[int(k / 2)] : int((buf[k / 2 - 1] + buf[k / 2]) / 2)
+        printf "%d\t%s\n", m, g
+      }
+    }')
+
+  checked=0; flagged=0
+  while read -r dt label; do
+    [ -n "$label" ] || continue
+    med=$(printf '%s\n' "$HIST" | awk -F'\t' -v g="$label" '$2 == g {print $1; exit}')
+    [ -n "$med" ] || continue
+    checked=$((checked + 1))
+    if awk -v d="$dt" -v m="$med" -v r="$GATE_SLOW_RATIO" 'BEGIN { exit !(d > m * r) }'; then
+      flagged=$((flagged + 1))
+      printf '  SLOW: %s — %s vs median %s (%.2fx baseline)\n' \
+        "$label" "$(fmt_ms "$dt")" "$(fmt_ms "$med")" \
+        "$(awk -v d="$dt" -v m="$med" 'BEGIN { printf "%.2f", d / m }')"
+    fi
+  done <<TIMINGS
+$TIMINGS
+TIMINGS
+
+  if [ "$flagged" -gt 0 ]; then
+    echo "slow-gate check: $flagged gate(s) anomalously slow for this machine (see SLOW above)"
+  elif [ "$checked" -gt 0 ]; then
+    echo "slow-gate check: no anomalies ($checked gate(s) vs history)"
+  else
+    echo "slow-gate check: skipped (insufficient history — a median needs >= 3 prior runs)"
+  fi
 fi
 
 MODE=""
