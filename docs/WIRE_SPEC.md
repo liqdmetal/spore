@@ -106,3 +106,48 @@ ever reshaped into a 404).
 A new implementation is conformant when, given `fixed_scalars`, it reproduces
 every `expected_*` byte-for-byte, and when its receiver accepts the committed
 v2 envelopes while rejecting tampered, cross-recipient, and unsigned variants.
+
+## 7. Appendix: the spore-peer hold layout (DiskStore)
+
+`spore-peer serve --dir` and `spore serve -dir` hold bodies in a plain
+directory. Implementations serving or manipulating the same layout must honor
+this contract; the reference Go implementation is `internal/store/diskstore.go`
+and its sub-second regression tests live beside it.
+
+    <cid hex>.body   raw ciphertext (sha256(body) MUST equal the cid bytes)
+    <cid hex>.exp    unix-seconds deadline as decimal text — the floor of the
+                     true deadline; the record every version reads
+    <cid hex>.expms  unix-millis deadline as decimal text — optional
+                     refinement written by current versions
+
+Semantics:
+
+- **Content addressing.** The file name is the hex CID, and a server
+  re-verifies `sha256(body) == cid` before every `0x00` answer (§5).
+- **Never-expires and crash ordering.** A deadline of `0`, or a missing
+  `.exp`, means the body never expires — deliberately. The store writes the
+  expiry record BEFORE the body (each via temp+rename), so a crash
+  mid-write can only leave a dangling expiry file with no body (harmless:
+  the body reads as not-found and reap cleans it up), never a body whose
+  expiry is unknown — a body that could never be reaped would break the
+  compost guarantee the whole store exists to provide.
+- **Deadline resolution.** `.expms`, when present and parseable, is
+  authoritative; otherwise the seconds floor applies. The ms record exists
+  so mid-second deadlines are enforced at read time and reaped on the
+  first pass that crosses them, not on the second rollover. Read-time
+  enforcement and reaping MUST resolve through the same rule: a body is
+  never served past its deadline while its bytes remain on disk, and never
+  reaped while it would still be served.
+- **Downward compatibility.** An implementation that does not know
+  `.expms` ignores it and works off the seconds floor — which errs toward
+  treating a body as expired EARLY, never serving longer than the true
+  deadline allows. A missing or malformed `.expms` likewise falls back to
+  the floor.
+- **Enforcement vs composting.** Expiry is enforced at READ time on every
+  access (`410 gone`, §5); background reaping (`spore serve
+  -reap-every`) only changes WHEN expired bytes leave the holder's disk,
+  never whether they are served.
+- **Hygiene.** Files carry `0600` permissions in a `0700` directory (the
+  privacy posture). Delete removes the body and both expiry records; reap
+  is best-effort glob-read-remove — removal errors are ignored and the
+  next pass retries.
