@@ -206,6 +206,15 @@ go test -race ./internal/ratchetwire ./internal/mailbox ./internal/relay   # rac
 
 Go 1.23.1+. No CGO.
 
+One command runs the whole pre-push suite — gofmt/vet/tests, the doc-refs
+pin checker, and (when a spore-peer checkout is present next to this one)
+its cargo build/fmt/clippy/test gates plus the `-race` cross-binary interop
+run against the freshly built Rust binary:
+
+```
+scripts/gates.sh
+```
+
 ## Sustainability (FOSS, grassroots — no VC, no token)
 
 Spore is BSD-3 free software. It stays free. The operator (not the protocol)
