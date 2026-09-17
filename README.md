@@ -218,6 +218,10 @@ scripts/gates.sh --quick   # inner loop: skips the Rust gates and -race/interop
 
 A lefthook pre-push hook runs the full suite automatically on every
 `git push` (escape hatches: `LEFTHOOK=0 git push …` or `--no-verify`).
+The global hooks setup is backed up in this repo:
+`scripts/install-global-hooks.sh` recreates it on a new machine and
+self-verifies; `scripts/verify-hooks.sh` detects drift on any machine
+against the committed `scripts/hooks-manifest.sha256`.
 
 ## Sustainability (FOSS, grassroots — no VC, no token)
 

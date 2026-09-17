@@ -20,8 +20,13 @@
 # scripts/gates.sh wiring and spore-peer's cargo gates). Escape hatches:
 #   LEFTHOOK=0 git push ...   |   git push --no-verify   |   git commit --no-verify
 #
+# After installing, the script self-verifies against
+# scripts/hooks-manifest.sha256 when it sits next to this installer, so a
+# bad or tampered install is caught immediately. Drift on any machine can
+# be checked anytime with scripts/verify-hooks.sh.
+#
 # This file is GENERATED from the live hooks on the source machine — do not
-# hand-edit the embedded bodies; regenerate instead.
+# hand-edit the embedded bodies; regenerate with scripts/gen-hooks-backup.sh.
 set -eu
 
 HOOKS="$HOME/.config/git/hooks"
@@ -314,6 +319,18 @@ call_lefthook()
       devbox run lefthook "$@"
     else
       echo "Can't find lefthook in PATH"
+      dir="$(git rev-parse --show-toplevel 2>/dev/null)"
+      # Fail CLOSED when this repo actually uses lefthook but no binary was
+      # found: exiting 0 would silently skip the pre-push gate. Repos that
+      # do not use lefthook stay a silent no-op (exit 0).
+      if test -f "$dir/lefthook.yml" || test -f "$dir/.lefthook.yml" || \
+         test -f "$dir/lefthook.yaml" || test -f "$dir/.config/lefthook.yml"
+      then
+        echo "ERROR: Operation is aborted due to lefthook settings."
+        echo "Make sure lefthook is available in your environment and re-try."
+        echo "To skip these checks use --no-verify git argument or set LEFTHOOK=0 env variable."
+        exit 1
+      fi
     fi
   fi
 }
@@ -330,6 +347,42 @@ command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository i
 git lfs pre-push "$@"
 HOOK_EOF_9x
   chmod +x "$HOME/.config/git/pre-push.lfs.orig"
+fi
+
+# ----- Git LFS post hooks (git-lfs's own standard shims) -----
+cat > "$HOOKS/post-checkout" <<'HOOK_EOF_9x'
+#!/bin/sh
+command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'post-checkout' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks')."; exit 2; }
+git lfs post-checkout "$@"
+HOOK_EOF_9x
+chmod +x "$HOOKS/post-checkout"
+cat > "$HOOKS/post-commit" <<'HOOK_EOF_9x'
+#!/bin/sh
+command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'post-commit' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks')."; exit 2; }
+git lfs post-commit "$@"
+HOOK_EOF_9x
+chmod +x "$HOOKS/post-commit"
+cat > "$HOOKS/post-merge" <<'HOOK_EOF_9x'
+#!/bin/sh
+command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'post-merge' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks')."; exit 2; }
+git lfs post-merge "$@"
+HOOK_EOF_9x
+chmod +x "$HOOKS/post-merge"
+
+# ----- self-check against the committed manifest -----
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+if [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/hooks-manifest.sha256" ]; then
+  echo
+  echo "verifying installed hooks against the committed manifest ..."
+  if (cd "$HOOKS" && sha256sum -c "$SELF_DIR/hooks-manifest.sha256"); then
+    echo "self-check: all hooks verified."
+  else
+    echo "self-check: DRIFT detected — do not trust this install; investigate." >&2
+    exit 1
+  fi
+else
+  echo
+  echo "note: hooks-manifest.sha256 not found next to the installer — self-check skipped."
 fi
 
 echo
