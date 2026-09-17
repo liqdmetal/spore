@@ -15,14 +15,9 @@
 # goimports, build+vet+test, doc-refs) still runs. It complements the full
 # suite — a push is still gated by the full run, never by --quick.
 #
-# Gates, in order:
-#   spore       gofmt / goimports, go build ./..., go vet ./..., go test ./...
-#   spore-peer  cargo build --locked, cargo fmt --check,
-#               cargo clippy --locked -D warnings, cargo test --locked
-#   spore       go test -race on store + peerstore — with SPORE_PEER_BIN set
-#               to the freshly built Rust binary when available, so the
-#               cross-binary interop tests run for real instead of skipping —
-#               then the doc-refs checker over the audit pins.
+# Every gate prints its duration when it finishes, and a slowest-first
+# timing table prints before the final banner — slow gates are visible at
+# a glance, not buried in total runtime.
 #
 # The -race gate needs cgo enabled (the default on most dev boxes). Exit code
 # is 0 only if every gate that ran passed; skips are printed, not hidden.
@@ -55,39 +50,95 @@ elif [ -d "$SPORE_DIR/../spore-peer" ]; then PEER_DIR="$SPORE_DIR/../spore-peer"
 elif [ -d "$SPORE_DIR/../_review_tmp/spore-peer" ]; then PEER_DIR="$SPORE_DIR/../_review_tmp/spore-peer"
 else PEER_DIR=""; fi
 
+# ---- timing helpers --------------------------------------------------------
+# Millisecond clock with a fallback for `date` implementations that lack %N
+# (they emit a literal 'N', which fails the all-digits test below).
+now_ms() {
+  t=$(date +%s%N 2>/dev/null)
+  case "$t" in
+    ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;;
+    *) echo "${t:0:13}" ;;
+  esac
+}
+
+fmt_ms() {
+  ms=$1
+  if [ "$ms" -ge 60000 ]; then
+    printf '%dm%ds' $(( ms / 60000 )) $(( (ms % 60000) / 1000 ))
+  elif [ "$ms" -ge 1000 ]; then
+    printf '%d.%ds' $(( ms / 1000 )) $(( (ms % 1000) / 100 ))
+  else
+    printf '%dms' "$ms"
+  fi
+}
+
+TIMINGS=""
+
+# run_gate LABEL CMD... — run CMD, print its duration, remember it for the
+# end-of-run table, and exit with CMD's status on failure (so a failing gate
+# still reports how long it ran before it died).
+run_gate() {
+  label=$1; shift
+  printf -- '-- %s ...\n' "$label"
+  t0=$(now_ms)
+  rc=0
+  "$@" || rc=$?
+  dt=$(( $(now_ms) - t0 ))
+  TIMINGS="${TIMINGS}${dt} ${label}
+"
+  printf -- '-- %s — %s\n' "$label" "$(fmt_ms "$dt")"
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL $label (exit $rc)"
+    exit "$rc"
+  fi
+}
+
+check_gofmt() {
+  UNFMT="$(gofmt -l .)"
+  if [ -n "$UNFMT" ]; then
+    echo "unformatted files:"
+    echo "$UNFMT"
+    return 1
+  fi
+}
+
+check_goimports() {
+  UNIMP="$(goimports -l .)"
+  if [ -n "$UNIMP" ]; then
+    echo "files needing import fixes:"
+    echo "$UNIMP"
+    return 1
+  fi
+}
+
+RACE_PKGS="./internal/store ./internal/peerstore"
+check_race() {
+  if [ -n "$PEER_BIN" ]; then
+    SPORE_PEER_BIN="$PEER_BIN" go test -race -count=1 $RACE_PKGS
+  else
+    go test -race -count=1 $RACE_PKGS
+  fi
+}
+
+# ---- gates -----------------------------------------------------------------
 echo "== pre-push gates =="
 echo "spore: $SPORE_DIR"
 
 cd "$SPORE_DIR"
 
-UNFMT="$(gofmt -l .)"
-if [ -n "$UNFMT" ]; then
-  echo "FAIL gofmt — unformatted files:"
-  echo "$UNFMT"
-  exit 1
-fi
-echo "gofmt: clean"
+run_gate gofmt check_gofmt
 
 if command -v goimports >/dev/null 2>&1; then
-  UNIMP="$(goimports -l .)"
-  if [ -n "$UNIMP" ]; then
-    echo "FAIL goimports — files needing import fixes:"
-    echo "$UNIMP"
-    exit 1
-  fi
-  echo "goimports: clean"
+  run_gate goimports check_goimports
 else
   echo "goimports: not installed — skipped (gofmt covers formatting)"
 fi
 
-echo "-- go build ./... --"
-go build ./...
+run_gate 'go build ./...' go build ./...
 
-echo "-- go vet ./... --"
-go vet ./...
+run_gate 'go vet ./...' go vet ./...
 
-echo "-- go test ./... --"
-go test ./...
+run_gate 'go test ./...' go test ./...
 
 PEER_BIN=""
 if [ "$QUICK" -eq 1 ]; then
@@ -99,19 +150,10 @@ elif [ -n "$PEER_DIR" ] && [ -d "$PEER_DIR" ]; then
   echo
   echo "== spore-peer gates ($PEER_DIR) =="
 
-  echo "-- cargo build --locked --"
-  cargo build --locked
-
-  echo "-- cargo fmt --check --"
-  cargo fmt --check
-  echo "rustfmt: clean"
-
-  echo "-- cargo clippy --locked --all-targets -- -D warnings --"
-  cargo clippy --locked --all-targets -- -D warnings
-  echo "clippy: clean"
-
-  echo "-- cargo test --locked --"
-  cargo test --locked
+  run_gate 'cargo build' cargo build --locked
+  run_gate 'cargo fmt --check' cargo fmt --check
+  run_gate 'cargo clippy -D warnings' cargo clippy --locked --all-targets -- -D warnings
+  run_gate 'cargo test' cargo test --locked
 
   if [ -x target/debug/spore-peer ]; then
     PEER_BIN="$PEER_DIR/target/debug/spore-peer"
@@ -129,16 +171,25 @@ if [ "$QUICK" -eq 1 ]; then
 elif [ -n "$PEER_BIN" ]; then
   echo
   echo "== go test -race + cross-binary interop (SPORE_PEER_BIN=$PEER_BIN) =="
-  SPORE_PEER_BIN="$PEER_BIN" go test -race -count=1 ./internal/store ./internal/peerstore
+  run_gate '-race + cross-binary interop' check_race
 else
   echo
   echo "== go test -race (no spore-peer binary — interop tests will skip) =="
-  go test -race -count=1 ./internal/store ./internal/peerstore
+  run_gate '-race' check_race
 fi
 
 echo
 echo "== doc-refs checker =="
-bash .github/actions/doc-refs/verify_doc_refs.sh
+run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
+
+# ---- summary ---------------------------------------------------------------
+if [ -n "$TIMINGS" ]; then
+  echo
+  echo "== gate timings (slowest first) =="
+  printf '%s' "$TIMINGS" | sort -rn | while IFS=' ' read -r ms label; do
+    printf '  %8s  %s\n' "$(fmt_ms "$ms")" "$label"
+  done
+fi
 
 MODE=""
 if [ "$QUICK" -eq 1 ]; then MODE=" (quick)"; fi
