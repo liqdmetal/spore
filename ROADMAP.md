@@ -98,6 +98,9 @@ remaining; it does not re-state live status.*
   pointer (DERO + EVM-calldata; wire-tested). Other carriers refuse `-amount`
   rather than silently underpay.
 - In-thread **invoice / payment** envelopes (`msg invoice`, `msg pay`).
+- **HTLC escrow funding in chat:** `-escrow htlc` locks `-amount` in the
+  mainnet RelayHTLC contract with preimage-hash, recipient, and expiry
+  (claim/refund and DEX swap surfaces remain — product row #1).
 
 ### Onboarding + ops
 - `spore init` one-shot identity kit + `config.json` defaults (every E2 command
@@ -115,19 +118,22 @@ remaining; it does not re-state live status.*
 | # | Gate | Why it is required |
 |---|---|---|
 | P0 | Independent continuity protocol review | Local tests do not replace external cryptographic review. |
-| P0 | Bounded parsers and filesystem hardening | Malicious or oversized local artifacts must fail closed without resource exhaustion or unsafe writes. |
-| P0 | Windows CI and release provenance | Continuity has platform-specific replacement code; Linux-only CI is insufficient. |
 | P0 | Two-party live E2E and adversarial soak | Mainnet/self-message/local-Anvil evidence is not equivalent to independent-recipient production proof. |
 | P1 | Recovery drill and protected vault-copy runbook | A continuity product must survive operator/device loss, not just decrypt in one test process. |
 | P1 | Anchor live-chain evidence | Wallet-history readback is implemented; controlled funded posting and reorg/finality evidence remain. |
 | P1 | Watch deployment hardening | Local metadata-only watch/outbox is implemented; scheduling, provider hardening, and recovery operations remain. |
 
+Closed since drafting: **Windows CI and release provenance** (Windows
+build+vet+test and `-race` jobs in CI; keyless SLSA attestation on release
+artifacts) and **bounded parsers** (E2 wire bounds + fuzz-smoke targets;
+continuity strict decode with size caps).
+
 ### Product roadmap after the evidence gates
 
 | # | Item | Why it's gated / what it needs |
 |---|---|---|
-| 1 | **Escrow + swap in chat** | Wire `msg` to the live sap escrow / relay-dex HTLC contracts (SC-call seam in the CLI). Contracts are mainnet-live; this is integration, not new crypto. Enables settlement rake (docs/BUSINESS.md line 2). |
-| 2 | **Tokenized search** | maildb search is substring + AND/NOT/phrase/scope today. A real inverted index (AND/OR, phrase, sender-scoped) is the next depth. |
+| 1 | **Finish escrow + swap UX in chat** | The contract seam is live: `internal/sap` (generated relay-dex bindings: HTLC fund/claim/refund, DEX swap, wrap/unwrap) and `-escrow htlc` funds a RelayHTLC from `msg` (`-escrow-hash/-escrow-recipient/-escrow-expiry`). Remaining: claim/refund flows in-thread, `-escrow dex` (DEXSwap/WrapDERO surfaces), and the operator rake collection (see docs/BUSINESS.md, "Line 2 — settlement rake"). |
+| 2 | **Finish tokenized search execution** | The inverted index exists (`internal/maildb/inverted_index.go`: AND/OR/NOT/phrase) and the query grammar is wired — `SearchQuery{All,AnyOf,Not,Phrase,Peer,Thread,TxID}` and `mail search` with `-phrase/-peer/-thread/-txid` + highlighted snippets. Remaining: execute `Search` *through* the index (it still linear-scans messages and the index is maintained but unconsulted), surface OR/NOT via CLI flags, and make the index survive restart cheaply. |
 | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
 | 4 | **Deploy `MyceliumMailbox.sol`** | Written + backend proven; needs a funded EVM account on a real chain. |
 | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
