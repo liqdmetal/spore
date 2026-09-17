@@ -61,7 +61,10 @@ jobs:
           for d in artifacts/*/; do
             cp "$d"/* release/
           done
-      - uses: softprops/action-gh-release@v1
+      # v2: v1 ran on the decommissioned node16 runtime, and GitHub now
+      # refuses to start any workflow referencing it — the whole Release run
+      # died at startup (startup_failure, no jobs, no logs) on every tag.
+      - uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
