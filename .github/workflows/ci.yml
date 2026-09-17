@@ -27,8 +27,8 @@ jobs:
     name: build + vet + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           # Pin to the repo's own go.mod directive so CI and dev never drift.
           go-version-file: go.mod
@@ -50,8 +50,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test (race)
@@ -62,8 +62,8 @@ jobs:
     name: Windows build + vet + test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -78,8 +78,8 @@ jobs:
     needs: windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test (race)
@@ -128,8 +128,8 @@ jobs:
           - package: ./internal/ratchetwire
             target: FuzzEndpointFullRoundTrip
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Fuzz ${{ matrix.target }} (15s smoke)
@@ -141,14 +141,14 @@ jobs:
     name: Windows release binary
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build release binary
         run: go build -ldflags="-s -w" -o dist/spore.exe ./cmd/spore
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: spore-windows-amd64
           path: dist/spore.exe
@@ -158,14 +158,14 @@ jobs:
     name: Linux release binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build release binary
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/spore ./cmd/spore
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: spore-linux-amd64
           path: dist/spore
@@ -176,15 +176,16 @@ jobs:
     needs: [windows-release, linux-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: spore-*
           path: dist/
       - name: Generate SHA256 manifest
-        # download-artifact@v4 nests each artifact in its own subdirectory
+        # download-artifact (v4 through v7) nests each artifact in its own
+        # subdirectory
         # (dist/spore-windows-amd64/spore.exe, ...). A flat `sha256sum *`
         # matches those DIRECTORY names too and exits 1. Flatten every file
         # up one level, drop the emptied dirs, then hash only top-level files.
@@ -194,7 +195,7 @@ jobs:
           find . -mindepth 1 -type d -empty -delete
           find . -maxdepth 1 -type f -name 'spore*' -print0 | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: spore-SHA256SUMS
           path: dist/SHA256SUMS
@@ -203,8 +204,8 @@ jobs:
     name: gofmt (blocking gate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Check formatting
@@ -222,7 +223,7 @@ jobs:
     name: audit doc commit refs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # The audit docs pin findings to the commits that fixed them; the
           # check below resolves each cited hash against history, so a
@@ -238,8 +239,8 @@ jobs:
     name: goimports (import-section gate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Check import grouping

@@ -52,8 +52,8 @@ jobs:
       # branch.
       SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '0e03fd9d0e56dca948b6a93b219cae2d296ea21e' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           # Pin to the repo's own go.mod directive so CI and dev never drift.
           go-version-file: go.mod

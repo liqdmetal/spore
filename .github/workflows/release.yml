@@ -31,8 +31,8 @@ jobs:
           - goos: darwin
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -40,7 +40,7 @@ jobs:
       - name: Checksum
         run: sha256sum "$BIN" > "$BIN.sha256"
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BIN }}
           path: |
@@ -59,7 +59,7 @@ jobs:
     if: ${{ !startsWith(github.ref_name, 'v0.0.0') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Prepare release
@@ -71,7 +71,9 @@ jobs:
       # v2: v1 ran on the decommissioned node16 runtime, and GitHub now
       # refuses to start any workflow referencing it — the whole Release run
       # died at startup (startup_failure, no jobs, no logs) on every tag.
-      - uses: softprops/action-gh-release@v2
+      # v3: v2 targeted the deprecated Node 20 runtime (force-upgraded with
+      # warnings on every run); v3 is the node24 major.
+      - uses: softprops/action-gh-release@v3
         with:
           files: release/*
           generate_release_notes: true
@@ -85,7 +87,7 @@ jobs:
     outputs:
       subjects: ${{ steps.hash.outputs.subjects }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Hash artifacts
