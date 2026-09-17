@@ -15,7 +15,11 @@
 #
 # Extra executables in the hooks dir that the manifest does not know about
 # are printed as a warning, not a failure: they may be legitimate local
-# additions, but they run on every commit/push and deserve a look.
+# additions, but they run on every commit/push and deserve a look. One
+# special case gets a second warning: a shim for a name git never invokes
+# (real case: a scratch clone of a lefthook-using repo re-rendered its
+# `lint` hook into this dir — see gen-hooks-backup.sh). Git never runs
+# such a file; it is pure pollution and safe to delete.
 set -eu
 
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum not found" >&2; exit 2; }
@@ -58,6 +62,31 @@ else
 fi
 
 # Files present but unknown to the manifest (excluding git's samples).
+#
+# Known git hook names, for the never-invoked check below. Baseline is
+# the hooks documented in githooks(5) (git 2.x — git ships no *.sample
+# for several of these, e.g. post-checkout); *.sample files from this
+# repo's .git/hooks are unioned in so hooks added by newer git versions
+# need no edit here. If neither source is available the check is skipped
+# silently — a missing warning beats a false one.
+KNOWN_HOOKS=" "
+for h in applypatch-msg pre-applypatch post-applypatch pre-rebase \
+         post-rewrite post-checkout post-merge pre-merge-commit pre-push \
+         pre-receive update proc-receive post-receive post-update \
+         reference-transaction push-to-checkout pre-auto-gc \
+         prepare-commit-msg commit-msg post-commit fsmonitor-watchman \
+         sendemail-validate p4-changelist p4-prepare-changelist \
+         p4-post-changelist p4-pre-submit post-index-change
+do
+  KNOWN_HOOKS="$KNOWN_HOOKS$h "
+done
+if sample_dir="$(git rev-parse --git-path hooks 2>/dev/null)"; then
+  for s in "$sample_dir"/*.sample; do
+    [ -f "$s" ] || continue
+    KNOWN_HOOKS="$KNOWN_HOOKS$(basename "$s" .sample) "
+  done
+fi
+
 if ls "$HOOKS" >/dev/null 2>&1; then
   for f in "$HOOKS"/*; do
     [ -f "$f" ] || continue
@@ -65,6 +94,14 @@ if ls "$HOOKS" >/dev/null 2>&1; then
     case "$b" in *.sample) continue ;; esac
     if ! grep -q " $b\$" "$MANIFEST"; then
       echo "WARNING: unmanaged executable-style file in hooks dir: $b"
+      case "$KNOWN_HOOKS" in
+        *" $b "*|' ') ;;
+        *)
+          echo "WARNING: $b is not a git hook name — git never invokes it."
+          echo "  Likely cross-repo lefthook pollution; see gen-hooks-backup.sh."
+          echo "  Safe to delete."
+          ;;
+      esac
     fi
   done
 fi

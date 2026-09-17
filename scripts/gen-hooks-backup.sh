@@ -9,6 +9,17 @@
 # Run this after changing any hook under ~/.config/git/hooks, then commit the
 # regenerated pair. Never hand-edit either generated file — the pair is only
 # trustworthy because it is generated in one pass from the same source.
+#
+# KNOWN POLLUTION PATTERN (real case, 2026-09-17): the hooks dir is
+# machine-global — one core.hooksPath serves every repo — and any
+# lefthook-using repo on this machine re-renders ITS full hook set into it
+# on the next commit, including repos that are not spore. A disposable
+# clone of upstream lefthook (PR scratch work in /tmp) defined a `lint:`
+# hook; committing there emitted a `lint` shim into ~/.config/git/hooks
+# that no git version ever invokes, and re-rendered pre-commit and
+# prepare-commit-msg (surfacing as manifest drift). Catch: verify-hooks.sh
+# warnings. Cleanup: delete the stray file and the scratch clone, then
+# re-run this script if real hooks were also re-rendered.
 set -eu
 
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum not found" >&2; exit 2; }
