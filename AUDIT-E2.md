@@ -291,3 +291,8 @@ and detached keyless signing still run on a dry-run tag, and the skipped
 publish propagates to provenance verification. Proven live with a throwaway
 `v0.0.0-gate` tag: all build/hash/provenance jobs green, both publish jobs
 skipped, no release created — commit `33106b1bbfc0aaaf09cdcdd50b5582f5844dfa0b`.
+Superseded method: throwaway tags are retired entirely — `release.yml` now
+also accepts `workflow_dispatch`, and the publish gates key on the trigger
+event (`push`) with the `v0.0.0*` clause retained as a second belt, so a
+dispatched dry-run creates no ref, has no publish path at all, and stamps
+its binaries `dry-run-<ref>` — commit `eaeed012223a828bd473a217984d9d54adb919d6`.
