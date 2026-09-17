@@ -54,10 +54,14 @@ type vectors struct {
 		ExpectedPayloadHex string `json:"expected_payload_hex"`
 	} `json:"envelope_v2_pointer"`
 	SporePeerFrame struct {
-		BodyHex          string `json:"body_hex"`
-		ExpectedOkFrame  string `json:"expected_ok_frame"`
-		ExpectedErrText  string `json:"expected_err_text"`
-		ExpectedErrFrame string `json:"expected_err_frame"`
+		BodyHex              string `json:"body_hex"`
+		ExpectedOkFrame      string `json:"expected_ok_frame"`
+		ExpectedErrText      string `json:"expected_err_text"`
+		ExpectedErrFrame     string `json:"expected_err_frame"`
+		ExpectedBadFrameText string `json:"expected_bad_frame_text"`
+		ExpectedBadFrame     string `json:"expected_bad_frame"`
+		ExpectedGoneText     string `json:"expected_gone_text"`
+		ExpectedGoneFrame    string `json:"expected_gone_frame"`
 	} `json:"spore_peer_frame"`
 }
 
@@ -229,6 +233,26 @@ func TestSpecSporePeerFrame(t *testing.T) {
 	}
 	if !bytes.Equal(errFrame[5:], []byte(v.SporePeerFrame.ExpectedErrText)) {
 		t.Fatalf("err frame text = %q, want %q", errFrame[5:], v.SporePeerFrame.ExpectedErrText)
+	}
+
+	// The hardened server's two additional error strings (AUDIT-SPOREPEER):
+	// 400 bad frame (oversized/malformed request) and 410 gone (burned body).
+	// Same shape as the 404: status 0x01 + exact ASCII text.
+	for _, tc := range []struct {
+		name     string
+		frameHex string
+		text     string
+	}{
+		{"400 bad frame", v.SporePeerFrame.ExpectedBadFrame, v.SporePeerFrame.ExpectedBadFrameText},
+		{"410 gone", v.SporePeerFrame.ExpectedGoneFrame, v.SporePeerFrame.ExpectedGoneText},
+	} {
+		f := mustHex(t, tc.frameHex)
+		if f[4] != 0x01 {
+			t.Fatalf("%s: missing status byte 0x01", tc.name)
+		}
+		if !bytes.Equal(f[5:], []byte(tc.text)) {
+			t.Fatalf("%s: frame text = %q, want %q", tc.name, f[5:], tc.text)
+		}
 	}
 }
 

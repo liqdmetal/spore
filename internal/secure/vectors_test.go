@@ -25,12 +25,18 @@ func h32(b [32]byte) string { return hex.EncodeToString(b[:]) }
 // sporePeerFrameVectors builds authoritative frame vectors: frame = LE32(len)
 // + payload; payload_ok = 0x00 + body; payload_err = 0x01 + ascii error. The
 // body deliberately starts with ASCII '4' — the byte that broke the old
-// client (audit H4).
+// client (audit H4). Alongside the classic 404, it ships the two error
+// strings the hardened Go server emits (AUDIT-SPOREPEER): 400 bad frame
+// (oversized/malformed request frame) and 410 gone (burned body).
 func sporePeerFrameVectors() map[string]string {
 	body := []byte{0x34, 0x34, 0x34, 0x34, 0xAB, 0xCD}
 	errText := []byte("404 not found")
+	badFrameText := []byte("400 bad frame")
+	goneText := []byte("410 gone")
 	okPayload := append([]byte{0x00}, body...)
 	errPayload := append([]byte{0x01}, errText...)
+	badFramePayload := append([]byte{0x01}, badFrameText...)
+	gonePayload := append([]byte{0x01}, goneText...)
 	frame := func(p []byte) string {
 		out := make([]byte, 4, 4+len(p))
 		l := uint32(len(p))
@@ -39,10 +45,14 @@ func sporePeerFrameVectors() map[string]string {
 		return h(out)
 	}
 	return map[string]string{
-		"body_hex":           h(body),
-		"expected_ok_frame":  frame(okPayload),
-		"expected_err_text":  string(errText),
-		"expected_err_frame": frame(errPayload),
+		"body_hex":                h(body),
+		"expected_ok_frame":       frame(okPayload),
+		"expected_err_text":       string(errText),
+		"expected_err_frame":      frame(errPayload),
+		"expected_bad_frame_text": string(badFrameText),
+		"expected_bad_frame":      frame(badFramePayload),
+		"expected_gone_text":      string(goneText),
+		"expected_gone_frame":     frame(gonePayload),
 	}
 }
 

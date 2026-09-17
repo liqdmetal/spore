@@ -72,7 +72,8 @@ and on-chain pointer commitment. Verified on push, pull, relay, and pre-decrypt.
     request payload  = JSON {"cid": "<64 hex chars>"}
     ok    payload    = 0x00 || body            (sha256(body) MUST == cid)
     error payload    = 0x01 || ASCII error     ("404 not found", "400 bad cid",
-                                                "500 cid mismatch")
+                                                "500 cid mismatch", "400 bad frame",
+                                                "410 gone")
 
 Clients decide by the STATUS BYTE only — never by content sniffing (audit H4:
 the old client treated bodies starting with ASCII '4'/'5' as errors, rejecting
@@ -81,7 +82,12 @@ accepted only if `SHA-256(whole frame) == cid`.
 
 Vectors under `spore_peer_frame`:
 `070000000034343434abcd` (ok, body `34343434abcd` — deliberately starts with
-ASCII '4') and `0e00000001343034206e6f7420666f756e64` (error).
+ASCII '4') and `0e00000001343034206e6f7420666f756e64` (error, "404 not found").
+The hardened server's two additional error strings (audit: the serve surface):
+`0e0000000134303020626164206672616d65` ("400 bad frame" — request frame was
+malformed or over the 64 KiB request cap) and `090000000134313020676f6e65`
+("410 gone" — body existed but its burn deadline has passed; never served,
+ever reshaped into a 404).
 
 ## 6. Vector file contract
 
@@ -93,7 +99,9 @@ ASCII '4') and `0e00000001343034206e6f7420666f756e64` (error).
 - `canonical` — text and pointer encodings.
 - `envelope_v2_text` / `envelope_v2_pointer` — full deterministic envelopes
   (`expected_payload_hex`) built via `EncryptDeterministic`.
-- `spore_peer_frame` — transport frames computed from the layout above.
+- `spore_peer_frame` — transport frames computed from the layout above,
+  including the hardened server's `400 bad frame` and `410 gone` error
+  strings (`expected_bad_frame*`, `expected_gone*`).
 
 A new implementation is conformant when, given `fixed_scalars`, it reproduces
 every `expected_*` byte-for-byte, and when its receiver accepts the committed

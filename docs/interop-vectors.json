@@ -34,8 +34,12 @@
   },
   "spore_peer_frame": {
     "body_hex": "34343434abcd",
+    "expected_bad_frame": "0e0000000134303020626164206672616d65",
+    "expected_bad_frame_text": "400 bad frame",
     "expected_err_frame": "0e00000001343034206e6f7420666f756e64",
     "expected_err_text": "404 not found",
+    "expected_gone_frame": "090000000134313020676f6e65",
+    "expected_gone_text": "410 gone",
     "expected_ok_frame": "070000000034343434abcd"
   }
 }
