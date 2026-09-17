@@ -50,6 +50,13 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
+    # Throwaway dry-run tags (v0.0.0*, used to exercise this pipeline against
+    # a real tag ref) must never publish: the first v0.0.0-ci exercise
+    # briefly shipped artifacts on the public repo. Everything else still
+    # runs — build, subjects hashing, and a signed provenance that is produced
+    # but NOT attached (upload-assets: false below) — so a dry-run exercises
+    # the full pipeline minus publishing.
+    if: ${{ !startsWith(github.ref_name, 'v0.0.0') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -121,10 +128,16 @@ jobs:
       # Attach the signed provenance to the GitHub Release (this workflow
       # only ever runs on v* tags, which is the generator's condition for
       # uploading assets).
-      upload-assets: true
+      # Dry-run tags (v0.0.0*) must never publish anything, including the
+      # signed provenance — the generator uploads only when upload-assets is
+      # true AND the workflow runs on a v* tag.
+      upload-assets: ${{ !startsWith(github.ref_name, 'v0.0.0') }}
 
   # Verify the release the way a consumer would: download the published
   # Release assets (not build intermediates), then check every binary against
+  # the signed provenance that was actually attached to that Release. On
+  # dry-run tags (v0.0.0*) this auto-skips: `release` is gated off, and a
+  # skipped need fails the gate unless explicitly allowed. (if is implied)
   # the signed SLSA provenance that was actually attached to that Release.
   # A red run here means consumers running slsa-verifier would reject it.
   # Job-level permissions are fine on a normal job (the startup quirk noted
