@@ -96,9 +96,8 @@ fi
 
 csv_init() {
   [ -n "$CSV_PATH" ] || return 0
-  if [ ! -f "$CSV_PATH" ]; then
-    printf 'timestamp,mode,spore_sha,peer_sha,gate,duration_ms,status\n' > "$CSV_PATH"
-  fi
+  # Header when the file is missing OR empty (a zero-byte file is not a log).
+  [ -s "$CSV_PATH" ] || printf 'timestamp,mode,spore_sha,peer_sha,gate,duration_ms,status\n' > "$CSV_PATH"
 }
 
 csv_row() {  # csv_row GATE DURATION_MS STATUS
