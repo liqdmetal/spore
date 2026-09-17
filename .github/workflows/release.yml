@@ -175,6 +175,9 @@ jobs:
           echo "499befb675efcca9001afe6e5156891b91e71f9c07ab120a8943979f85cc82e6  $VERIFIER" | sha256sum -c -
           chmod +x "$VERIFIER"
       - name: Download release assets (consumer-style)
+        # Release path only: on dry-runs there is no release to download and
+        # the artifact download below populates the same layout instead.
+        if: ${{ needs.release.result == 'success' }}
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
