@@ -137,6 +137,12 @@ spore msg send-e2 -to FRIEND_ADDR -identity ~/.spore/identity.key \
 - `-store-serve 0.0.0.0:8099` — bind YOUR spore-peer listener; the startup
   line prints the exact `sporepeer://` address to give your contact. Use
   `127.0.0.1:8099` if you only ever fetch locally.
+- `-store-reap-every 10m` — optional background composting: expired bodies
+  leave `-store-dir` on this cadence instead of only when their CID is
+  asked for. Expiry is always enforced at read time either way; this flag
+  only controls when the bytes leave your disk. For a node that stays up
+  (this page's receiver), set it to a fraction of the smallest TTL you
+  issue.
 
 Receiver (keep it running; fetches from the sender's node):
 

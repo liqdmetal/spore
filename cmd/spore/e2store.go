@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/nostr"
 	"github.com/liqdmetal/spore/internal/peerstore"
@@ -35,6 +36,9 @@ type e2StoreOptions struct {
 	// ServeAddr is the -store-serve bind address for this node's spore-peer
 	// listener (sporepeer:// only).
 	ServeAddr string
+	// ReapEvery is the -store-reap-every background compost cadence for the
+	// sporepeer:// hold (0 = on-access only).
+	ReapEvery time.Duration
 }
 
 // registerE2StoreFlags registers the -store* / -relay flags shared by every
@@ -45,6 +49,7 @@ func registerE2StoreFlags(fs *flag.FlagSet) {
 	fs.String("store-token", "", "bearer token for an HTTP store (ignored for nostr:// and sporepeer://)")
 	fs.String("store-dir", "", "directory where THIS node holds the bodies it produces (required for sporepeer://; `spore init` layouts can use ~/.spore/hold)")
 	fs.String("store-serve", "", "bind address for this node's spore-peer listener, e.g. 0.0.0.0:8099 (sporepeer:// only): your contact points -store sporepeer://<your-addr>:<port> at it")
+	fs.Duration("store-reap-every", 0, "compost expired bodies from -store-dir in the background on this cadence, e.g. 10m (sporepeer:// only; default: only on access — expiry is enforced at read time either way)")
 	fs.String("relay", "", "anonymous relay hop base URL (e.g. https://relay.example.org): route off-chain body WRITES through this relay instead of PUTting straight to -store — the mailbox sees the relay's IP and you never need the mailbox's own token. The relay operator must allowlist your destination (-allow-dest). HTTP stores only")
 	fs.String("store-key", "", "file with a 32-byte hex DEDICATED signing key for -store nostr:// (do NOT reuse identity/chain keys — publishing is linkable by pubkey; `spore init` writes one)")
 }
@@ -60,7 +65,23 @@ func e2StoreOptionsFromFlags(fs *flag.FlagSet) e2StoreOptions {
 		RelayBase: flagValueOr(fs, "relay", ""),
 		HoldDir:   flagValueOr(fs, "store-dir", ""),
 		ServeAddr: flagValueOr(fs, "store-serve", ""),
+		ReapEvery: durationFlagOr(fs, "store-reap-every"),
 	}
+}
+
+// durationFlagOr reads a duration-valued flag from a flagset that may not
+// register it (flagValueOr is string-only). Missing or malformed → 0, and
+// negative values are treated as 0 (the backend clamps defensively too).
+func durationFlagOr(fs *flag.FlagSet, name string) time.Duration {
+	f := fs.Lookup(name)
+	if f == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(f.Value.String())
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
 }
 
 // newE2BodyStore builds the body store described by opts: the URL scheme
@@ -127,9 +148,10 @@ func newE2BodyStore(opts e2StoreOptions) (ratchetwire.BodyStore, error) {
 			return nil, errors.New("-store sporepeer:// requires -store-dir (a directory where THIS node holds the bodies it produces; the sender's hold is what the receiver fetches from)")
 		}
 		st, err := peerstore.NewSporePeerStore(peerstore.SporePeerConfig{
-			Dir:    opts.HoldDir,
-			Addr:   rest,
-			Listen: opts.ServeAddr,
+			Dir:       opts.HoldDir,
+			Addr:      rest,
+			Listen:    opts.ServeAddr,
+			ReapEvery: opts.ReapEvery,
 		})
 		if err != nil {
 			return nil, err

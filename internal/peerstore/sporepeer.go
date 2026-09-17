@@ -67,6 +67,16 @@ type SporePeerConfig struct {
 	// bind address (e.g. ":8099" or "127.0.0.1:8099"). Bodies in Dir are
 	// served by CID until their burn deadline.
 	Listen string
+	// ReapEvery, when > 0, runs a background ticker that reaps expired
+	// bodies from the hold on that interval — AUDIT-SPOREPEER recommendation
+	// 3: the serve path reaps only on access to an expired CID, so bodies
+	// nobody ever asks for would linger on disk forever. A long-lived node
+	// sets this to a fraction of the smallest TTL it issues (e.g. 10m for
+	// hour-long holds). Zero (the default) leaves the on-access behavior;
+	// negative is treated as zero. Expiry itself is ALWAYS enforced by
+	// DiskStore.Get on every access — the ticker only affects when expired
+	// bytes leave the disk, never whether they are served.
+	ReapEvery time.Duration
 }
 
 // SporePeerStore implements store.Store over the spore-peer transport: a
@@ -81,10 +91,19 @@ type SporePeerStore struct {
 	ln     net.Listener
 	closed bool
 	wg     sync.WaitGroup
+
+	// stop is closed exactly once by Close to end the reap ticker (the
+	// serve loop exits via ln.Close + closed instead).
+	stop     chan struct{}
+	stopOnce sync.Once
+
+	// reapEvery records the effective reap cadence (0 = on-access only).
+	reapEvery time.Duration
 }
 
 // NewSporePeerStore opens the local hold and, if Listen is set, starts
-// serving the spore-peer JSON subset on it.
+// serving the spore-peer JSON subset on it. When cfg.ReapEvery > 0 it also
+// starts the periodic reap ticker.
 func NewSporePeerStore(cfg SporePeerConfig) (*SporePeerStore, error) {
 	if cfg.Dir == "" {
 		return nil, errors.New("peerstore: SporePeerConfig.Dir is required (the sender's node must hold the bodies it serves)")
@@ -93,13 +112,39 @@ func NewSporePeerStore(cfg SporePeerConfig) (*SporePeerStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("peerstore: open hold: %w", err)
 	}
-	s := &SporePeerStore{Addr: cfg.Addr, hold: hold, listen: cfg.Listen}
+	if cfg.ReapEvery < 0 {
+		cfg.ReapEvery = 0
+	}
+	s := &SporePeerStore{Addr: cfg.Addr, hold: hold, listen: cfg.Listen, reapEvery: cfg.ReapEvery, stop: make(chan struct{})}
 	if cfg.Listen != "" {
 		if err := s.serve(); err != nil {
 			return nil, err
 		}
 	}
+	if cfg.ReapEvery > 0 {
+		s.wg.Add(1)
+		go s.reapLoop(cfg.ReapEvery)
+	}
 	return s, nil
+}
+
+// reapLoop composts expired bodies on a fixed cadence. Best-effort by
+// design: a reap error (transient fs trouble) is never worth killing the
+// node over, and the next tick retries. Safe alongside Get/Put — DiskStore
+// reap is glob-read-remove over the .exp files, and expiry enforcement on
+// access is independent of whether the bytes are still on disk.
+func (s *SporePeerStore) reapLoop(every time.Duration) {
+	defer s.wg.Done()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			_ = s.hold.Reap(time.Now())
+		case <-s.stop:
+			return
+		}
+	}
 }
 
 // LocalAddr returns the serve listener's resolved address ("127.0.0.1:8099"
@@ -114,8 +159,9 @@ func (s *SporePeerStore) LocalAddr() string {
 	return s.ln.Addr().String()
 }
 
-// Close stops the serve listener, if any, and waits for in-flight
-// connections to finish. Safe to call more than once.
+// Close stops the serve listener and the reap ticker, if any, and waits
+// for in-flight connections and loops to finish. Safe to call more than
+// once.
 func (s *SporePeerStore) Close() error {
 	s.mu.Lock()
 	s.closed = true
@@ -125,6 +171,7 @@ func (s *SporePeerStore) Close() error {
 	if ln != nil {
 		_ = ln.Close()
 	}
+	s.stopOnce.Do(func() { close(s.stop) })
 	s.wg.Wait()
 	return nil
 }
