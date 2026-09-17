@@ -296,3 +296,8 @@ also accepts `workflow_dispatch`, and the publish gates key on the trigger
 event (`push`) with the `v0.0.0*` clause retained as a second belt, so a
 dispatched dry-run creates no ref, has no publish path at all, and stamps
 its binaries `dry-run-<ref>` — commit `eaeed012223a828bd473a217984d9d54adb919d6`.
+Extended: dry-runs now also exercise the consumer verification itself —
+`verify-provenance` runs offline against the run's own artifacts (the signed
+provenance is uploaded as an artifact even when detached), with
+`--source-uri` still enforced and tag binding only on real releases — commit
+`42f265de9d3952481c794a2b6c7c428c41b2c608`.
