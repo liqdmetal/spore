@@ -160,9 +160,11 @@ contract + the fabric index persisted temp+rename, exactly
 | **F3** — **shipped** | N-relay redundancy + drain-union dedupe by CID, per-handle quotas + jitter, durable fabric index, `AUDIT-RELAYFABRIC.md` with the same hash-pinned remediation treatment. Landed: the audit (scope-vs-commits table; one HIGH fixed — immortal envelopes, spore-peer `78e69a4` `no-verify-hash`; two MEDIUMs fixed), the **drain-union** (spore `3ec84c0`: one consumed-CID set across relays and restarts, marked on ingest success only — M-relay redundancy costs ONE body fetch), the **drain jitter** (spore `444122f`: per-pass ±N% cadence, `-fabric-jitter 20` default, closing R-N2's timing-signature fidelity gap), and the **operator knobs** (spore-peer `7fcda6e` `no-verify-hash`: `--fabric-per-handle/--fabric-max-lease/--fabric-fput-rate/--fabric-max-regs/--fabric-horizon` as serve flags, effective posture echoed on the `listening on` line, documented in PEER_SETUP.md's knob table) | doc-refs CI over the new audit (live in `docs/refs.yml`) |
 | **F4** — **designed; not built** | transport adapters (Iroh/Waku sidecars) behind `FabricTransport`; cover traffic; multi-hop onion publish; CBOR method variants | designed in [`RELAY_FABRIC_F4.md`](RELAY_FABRIC_F4.md): the seam, Poisson cover traffic, the `fput2` onion envelope, the quantified timing analysis (jitter = hygiene, cover/onion = structure, volume is the floor), and the F4a–F4d slice plan. Build order is the addendum's — vectors first, audit on landing |
 
-F1+F2 make roadmap #8 honest to close the way the serverless row closed:
-when the fabric carries a real pointer from a real send to a real drain in CI,
-the row moves to Shipped — not before.
+Roadmap #8 closed the way the serverless row did: the fabric now carries a
+real pointer from a real send to a real drain in the gates (F1 verbs + F2
+cross-binary pipeline + F3 redundancy hardening, adversarially reviewed), so
+the row reads shipped — the closing condition held, not the other way round.
+F4 is designed, gated by the same discipline when built.
 
 ## F1 adversarial review — findings and dispositions
 

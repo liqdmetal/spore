@@ -139,15 +139,17 @@ continuity strict decode with size caps).
 | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
 | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
 | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
-| 8 | **Relay fabric interconnection** | Relay nodes forwarding encrypted pointer/body across a substrate mesh. The body half is shipped (spore-peer); the pointer-forwarding half has F1 (relay verbs) and F2 (Go client, `spore fabric subscribe` drain into E2 ingestion, `-route-fabric` on send) **shipped** — see [`docs/RELAY_FABRIC.md`](docs/RELAY_FABRIC.md): `freg`/`fput`/`fpop` on the spore-peer socket, epoch-salted fabric handles (rotation rides prekey-batch epochs, zero coordination via dual-publish), registration bound to contact-seed possession, staged F1–F4 slices gated by shared vectors and cross-binary interop. |
+| 8 | **Relay fabric interconnection** — **shipped** | Relay nodes forwarding encrypted pointers across a mesh; bodies never touch the fabric (spore-peer carries them). F1 relay verbs, F2 Go client + `spore fabric subscribe` drain into E2 ingestion + `-route-fabric` on send, F3 drain-union dedupe + jitter + operator knobs — all **shipped** and adversarially reviewed ([`AUDIT-RELAYFABRIC.md`](AUDIT-RELAYFABRIC.md)); a real E2 send's pointer rides the fabric from real send to real drain in the gates. See [`docs/RELAY_FABRIC.md`](docs/RELAY_FABRIC.md): `freg`/`fput`/`fpop` on the spore-peer socket, epoch-salted fabric handles (rotation rides prekey-batch epochs, zero coordination via dual-publish), registration bound to contact-seed possession. F4 (transport adapters, cover traffic, onion publish) is designed in [`docs/RELAY_FABRIC_F4.md`](docs/RELAY_FABRIC_F4.md), not built. |
 | 9 | **More chains** (Zcash / ARRR / Decred / Verge) | Each a `chain.Chain` backend reusing the envelope/relay pattern. |
 | 10 | **Cross-chain identity proof** (DERO↔EVM) | Research crypto — the hard piece. Gates true interchain messaging. |
 
 ## Honest notes
 - **Serverless bodies shipped** (see the spore-peer section above) — the last
-  always-on-server dependency for body delivery is gone. The remaining real
-  product leaps are in-chat settlement (#1) and deep search (#2); #3–#10 are
-  integrations with real-node dependencies or research, not "tonight" work.
+  always-on-server dependency for body delivery is gone, and the pointer rail
+  went serverless too (#8 relay fabric shipped). The remaining real
+  product leaps are in-chat settlement (#1) and deep search (#2); #3–#7, #9,
+  #10 are integrations with real-node dependencies or research, not "tonight"
+  work.
 - Where a chain has no native encrypted rail, m³ supplies secrecy — the
   tradeoff is metadata (a tx/event/inbox record exists) stays visible at that
   layer, same as DERO whisper's honest limit.
