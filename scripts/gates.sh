@@ -209,8 +209,14 @@ elif [ -n "$PEER_DIR" ] && [ -d "$PEER_DIR" ]; then
   run_gate 'cargo clippy -D warnings' cargo clippy --locked --all-targets -- -D warnings
   run_gate 'cargo test' cargo test --locked
 
+  # Real-binary fabric smoke: tests/fabric_smoke.rs drives the ACTUAL
+  # `spore-peer serve -fabric` binary over a live socket (freg/fput/fpop +
+  # hard-kill restart). The Rust unit tests call handle_client in-process,
+  # so a broken main() flag path or serve loop passes them all — this smoke
+  # is what fails pre-push instead of shipping.
   if [ -x target/debug/spore-peer ]; then
     PEER_BIN="$PEER_DIR/target/debug/spore-peer"
+    run_gate 'fabric serve smoke' cargo test --locked --test fabric_smoke
   fi
 else
   echo
