@@ -199,22 +199,52 @@ compost-on-read at fpop.
 
 **Verbs (frame payload = JSON request; response = §5 status-prefixed):**
 
-    freg {handle, token, nonce?, lease}  → 0x00 {"token":…,"expires":…}
-        Register/refresh handle against the possession token. Lease capped
-        at min(requested, 7d). Malformed handle → 400.
+    freg {handle, token, prev_token?, nonce?, lease}  → 0x00 {"token":…,"expires":…}
+        Register/refresh a handle. Lease capped at min(requested, max-lease;
+        default 7d). Adversarial gates (F1 review):
+        - Chained refresh: overwriting a LIVE registration requires
+          prev_token == current token (403 otherwise). The handle is
+          public; possession is the only proof — without this, anyone who
+          learns the handle could re-register it and drain the victim's
+          queue. An EXPIRED registration is fair game again (it is a fresh
+          squatter target, by design).
+        - Budget: max live registrations (default 50,000). Full budget →
+          503; expired slots are swept by the next freg. New registrations
+          never evict others' — freg is unauthenticated, so the cap, not
+          eviction, is the DoS answer.
+        - Token shape: 16..=128 bytes (400 otherwise). The floor closes an
+          auth bypass — fpop defaults a missing token to "", so an
+          empty/1-char token would make the queue drainable by anyone; the
+          ceiling bounds registry memory per entry.
+        - Handles are normalized to lowercase hex: case is not identity.
     fput {handle, pointer_hex, deadline} → 0x00 {"queued":true}
         Checks in order: handle registered (404, lease expired 404), per-IP
         rate (429), pointer exactly 74 bytes with v1 header (400), nonzero
         deadline (400), deadline in future (410). Dedupe on (handle,
-        pointer): re-publishing refreshes the deadline, never duplicates.
-        Over the per-handle cap (default 32): evict oldest — compost, don't
-        hoard.
+        pointer): re-publishing refreshes the deadline in place, never
+        duplicates; if the refreshed envelope bytes differ (received_at
+        moved), the superseded <cid>.fenv composts immediately — otherwise
+        (byte-identical) the file IS the queue entry's only copy and is
+        left alone. Over the per-handle cap (default 32): evict oldest —
+        compost, don't hoard.
     fpop {handle, token, max}            → 0x00 {"pointers":["<74B hex>"…]}
         Drain oldest-first, max capped at 64, deleting on read. Wrong/
-        missing token → 403 (constant-time compare); unknown handle → 404.
-        Returned pointers feed E2 ingestion unchanged, where FetchFrame
-        re-checks RouteKey(sid) == p.Route — the ratchet is the filter
-        (design law 4); relays never validate pointer semantics.
+        missing token → 403 (constant-time compare); unknown handle → 404;
+        shares fput's per-IP rate window (both are unauthenticated parser
+        paths; neither is cheaper to flood). Entries whose burn deadline
+        passed while queued compost instead of delivering.
+
+**Reap story (no ticker, on purpose in F1):** past-deadline envelopes
+compost at the next fpop drain of their handle or at the next open()
+rebuild after a restart; fput also composts already-burned entries in the
+handle's queue it is touching. Worst case on a crash-hard, never-drained
+handle: max_per_handle expired envelopes on disk, all bounded by the cap,
+all gone at the next touch of that handle.
+
+**Knobs:** `-fabric`, `--fabric-per-handle N` (queue cap, default 32),
+`--fabric-fput-rate N` (per-IP/s, default 60), `--fabric-max-regs N`
+(registry budget, default 50,000), `--fabric-max-lease SEC` (lease cap,
+default 7d).
 
 Conformance: the `fabric_v1` vector section pins every derivation and the
 envelope codec byte-for-byte across Go (internal/fabric) and Rust

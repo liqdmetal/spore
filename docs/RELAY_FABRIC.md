@@ -154,7 +154,7 @@ contract + the fabric index persisted temp+rename, exactly
 
 | Slice | Delivers | Gate |
 |---|---|---|
-| **F1** — **shipped** | envelope + store/reap reuse; `freg`/`fput`/`fpop` in spore-peer behind `-fabric`; hostile-frame tests (wrong-length pointers, deadline abuse, handle/token mismatches, cap eviction) | **done**: `fabric_v1` vectors in `interop-vectors.json` ([`WIRE_SPEC.md`](WIRE_SPEC.md) §8) generated first, then consumed by Go (`internal/fabric` + `internal/secure` conformance) and Rust (spore-peer `fabric` mod) — byte-identical handles from `(seed, epoch, sid)` proven, negatives refused |
+| **F1** — **shipped, adversarially reviewed** | envelope + store/reap reuse; `freg`/`fput`/`fpop` in spore-peer behind `-fabric`; hostile-frame tests (wrong-length pointers, deadline abuse, handle/token mismatches, cap eviction) | **done**: `fabric_v1` vectors in `interop-vectors.json` ([`WIRE_SPEC.md`](WIRE_SPEC.md) §8) generated first, then consumed by Go (`internal/fabric` + `internal/secure` conformance) and Rust (spore-peer `fabric` mod) — byte-identical handles from `(seed, epoch, sid)` proven, negatives refused. Post-ship adversarial review (leases, quota abuse, token handling, dedupe) landed the hardening below |
 | **F2** | Go side: `internal/fabric` client, `spore fabric subscribe` drain loop → E2 ingestion, `-route-fabric` on send; **both-direction cross-binary interop tests** mirroring `sporepeer_interop_test.go` (Rust `fput` → Go drain, Go `fput` → Rust hold) | the contract workflow exercises them on every push, as the body interop does now |
 | **F3** | N-relay redundancy + drain-union dedupe by CID, per-handle quotas + jitter, durable fabric index, `AUDIT-RELAYFABRIC.md` with the same hash-pinned remediation treatment | doc-refs CI over the new audit |
 | **F4** | transport adapters (Iroh/Waku) behind `FabricTransport`; cover traffic; multi-hop onion publish; CBOR method variants | separate design addendum per adapter, same audit discipline |
@@ -162,6 +162,25 @@ contract + the fabric index persisted temp+rename, exactly
 F1+F2 make roadmap #8 honest to close the way the serverless row closed:
 when the fabric carries a real pointer from a real send to a real drain in CI,
 the row moves to Shipped — not before.
+
+## F1 adversarial review — findings and dispositions
+
+Scope: lease expiry races, queue-quota abuse, token handling, and the fput
+dedupe path on the shipped relay surface. Every HIGH is fixed; the rest are
+disposed below.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | **HIGH — unauthenticated `freg` memory DoS.** No cap on live registrations; an attacker grows the registry unboundedly. | **Fixed.** `max_regs` budget (default 50,000): full budget → 503; expired slots swept by the next `freg`; new registrations never evict others'. |
+| 2 | **HIGH — handle takeover via re-`freg`.** The handle is public; a third party could re-register a live handle under their own token and drain the victim's queue. | **Fixed.** Chained refresh: overwriting a LIVE registration requires `prev_token` matching the current token (403 otherwise), constant-time. Expired registrations are intentionally re-registrable — a squatter target like a fresh handle. |
+| 3 | **HIGH — fpop token auth bypass via empty tokens.** `fpop` defaults a missing token to `""`; a registration with an empty/short token made the queue drainable by anyone. | **Fixed.** Token shape rule 16..=128 bytes at `freg` (400 otherwise); ceiling also bounds registry memory per entry. |
+| 4 | **HIGH — dedupe refresh corrupted the hold.** The envelope bytes include `received_at`, so a dedupe refresh usually re-persists under a NEW cid; the old code dropped the OLD file and re-pointed the queue entry — correct — but on a byte-identical refresh (same `received_at`) old and new cid are the SAME file, which the drop deleted: the queue entry was left fileless and the envelope silently vanished at the next restart. | **Fixed.** Drop the superseded file only when the cid actually changed; the refresh test now pins exactly one `.fenv` on disk and post-restart integrity. Found by a test, not by reading — the vectors-first culture again. |
+| 5 | **MED — burned envelopes were never reaped.** Envelopes whose deadline passed while nobody drained lingered on disk forever. | **Fixed (bounded reap, no ticker).** Compost at `fput`-touch, at `fpop` drain (expired entries are deleted, not delivered), and at `open()` rebuild. Worst case: `max_per_handle` expired envelopes per never-drained handle, all gone at its next touch. Declared honestly in WIRE_SPEC §8; a periodic ticker stays available for long-lived nodes (the body store's `ReapEvery` pattern). |
+| 6 | **LOW — hex-case identity split.** `AB…` and `ab…` could register/publish into two different slots. | **Fixed.** Handles normalized to lowercase hex at every verb; case-is-not-identity is tested. |
+| 7 | **LOW — fpop flood asymmetry.** `fpop` was rate-unlimited while `fput` was not; both are unauthenticated parser paths. | **Fixed.** `fpop` shares `fput`'s per-IP window. |
+| 8 | **Accepted risk — lease-vs-takeover race window.** Between a lease expiring and the owner's renewal, a squatter can take the handle. Bounded by the expiry the owner chose; the same window exists for a fresh handle and the seed derives the next epoch's handle anyway — squatting one epoch's slot cannot read anything (fpop needs the token) and costs the attacker nothing but the slot. | **Accepted.** Revisit only if F3 telemetry shows slot-squatting griefing. |
+| 9 | **Accepted risk — no cross-restart registry persistence.** Registrations are in-memory; a relay restart clears all leases. Owners re-register (the client does this at next drain in F2); pointers already queued are NOT lost — envelopes persist and re-index. | **Accepted.** Durability belongs to the queue, not the lease; a persisted registry would need its own churn/expiry design for no recipient-visible gain. |
+| 10 | **Accepted risk — per-IP rate window is the only flood bound for `freg`.** Budget caps memory; the shared per-IP window caps request rate. A distributed `freg` flood can fill the 50k budget with junk leases (each ≤7d) and cause 503s for real users. | **Accepted for F1.** Candidate F3 mitigation: proof-of-possession already exists — require the `freg` HMAC token (seed-bound) as the default path and keep open registration as a fallback with a lower budget. Deferred until the F2 client exists to say what the default path needs. |
 
 ## Open questions (carried, not hidden)
 
