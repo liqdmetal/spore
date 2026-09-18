@@ -46,11 +46,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Dispatches gate the pushed sha; workflow_call and manual runs default
-      # to the audited pin (0e03fd9: hostile-peer hardening — hash-classified
-      # fetch responses, skip-don't-panic hostile sync entries, hex-aware
-      # frame cap). Full 40-char sha on the liqdmetal/spore-peer default
-      # branch.
-      SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '0e03fd9d0e56dca948b6a93b219cae2d296ea21e' }}
+      # to the audited pin (2a701c9: fabric F1 — freg/fput/fpop relay verbs,
+      # one-shot fabric client subcommand, --pidfile/--announce-addr serve
+      # ops; interop tests exercise the fabric CLI and need it). Full 40-char
+      # sha on the liqdmetal/spore-peer default branch.
+      SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '2a701c95a700220c1f703c9c66a712f92b27118f' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v7
