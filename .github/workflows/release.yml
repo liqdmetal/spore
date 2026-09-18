@@ -18,6 +18,20 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The cross-binary wire contract as a PUBLISH GATE: the real spore-peer
+  # binary (built at the audited pin in spore-peer-contract.yml) and the real
+  # `spore fabric subscribe` binary gate the tagged commit — the §5 wire
+  # contract, the fabric CLI roundtrip, and the F2 fabric-drain interop
+  # (Go publish → Rust relay → subscribe drain → E2 ingest) all run here
+  # before anything is released. `release` needs this job, so a red interop
+  # skips publishing (the SLSA signing chain still runs — same policy as
+  # workflow_dispatch dry-runs). Tag pushes never fire ci.yml (by design,
+  # see its `on.push.branches`), so without this call the cross-binary tests
+  # would not exist anywhere on the release path.
+  wire-contract:
+    name: spore-peer Rust + wire contract (release gate)
+    uses: ./.github/workflows/spore-peer-contract.yml
+
   build:
     name: Build + Release (cross-platform)
     runs-on: ubuntu-latest
@@ -58,7 +72,11 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    # The wire contract gates the publish: a red interop (or red Rust build)
+    # skips the Release step entirely. build is still needed on its own so a
+    # dry-run's artifact chain (hash → detached provenance signing) remains
+    # complete when the gate skips nothing.
+    needs: [build, wire-contract]
     # Publishes only on real tag pushes. workflow_dispatch is a dry-run: the
     # gate keys on the trigger event, so a dispatched run cannot publish.
     # Build, subjects hashing, and detached keyless signing still run.
@@ -117,7 +135,11 @@ jobs:
 
   provenance:
     name: Provenance (SLSA)
-    needs: hash
+    # Gated on the wire contract too: a red interop on a tag skips this job
+    # (alongside `release`), so the generator never tries to upload signed
+    # assets for a release the gate refused. Needs failure skips dependents
+    # by default — no expression needed here.
+    needs: [hash, wire-contract]
     # NOTE: no job-level `permissions:` here. Empirically (14-probe bisect,
     # v0.0.0-ci exercise), GitHub startup-fails ANY workflow that sets
     # permissions on a `uses:` job — even though some docs suggest it is
@@ -154,12 +176,14 @@ jobs:
   # above applies only to `uses:` jobs); this job needs no write access.
   verify-provenance:
     name: Verify provenance (slsa-verifier)
-    needs: [release, provenance]
+    needs: [release, provenance, wire-contract]
     # Run on real releases (consumer path) and on dry-runs, where `release`
     # is skipped (offline path). A FAILED `release` still skips this job:
     # its own redness is the signal and the consumer download would just
-    # double-fail confusingly.
-    if: ${{ !cancelled() && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
+    # double-fail confusingly. The wire-contract clause covers a gate-failed
+    # tag: provenance skipped with the gate, so there is no provenance file
+    # and the offline path must not run — the red gate IS the signal.
+    if: ${{ !cancelled() && needs.wire-contract.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

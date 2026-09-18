@@ -3,14 +3,17 @@ name: spore-peer wire contract
 run-name: spore-peer wire contract${{ github.event_name == 'repository_dispatch' && format(' for spore-peer@{0}', github.event.client_payload.sha) || '' }}
 
 # The Rust half of the wire contract (liqdmetal/spore-peer is the reference
-# transport spore's peerstore speaks — WIRE_SPEC §5) gates from BOTH repos:
+# transport spore's peerstore speaks — WIRE_SPEC §5) gates from BOTH repos
+# and both pipelines:
 #
-#   - spore pushes: ci.yml calls this file as a reusable workflow, and
+#   - spore pushes: ci.yml calls this file as a reusable workflow,
+#   - tagged releases: release.yml calls it too — the interop gates the
+#     publish path (a red contract skips `release`; nothing publishes), and
 #   - spore-peer pushes: spore-peer's CI fires a repository_dispatch here
 #     (event type spore-peer-push) carrying the pushed sha in client_payload,
 #     so a Rust change is gated against the Go side the moment it lands.
 #
-# The job body lives only here so the two call sites cannot drift. Bump the
+# The job body lives only here so the three call sites cannot drift. Bump the
 # audited pin below deliberately, when the contract changes intentionally.
 
 on:
@@ -46,10 +49,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Dispatches gate the pushed sha; workflow_call and manual runs default
-      # to the audited pin (2a701c9: fabric F1 — freg/fput/fpop relay verbs,
-      # one-shot fabric client subcommand, --pidfile/--announce-addr serve
-      # ops; interop tests exercise the fabric CLI and need it). Full 40-char
-      # sha on the liqdmetal/spore-peer default branch.
+      # to the audited pin (2a701c9: fabric F1+F2 — freg/fput/fpop relay
+      # verbs behind `-fabric`, the spore-peer fabric client subcommand,
+      # --pidfile/--announce-addr serve ops; every interop test here — the
+      # §5 wire contract, the fabric CLI roundtrip, and the F2
+      # `spore fabric subscribe` cross-binary drain — needs the -fabric
+      # serve from this pin). Full 40-char sha on the liqdmetal/spore-peer
+      # default branch.
       SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '2a701c95a700220c1f703c9c66a712f92b27118f' }}
     steps:
       - uses: actions/checkout@v6
@@ -78,7 +84,22 @@ jobs:
       - name: cargo test
         working-directory: ../spore-peer
         run: cargo test --locked
-      - name: Go wire-contract tests against the real spore-peer binary
+      - name: Build the Go spore binary (fabric drain client)
+        # The F2 cross-binary test drives the REAL `spore fabric subscribe`
+        # binary against the real relay — the same binary shape a release
+        # ships, built from the exact ref this run is gating (main, a tag,
+        # or a dispatch ref).
+        run: go build -o "$RUNNER_TEMP/spore" ./cmd/spore
+
+      - name: Go wire-contract + fabric cross-binary interop
+        # Pre-push parity (scripts/gates.sh check_race): the same RACE_PKGS
+        # package set under -race, with the real Rust binary AND the real
+        # Go binary in hand. TestFabricSubscribeCrossBinary (cmd/spore) runs
+        # the full F2 loop — real Rust relay, Go publish, real
+        # `spore fabric subscribe` drain, E2 decrypt, maildb. The interop
+        # tests self-skip when SPORE_PEER_BIN is absent, so this job is the
+        # only place they execute rather than skip.
         env:
           SPORE_PEER_BIN: ${{ github.workspace }}/../spore-peer/target/release/spore-peer
-        run: go test ./internal/peerstore/ -count=1 -v
+          SPORE_BIN: ${{ runner.temp }}/spore
+        run: go test -race -count=1 ./internal/store ./internal/peerstore ./cmd/spore
