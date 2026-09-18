@@ -155,7 +155,11 @@ check_goimports() {
   fi
 }
 
-RACE_PKGS="./internal/store ./internal/peerstore"
+# cmd/spore is included for the F2 cross-binary fabric test
+# (TestFabricSubscribeCrossBinary): real Rust relay + real `spore fabric
+# subscribe` binary; it self-skips when SPORE_PEER_BIN is absent, so the
+# plain -race pass on a machine without the spore-peer checkout stays green.
+RACE_PKGS="./internal/store ./internal/peerstore ./cmd/spore"
 check_race() {
   if [ -n "$PEER_BIN" ]; then
     SPORE_PEER_BIN="$PEER_BIN" go test -race -count=1 $RACE_PKGS

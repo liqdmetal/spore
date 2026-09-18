@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,11 +21,8 @@ import (
 	"github.com/liqdmetal/spore/internal/backend"
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/dero"
-	"github.com/liqdmetal/spore/internal/maildb"
-	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
-	"github.com/liqdmetal/spore/internal/receipts"
 	"github.com/liqdmetal/spore/internal/sap"
 	"github.com/liqdmetal/spore/internal/store"
 )
@@ -372,6 +368,13 @@ func e2Common(fs *flag.FlagSet) {
 	// also supplies that contact's pinned sig) or a DeroNS name via -daemon.
 	fs.String("maildb", "", "local mail store (maildb JSON): supplies -to nickname -> address + pinned-sig, and indexes received messages")
 	fs.String("daemon", "", "DERO daemon RPC for DeroNS name resolution of -to (address only; pinned sig still needed out-of-band)")
+	// Relay-fabric route (F2): ALSO queue the pointer at the recipient's
+	// fabric handle(s) on the contact card's relays, in addition to the
+	// chain post. The chain remains the carrier of record; the fabric is
+	// metadata relief, never a replacement. Requires the contact card to
+	// carry a fabric seed + relay list (saved by `msg mail add -invite`).
+	fs.Bool("route-fabric", false, "also queue the pointer at the recipient's relay-fabric handles (contact card must carry a fabric seed + relays)")
+	fs.Uint("fabric-epoch", 1, "current fabric epoch n for -route-fabric (dual-publishes to n and n-1; must match the recipient's epoch)")
 }
 
 func msgPrekeygen(args []string) {
@@ -600,6 +603,13 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err := requireApproval(fs, flagValueOr(fs, "chain", ""), to, amount, raw); err != nil {
 		return err
 	}
+	// Relay-fabric route (F2): resolve the contact's seed + relays EARLY, so
+	// a misconfigured -route-fabric fails BEFORE the chain post or the
+	// HTLC fund (a half-configured route must never half-send).
+	fabricRoute, err := fabricSendConfig(fs, to)
+	if err != nil {
+		return err
+	}
 	if devState, derr := ratchetwire.LoadOrCreateDevice(stateDir); derr == nil {
 		_ = ratchetwire.RecordSend(stateDir, sessID, devState)
 	}
@@ -650,6 +660,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 				fmt.Printf(" ESCROWED %s %s", formatAmount(asset, atomic), strings.ToUpper(asset))
 			}
 			fmt.Println()
+			fabricPublishPointer(context.Background(), fabricRoute, sessID, raw)
 			return nil
 		}
 		if !carrierCarriesValue(flagValueOr(fs, "chain", "")) {
@@ -671,6 +682,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		}
 	}
 	fmt.Println()
+	fabricPublishPointer(context.Background(), fabricRoute, sessID, raw)
 	return nil
 }
 
@@ -764,85 +776,20 @@ func msgRecvE2(args []string) {
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
 	}
-	// Rebind to the historical local names so the body below is unchanged.
-	identity, spk, opk, opkPool := o.identity, o.spk, o.opk, o.opkPool
+	// Rebind the polling knobs (still per-command); receiver setup itself
+	// moved into openE2Receiver (e2ingest.go) — shared with `spore fabric
+	// subscribe` (slice F2) so both transports ingest through ONE pipeline.
 	interval, idleInterval, idleAfter, min := o.interval, o.idleInterval, o.idleAfter, o.min
-	receiptsFile, autoAck, ackTTL, outDir, ntfy := o.receiptsFile, o.autoAck, o.ackTTL, o.outDir, o.ntfy
-	notifyEmail, notifySMS, notifySMTPHost, notifySMTPPort, notifySMTPFrom, notifySMTPUser := o.notifyEmail, o.notifySMS, o.notifySMTPHost, o.notifySMTPPort, o.notifySMTPFrom, o.notifySMTPUser
-	notifyTwilioSID, notifyTwilioFrom := o.notifyTwilioSID, o.notifyTwilioFrom
-	// Validate and create the attachment output directory before starting the
-	// chain watcher. Receiving FrameInit consumes a one-time prekey and writes
-	// ratchet state; a bad output path must not consume crypto state and then
-	// force the operator to replay a frame that can no longer be opened.
-	if *outDir != "" {
-		if err := os.MkdirAll(*outDir, 0700); err != nil {
-			check(fmt.Errorf("recv-e2: create -out-dir: %w", err))
-		}
-	}
-	maildbPath := fs.Lookup("maildb").Value.String()
-	webhookURL := *ntfy
-	webhookToken := ""
-	if webhookURL != "" {
-		// The old -ntfy form is retained as a webhook-compatible alias. Its
-		// optional bearer secret comes only from the environment.
-		webhookToken = os.Getenv("SPORE_NOTIFY_WEBHOOK_TOKEN")
-	}
-	dispatcher, err := notify.NewFromEnv(notify.Options{
-		WebhookURL: webhookURL, WebhookToken: webhookToken,
-		EmailTo: *notifyEmail, SMSTo: *notifySMS,
-		SMTPHost: *notifySMTPHost, SMTPPort: *notifySMTPPort,
-		SMTPFrom: *notifySMTPFrom, SMTPUsername: *notifySMTPUser,
-		TwilioSID: *notifyTwilioSID, TwilioFrom: *notifyTwilioFrom,
-	})
+
+	// Validate and create the attachment output directory before any prekey
+	// state can be consumed (a bad path must not burn a one-time prekey).
+	ing, cleanup, err := openE2Receiver(fs, *o.outDir, true)
 	check(err)
-	if *identity == "" || *spk == "" {
-		check(errors.New("recv-e2 requires -identity and -spk"))
-	}
-	st, err := newE2BodyStore(e2StoreOptionsFromFlags(fs))
-	check(err)
-	ik, err := readHexFile(*identity, 32)
-	check(err)
-	sk, err := readHexFile(*spk, 32)
-	check(err)
-	var op *[32]byte
-	var pool *ratchetwire.OPKPool
-	if *opkPool != "" {
-		pool, err = ratchetwire.NewPersistentOPKPool(*opkPool)
-		check(err)
-	}
-	if *opk != "" {
-		x, e := readHexFile(*opk, 32)
-		check(e)
-		op = &[32]byte{}
-		copy(op[:], x)
-	}
-	c, err := e2Carrier(fs)
-	check(err)
-	stateDir := fs.Lookup("state-dir").Value.String()
-	stateKeyFile := fs.Lookup("state-key").Value.String()
-	if stateDir == "" || stateKeyFile == "" {
-		check(errors.New("E2 requires -state-dir and -state-key"))
-	}
-	stateKey, err := readHexFile(stateKeyFile, 32)
-	check(err)
-	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
-	check(err)
-	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
-	check(err)
-	// Secure wire (audit H1/H2): the receiver-side envelope-v2 unwrap was
-	// removed — ratcheted frames are authenticated by the X3DH handshake +
-	// double ratchet (RATCHET.md §6). Endpoints are now built symmetrically on
-	// send and recv, so the documented default flags deliver end to end.
-	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
-	check(err)
-	// Open the mail store ONCE, not per message (re-reading the whole JSON
-	// file for every delivery is wasteful, and a per-message Open failure
-	// would be silently swallowed). Fail loudly up front instead.
-	var mdb *maildb.MailDB
-	if maildbPath != "" {
-		mdb, err = maildb.Open(maildbPath)
-		check(err)
-	}
+	defer cleanup()
+	ep := ing.ep
+	c := ing.carrier
+	st := ing.st
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -884,104 +831,6 @@ func msgRecvE2(args []string) {
 		}
 	}
 
-	// handleFrame processes one successfully fetched frame. The live path and
-	// the retry path both call it, so decryption happens in exactly ONE place
-	// — two decrypt paths would be a security surface, not just duplication.
-	handleFrame := func(inc chain.Incoming, frame ratchetwire.Frame, p ratchetwire.Pointer) {
-		var plain []byte
-		var decErr error
-		switch frame.Kind {
-		case ratchetwire.FrameInit:
-			body, bodyErr := ratchetwire.GetBody(st, p, time.Now())
-			if bodyErr != nil {
-				fmt.Fprintln(os.Stderr, "e2 frame:", bodyErr)
-				return
-			}
-			if pool != nil {
-				plain, decErr = ep.ReceiveFirstFromOPKPool(ik, sk, pool, frame, body)
-			} else {
-				plain, decErr = ep.ReceiveFirst(ik, sk, op, frame, body)
-			}
-		case ratchetwire.FrameMessage:
-			// Continuations must use the installed ratchet session. Never
-			// reinterpret them as a fresh handshake (downgrade resistance).
-			plain, decErr = ep.ReceiveNext(p, time.Now())
-		default:
-			decErr = ratchetwire.ErrLegacyDowngrade
-		}
-		if decErr != nil {
-			fmt.Fprintln(os.Stderr, "e2 decrypt:", decErr)
-			return
-		}
-		// Receipts are ratcheted messages like any other: detect the
-		// envelope and surface it as an ack line instead of a message.
-		receiptInReplyTo, receiptStatus, isReceipt := parseReceipt(plain)
-		if isReceipt {
-			fmt.Printf("ack %s: %s (for %s)\n", shortTx(inc.TxID), receiptStatus, shortTx(receiptInReplyTo))
-			return
-		}
-		// Money envelopes (invoice/payment) ride the session like
-		// receipts: surface them as money lines, not message bodies.
-		if kind, summary, isMoney := parseMoneyEnvelope(plain); isMoney {
-			_ = kind
-			fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
-			if rec, ok := parseMoneyRecord(plain); ok {
-				rec.Direction = "received"
-				rec.Peer = inc.Sender
-				rec.TxID = inc.TxID
-				if err := receipts.Append(*receiptsFile, rec); err != nil {
-					fmt.Fprintln(os.Stderr, "e2 receipts:", err)
-				}
-			}
-			return
-		}
-		// Attachments / keep-a-copy mode: write the decrypted body to a
-		// file named by txid instead of printing it.
-		if *outDir != "" {
-			if err := os.WriteFile(filepath.Join(*outDir, shortTx(inc.TxID)+".msg"), plain, 0600); err != nil {
-				fmt.Fprintln(os.Stderr, "e2 out-dir:", err)
-				return
-			}
-			fmt.Printf("msg %s: saved %s/%s.msg\n", shortTx(inc.TxID), *outDir, shortTx(inc.TxID))
-		} else {
-			fmt.Printf("msg %s: %s\n", shortTx(inc.TxID), plain)
-		}
-		// Pay-with-message: surface any native value that rode the
-		// pointer tx. Postage (1 atomic) is noise; anything above it
-		// is money and gets its own line.
-		if inc.Amount > 1 {
-			fmt.Printf("  ↳ received %d atomic units on tx %s\n", inc.Amount, shortTx(inc.TxID))
-		}
-		// Mail-store hook: record into threads + search index. Blocked
-		// senders were already dropped before decryption, so everything
-		// recorded here passed the allowlist.
-		if mdb != nil {
-			if rerr := mdb.RecordMessage(hex.EncodeToString(frame.SessionID[:]), inc.Sender, inc.TxID, time.Now(), plain); rerr != nil {
-				fmt.Fprintln(os.Stderr, "e2 maildb:", rerr)
-			}
-		}
-		// Notify only after local decryption and never include plaintext.
-		// Provider failures are diagnostics; they must not stop receiving.
-		if *ntfy != "" || *notifyEmail != "" || *notifySMS != "" {
-			if nerr := dispatcher.Send(notify.Event{TxID: inc.TxID, Subject: "Spore private message", Received: time.Now()}); nerr != nil {
-				fmt.Fprintln(os.Stderr, "e2 notify:", nerr)
-			}
-		}
-		if *autoAck && frame.SessionID != ([8]byte{}) {
-			// Reply "delivered" on the same session; the sender's recv
-			// side prints it as an ack line. Best-effort: a failed ack
-			// send or post is logged, never fatal.
-			_, raw, ackErr := sendReceipt(ep, frame.SessionID, inc.TxID, "delivered", *ackTTL)
-			if ackErr != nil {
-				fmt.Fprintln(os.Stderr, "e2 ack:", ackErr)
-				return
-			}
-			if _, postErr := c.PostPointer(ctx, inc.Sender, raw, 1); postErr != nil {
-				fmt.Fprintln(os.Stderr, "e2 ack post:", postErr)
-			}
-		}
-	}
-
 	// retryDue re-attempts bodies whose fetch failed earlier. Entries past
 	// their burn deadline are abandoned rather than retried forever: the store
 	// may have reaped the body and the ratchet key may be swept, so they are
@@ -1009,7 +858,7 @@ func msgRecvE2(args []string) {
 				continue
 			}
 			retryQ.Resolve(pf.Pointer.CID)
-			handleFrame(inc, frame, p)
+			ing.ingest(inc, frame, p, false)
 			reportGaps()
 		}
 	}
@@ -1028,8 +877,8 @@ func msgRecvE2(args []string) {
 			// frame never touches ratchet state and is never even parsed
 			// past the pointer. Chain senders are pseudonymous, so this
 			// filters by chain identity (what maildb knows), not by
-			// long-term key.
-			if mdb != nil && !mdb.Allowed(inc.Sender) {
+			// long-term key. (Shared with the fabric drain via ing.Allowed.)
+			if !ing.Allowed(inc.Sender) {
 				fmt.Fprintf(os.Stderr, "e2: dropped message from blocked sender %s\n", shortTx(inc.Sender))
 				continue
 			}
@@ -1046,7 +895,7 @@ func msgRecvE2(args []string) {
 				}
 				continue
 			}
-			handleFrame(inc, frame, p)
+			ing.ingest(inc, frame, p, false)
 			reportGaps()
 		case <-gapTick.C:
 			retryDue()
@@ -1078,6 +927,12 @@ func msgReplyE2(args []string) {
 	if *to == "" || *sessionHex == "" {
 		check(errors.New("reply-e2 requires -to and -session (plaintext via -msg-file or stdin)"))
 	}
+	// Relay-fabric route (F2), resolved early like send-e2: a half-configured
+	// route must fail before the session advances or the pointer posts.
+	resolvedTo, _, err := resolveTo(context.Background(), *to, flagValueOr(fs, "maildb", ""), flagValueOr(fs, "daemon", ""))
+	check(err)
+	fabricRoute, ferr := fabricSendConfig(fs, resolvedTo)
+	check(ferr)
 	rawID, err := hex.DecodeString(*sessionHex)
 	check(err)
 	if len(rawID) != 8 {
@@ -1119,9 +974,10 @@ func msgReplyE2(args []string) {
 	check(ratchetwire.RecordSend(stateDir, sessionID, devState))
 	c, err := e2Carrier(fs)
 	check(err)
-	r, err := c.PostPointer(context.Background(), *to, raw, 1)
+	r, err := c.PostPointer(context.Background(), resolvedTo, raw, 1)
 	check(err)
 	fmt.Printf("reply-e2 txid %s pointer %x\n", r.TxID, raw)
+	fabricPublishPointer(context.Background(), fabricRoute, sessionID, raw)
 }
 
 // msgSessions lists the durable ratchet sessions for the configured state

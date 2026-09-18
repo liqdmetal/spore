@@ -122,6 +122,8 @@ func main() {
 		prekeybatchcmd(os.Args[2:])
 	case "relay":
 		relaycmd(os.Args[2:])
+	case "fabric":
+		fabricCmd(os.Args[2:])
 	case "status":
 		statuscmd(os.Args[2:])
 	case "doctor":
@@ -157,6 +159,7 @@ func usage() {
   spore msg send -chain evm|xmr|solana ...                         (REFUSED — use msg send-e2 explicitly)
   spore msg recv -chain dero -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; bare form reads old native mail)
   spore serve -dir HOLD_DIR [-listen :ADDR] [-reap-every 10m]   (always-on spore-peer body store; sporepeer:// counterpart: your contact points -store sporepeer://<your-addr>:<port> at it)
+  spore fabric handle -seed HEX [-session HEX | -state-dir D] [-epoch N]   (derive fabric handles for -route-fabric)
   spore msg recv -chain evm|xmr|solana ...                              (legacy receive compatibility)
   spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
   spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
@@ -167,6 +170,9 @@ func usage() {
   spore msg reply-e2 -to ADDR -session HEX -state-dir D -state-key F [-msg-file F|-]   (continue a thread)
   spore msg forward-e2 -to ADDR -identity F -file F (-bundle F | -bundle-url URL) -pinned-sig HEX ...   (new session, same body)
   spore msg sessions [-store URL] -state-dir D -state-key F   (list thread/session ids)
+  spore fabric subscribe -identity F -spk F -store URL -state-dir D -state-key F
+             [-fabric-seed HEX|-fabric-seed-file F|-maildb F] [-fabric-relay HOST:PORT ...]
+             [-fabric-epoch N] [-once] [-fabric-interval 5s]   (drain relay-fabric pointers into E2 ingestion; pairs with -route-fabric on send)
   spore msg compose -out DIR [-msg-file F|-] ...   (offline: queue a send for later)
   spore msg flush -dir DIR   (drain the compose queue through the real send path)
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
