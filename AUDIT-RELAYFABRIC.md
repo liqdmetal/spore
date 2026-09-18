@@ -12,7 +12,7 @@ threat model, and the F1 adversarial-review dispositions) and
 > **FIX STATUS (2026-09-18): the F1-baseline HIGHs are already fixed in
 > spore-peer `fee4d8a` `no-verify-hash`; the new findings from this review (H-N1, M-N2/M-N3)
 > are fixed in spore-peer `78e69a4` `no-verify-hash`; R-N1 (drain-union dedupe) is fixed in
-> spore `3ec84c0`.** Regression tests:
+> spore `3ec84c0`; R-N2 (drain jitter) is fixed in spore `444122f`.** Regression tests:
 > `src/fabric.rs` `tests` mod (`fput_deadline_horizon_cap_refuses_immortal_envelope`,
 > `freg_sweep_is_time_gated`, `expired_registration_re_registrable_before_sweep`)
 > plus the pre-existing hostile-frame battery. The accepted risks at the end
@@ -148,13 +148,20 @@ fetch failed stays eligible for a second relay's copy.
 `TestSeenPersistAcrossRestart` (internal/fabric) and `TestDrainUnionDedupesAcrossRelays`,
 `TestDrainUnionKeepsFailedIngestEligible`, `TestDrainUnionSurvivesRestart` (cmd/spore).
 
-### R-N2 — tracked (F3 roadmap): drain cadence has no jitter
+### R-N2 — FIXED (spore `444122f`): drain cadence now jitters per pass
 
-The design promises sync-loop-style jitter for the subscribe loop; the pushed
-loop is a fixed `-every` interval. Until jitter lands, a relay operator can
-read drain regularity per handle — the timing row already declares this class
-of exposure unmitigated in v1, so this is a fidelity gap against the design,
-not a new vulnerability.
+The design promises sync-loop-style jitter for the subscribe loop; the loop
+was a fixed `-fabric-interval` ticker — a timing signature a relay operator
+can read per handle. The drain wait is now recomputed per pass as
+`interval ±N%` (`-fabric-jitter`, default 20 — the shape internal/relay's
+backoff uses, `fabric.JitteredInterval`), so drain starts decorrelate across
+processes and relays. Timer replaces Ticker (per-pass recomputation, and the
+explicit zero-interval panic is now a clean flag error).
+
+**Pinned by** `TestJitteredIntervalBounds` (bounded + seeded-reproducible),
+`TestJitteredIntervalDegenerateInputs` (never negative, no-op for
+percent<=0), and `TestJitteredIntervalDiffuses` (both halves of the range
+across seeds).
 
 ## Verified correct (no action)
 
@@ -215,4 +222,4 @@ not a new vulnerability.
 | M-N2 sweep amplifier | spore-peer `78e69a4` `no-verify-hash` — 1s-gated sweep | `freg_sweep_is_time_gated` |
 | M-N3 expired-equals-absent | spore-peer `78e69a4` `no-verify-hash` — explicit live-check | `expired_registration_re_registrable_before_sweep` |
 | R-N1 drain-union dedupe | spore `3ec84c0` — SeenCIDs consumed-set in the drain loop | `TestDrainUnion*` + `TestSeen*` |
-| R-N2 drain jitter | F3 slice work (tracked in RELAY_FABRIC staged-slices) | — |
+| R-N2 drain jitter | spore `444122f` — per-pass ±20% cadence jitter (`-fabric-jitter`) | `TestJitteredInterval*` |
