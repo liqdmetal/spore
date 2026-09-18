@@ -210,9 +210,22 @@ func (s *DiskStore) Reap(now time.Time) int {
 		if !ok || !now.After(d) {
 			continue
 		}
-		os.Remove(base + ".body")
-		os.Remove(base + ".expms")
-		os.Remove(expFile)
+		// The .exp marker is the commit point: remove the payload first and
+		// the marker last, and only count (and only drop the marker) when the
+		// payload is truly gone. A failed payload remove — Windows AV/indexer
+		// sharing violations are the observed case — must leave the marker in
+		// place so the next pass retries the whole hold; removing the marker
+		// anyway orphans the .body forever (no *.exp left to ever find it,
+		// seen on Windows CI 2026-09-18 as "expired body not composted").
+		if err := os.Remove(base + ".body"); err != nil && !os.IsNotExist(err) {
+			continue
+		}
+		if err := os.Remove(base + ".expms"); err != nil && !os.IsNotExist(err) {
+			continue
+		}
+		if err := os.Remove(expFile); err != nil && !os.IsNotExist(err) {
+			continue
+		}
 		n++
 	}
 	return n
