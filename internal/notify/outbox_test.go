@@ -47,19 +47,23 @@ func TestOutboxRetriesAndPersistsOnlyMetadata(t *testing.T) {
 	if calls.Load() < 2 {
 		t.Fatalf("outbox did not retry, calls=%d", calls.Load())
 	}
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(strings.TrimSpace(string(b))) == 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// The retry counter only proves Send succeeded; the worker still has to
+	// rewrite the queue file (compaction) afterwards. Reading that file
+	// concurrently races the rewrite on Windows ("The process cannot access
+	// the file because it is being used by another process", CI
+	// 2026-09-18). Quiesce the worker first - Close joins the goroutine, so
+	// the rewrite is complete before the read. Same Close-before-observe
+	// discipline as TestOutboxRetainsFailedEventAcrossRestart below.
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(path)
-	t.Fatalf("delivered event remained queued: %q", b)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.TrimSpace(string(b))) != 0 {
+		t.Fatalf("delivered event remained queued: %q", b)
+	}
 }
 
 func TestOutboxRetainsFailedEventAcrossRestart(t *testing.T) {
