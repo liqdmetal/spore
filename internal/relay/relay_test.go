@@ -721,11 +721,21 @@ func TestForwardBackoffGrowsAndRecovers(t *testing.T) {
 		t.Fatalf("backoff pass bumped attempts to %d, want 1 (must not retry while in backoff)", p2.attempts)
 	}
 
-	// Destination recovers; wait out the backoff window; next pass delivers.
+	// Destination recovers; poll until the backoff boundary is unambiguously
+	// past instead of sleeping a guessed window: p2.nextTry is the truth
+	// about when a retry is eligible, and under CI load a guessed sleep can
+	// land short of it ("recovery pass forwarded = 0, want 1") or overshoot
+	// a doubling backoff for no reason.
 	hMu.Lock()
 	healthy = true
 	hMu.Unlock()
-	time.Sleep(120 * time.Millisecond)
+	retryDeadline := time.Now().Add(5 * time.Second)
+	for !time.Now().After(p2.nextTry) {
+		if time.Now().After(retryDeadline) {
+			t.Fatalf("backoff boundary never passed: nextTry=%v", p2.nextTry)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if fwd, _ := r.ForwardOnce(context.Background()); fwd != 1 {
 		t.Fatalf("recovery pass forwarded = %d, want 1", fwd)
 	}

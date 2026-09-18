@@ -73,9 +73,20 @@ func TestHTTPServerReapAfterDeadline(t *testing.T) {
 	cid := [32]byte{5}
 	_ = client.Put(cid, []byte("short-lived"), time.Now().Add(30*time.Millisecond))
 
-	time.Sleep(80 * time.Millisecond)
-	if backend.Len() != 0 {
-		t.Fatalf("reaper did not evict: len=%d", backend.Len())
+	// Poll for the eviction instead of sleeping a fixed window: the property
+	// is monotone (once reaped, it stays gone), so polling cannot mask a
+	// bug, while a fixed sleep can be starved entirely on a loaded runner —
+	// the same fixed-window failure class the reap-ticker tests hit
+	// ("2 .body files on disk, want 1", 2026-09-18).
+	pollDeadline := time.Now().Add(3 * time.Second)
+	for {
+		if backend.Len() == 0 {
+			break
+		}
+		if time.Now().After(pollDeadline) {
+			t.Fatalf("reaper did not evict within 3s: len=%d", backend.Len())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if _, err := client.Get(cid); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound after reap, got %v", err)

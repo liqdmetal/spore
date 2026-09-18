@@ -64,13 +64,32 @@ func TestMailboxLiveAnvil(t *testing.T) {
 		t.Fatal("did not receive the whisper through the mailbox contract (eth_getLogs+read)")
 	}
 
-	// Give the burn tx a moment to land, then verify the contract's own
-	// state (not our cache) says the message is gone: a fresh ListIncoming
-	// from height 0 must NOT surface it again.
-	time.Sleep(1200 * time.Millisecond)
-	again, err := recv.ListIncoming(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("post-burn ListIncoming: %v", err)
+	// The burn tx must land before the on-chain state check, and chain
+	// latency on shared devnet/anvil infrastructure varies. Poll a few
+	// times (bounded) rather than assume a latency: the property is
+	// monotone - once burned, the slot stays empty - so polling cannot
+	// mask a real compost bug; a fixed sleep can only fail to wait long
+	// enough ("message still readable on-chain after AutoBurn" flake).
+	var again []chain.Incoming
+	for attempt := 0; ; attempt++ {
+		var err error
+		again, err = recv.ListIncoming(context.Background(), 0)
+		if err != nil {
+			t.Fatalf("post-burn ListIncoming: %v", err)
+		}
+		burned := true
+		for _, inc := range again {
+			if string(inc.Payload) != "" {
+				if decoded, isText := codec.DecodeText(inc.Payload); isText && decoded == "hello mailbox anvil" {
+					burned = false
+					break
+				}
+			}
+		}
+		if burned || attempt >= 5 {
+			break
+		}
+		time.Sleep(400 * time.Millisecond)
 	}
 	for _, inc := range again {
 		if string(inc.Payload) != "" {

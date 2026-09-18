@@ -348,7 +348,7 @@ func TestScanHubSubscribeAfterCloseDoesNotLeakWorker(t *testing.T) {
 		t.Fatalf("Subscribe on a closed hub registered %d subscribers, want 0", got)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if after := numGoroutine(); after > before+1 {
+	if after := goroutineCountSettled(3 * time.Second); after > before+1 {
 		t.Fatalf("Subscribe after Close leaked goroutines: before=%d after=%d", before, after)
 	}
 }
@@ -367,7 +367,7 @@ func TestScanHubCloseIsIdempotentAndJoinsWorkers(t *testing.T) {
 	hub.Close()
 	hub.Close() // must not panic
 	time.Sleep(200 * time.Millisecond)
-	if after := numGoroutine(); after >= before {
+	if after := goroutineCountSettled(3 * time.Second); after >= before {
 		t.Fatalf("Close did not reap worker goroutines: before=%d after=%d", before, after)
 	}
 	if got := hub.Stats().Subscribers; got != 0 {
@@ -385,7 +385,7 @@ func TestScanHubContextCancelStopsEverything(t *testing.T) {
 	before := numGoroutine()
 	cancel()
 	time.Sleep(300 * time.Millisecond)
-	if after := numGoroutine(); after >= before {
+	if after := goroutineCountSettled(3 * time.Second); after >= before {
 		t.Fatalf("ctx cancel did not stop the hub/workers: before=%d after=%d", before, after)
 	}
 }
@@ -396,4 +396,23 @@ func numGoroutine() int {
 	runtime.GC()
 	time.Sleep(50 * time.Millisecond)
 	return runtime.NumGoroutine()
+}
+
+// goroutineCountSettled polls for the goroutine count to stop changing
+// instead of trusting a single sample: workers exit asynchronously, and
+// under CI load a fixed sleep can sample mid-exit (a worker's stack is
+// still counted) and false-positive a leak that is actually just an exit
+// still landing. Bounded and cheap; samples 200ms apart.
+func goroutineCountSettled(budget time.Duration) int {
+	deadline := time.Now().Add(budget)
+	prev := numGoroutine()
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		cur := numGoroutine()
+		if cur == prev {
+			return cur
+		}
+		prev = cur
+	}
+	return prev
 }
