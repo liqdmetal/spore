@@ -249,3 +249,16 @@ default 7d).
 Conformance: the `fabric_v1` vector section pins every derivation and the
 envelope codec byte-for-byte across Go (internal/fabric) and Rust
 (spore-peer fabric mod), including the negative vectors.
+
+**Client face (shipped with the cross-binary interop):**
+`spore-peer fabric --addr host:port --sub reg|put|pop --handle <hex>`
+exercises the verbs from the CLI: `reg --token t [--nonce n] [--lease s]`,
+`put --pointer <74-byte hex>`, `pop --token t [--max n]`. Pop prints drained
+pointers to stdout, one 74-byte hex line each — exactly the E2-ingestion
+feed — and exits non-zero with the relay's verbatim error string on any
+refusal. The seed-derived handle/token plumbing rides the contact card in
+F2 proper; the CLI takes explicit values so the cross-binary interop test
+(spore `internal/peerstore/fabric_smoke_interop_test.go` + spore-peer
+`tests/fabric_smoke.rs`) can pin the wire behavior in both directions:
+Go publishes → Rust drains, Rust publishes → Go drains, with takeover and
+wrong-token refusals verified verbatim across implementations.
