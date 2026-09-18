@@ -11,7 +11,8 @@ threat model, and the F1 adversarial-review dispositions) and
 
 > **FIX STATUS (2026-09-18): the F1-baseline HIGHs are already fixed in
 > spore-peer `fee4d8a` `no-verify-hash`; the new findings from this review (H-N1, M-N2/M-N3)
-> are fixed in spore-peer `78e69a4` `no-verify-hash`.** Regression tests:
+> are fixed in spore-peer `78e69a4` `no-verify-hash`; R-N1 (drain-union dedupe) is fixed in
+> spore `3ec84c0`.** Regression tests:
 > `src/fabric.rs` `tests` mod (`fput_deadline_horizon_cap_refuses_immortal_envelope`,
 > `freg_sweep_is_time_gated`, `expired_registration_re_registrable_before_sweep`)
 > plus the pre-existing hostile-frame battery. The accepted risks at the end
@@ -131,16 +132,21 @@ to count.
 **Pinned by** `expired_registration_re_registrable_before_sweep`, plus the
 live-check contract asserted inside `freg_sweep_is_time_gated`.
 
-### R-N1 — tracked (F3 roadmap): drain-union dedupe across relays is implicit, not enforced
+### R-N1 — FIXED (spore `3ec84c0`): drain-union dedupe across relays is now explicit and pre-ingest
 
 With N-relay redundancy, the same pointer legitimately arrives from several
-relays. Today each copy is drained and fed to the ingest path, where the
-ratchet's rollback protection fails the replay closed — correct, but the
-recipient's ingest pipeline does the dedupe work, and a hostile relay can
-amplify one send into N ingest attempts. An explicit drain-union (seen-CID
-set, or single-flight per CID before `FetchFrame`) belongs to the F3
-redundancy slice. Not a correctness bug today: the implicit dedupe is
-fail-closed and the volume is capped by per-handle quotas.
+relays. The F2 loop deduped only per (relay, handle) in memory: a send fput'd
+to M relays cost M body fetches, and a restarted recipient re-fetched every
+still-queued copy. The drain loop now keeps ONE consumed-CID union
+(`internal/fabric.SeenCIDs`, persisted beside the ratchet state, bounded at
+64k entries with burn-deadline pruning, save-gated 1/s). Crucially it is a
+**consumed** set: a CID is marked only on successful ingest and un-marked on
+failure, so redundancy still works where it matters — a pointer whose body
+fetch failed stays eligible for a second relay's copy.
+
+**Pinned by** `TestSeenObserveIsFirstSightingOnly`, `TestSeenForgetRestoresEligibility`,
+`TestSeenPersistAcrossRestart` (internal/fabric) and `TestDrainUnionDedupesAcrossRelays`,
+`TestDrainUnionKeepsFailedIngestEligible`, `TestDrainUnionSurvivesRestart` (cmd/spore).
 
 ### R-N2 — tracked (F3 roadmap): drain cadence has no jitter
 
@@ -208,5 +214,5 @@ not a new vulnerability.
 | H-N1 immortal envelopes | spore-peer `78e69a4` `no-verify-hash` — `max_deadline_horizon_sec` enforced at fput, composted at rebuild | `fput_deadline_horizon_cap_refuses_immortal_envelope` |
 | M-N2 sweep amplifier | spore-peer `78e69a4` `no-verify-hash` — 1s-gated sweep | `freg_sweep_is_time_gated` |
 | M-N3 expired-equals-absent | spore-peer `78e69a4` `no-verify-hash` — explicit live-check | `expired_registration_re_registrable_before_sweep` |
-| R-N1 drain-union dedupe | F3 slice work (tracked in RELAY_FABRIC staged-slices) | — |
+| R-N1 drain-union dedupe | spore `3ec84c0` — SeenCIDs consumed-set in the drain loop | `TestDrainUnion*` + `TestSeen*` |
 | R-N2 drain jitter | F3 slice work (tracked in RELAY_FABRIC staged-slices) | — |
