@@ -262,3 +262,36 @@ F2 proper; the CLI takes explicit values so the cross-binary interop test
 `tests/fabric_smoke.rs`) can pin the wire behavior in both directions:
 Go publishes → Rust drains, Rust publishes → Go drains, with takeover and
 wrong-token refusals verified verbatim across implementations.
+
+### Client face (F2): `spore fabric subscribe` and `-route-fabric`
+
+The Go client (`internal/fabric`) speaks the same §5 frames and verbs, with
+three behaviors an implementer must replicate:
+
+1. **Registration discipline.** The client keeps its `nonce` and re-uses it,
+   deriving `token = HMAC(seed, "spore/fabric/v1/reg" || handle || nonce)`;
+   `EnsureRegistered` re-fregs only within 5 minutes of lease expiry. A 403
+   or 404 on drain triggers exactly ONE re-register + retry — the lease may
+   have lapsed server-side between renewals. Chained refresh (prev_token) is
+   what makes renewal non-takeover: a live handle re-registers only with the
+   token it already holds.
+2. **Drain identity.** Subscribe enumerates the durable session table and
+   drains `FabricHandle(seed, e, sid)` for e ∈ {n, n−1} (the DECIDED
+   dual-publish window; never underflows below epoch 1). Unknown sessions
+   are never derived — bootstrap cannot ride the fabric, and a FrameInit
+   seen on the fabric path is REFUSED before any prekey state is touched
+   (the e2Ingestor fence; also the anti-replay answer for real chain-visible
+   init pointers replayed at fabric handles).
+3. **Publish roles.** Only the recipient registers. The sender's
+   `-route-fabric` derives the recipient's handle from the CONTACT CARD seed
+   (no registration, no token) and fput-dual-publishes to n and n−1 after
+   the chain post succeeds; ≥1 accepted relay means the fabric route worked,
+   zero accepted only warns — the chain pointer is the delivery of record.
+   Dedupe on (handle, CID) makes re-publishing a refresh, not a duplicate.
+
+Cross-binary (F2): the real Rust relay + the real `spore fabric subscribe`
+binary prove the full loop — recipient registers by drain, sender publishes
+(polling past the relay's honest 404 for a not-yet-live handle), the pointer
+decrypts through the shared E2 pipeline and lands in maildb
+(`cmd/spore/fabric_cross_binary_test.go`); Go drains Rust-published pointers
+in `internal/peerstore/fabric_smoke_interop_test.go`.

@@ -1,7 +1,8 @@
 # Relay fabric — the pointer-forwarding half (design)
 
-*Status: slice F1 (relay verbs + envelope, vector-pinned) **shipped**; F2
-(Go client, drain loop, cross-binary interop) is next. Roadmap row #8. The
+*Status: slice F1 (relay verbs + envelope, vector-pinned) **shipped**;
+F2 (Go client, `spore fabric subscribe` drain loop, `-route-fabric` on send,
+cross-binary interop) **shipped**. Roadmap row #8. The
 body half it builds on is shipped: `sporepeer://` + `spore serve` (see
 [`WIRE_SPEC.md`](WIRE_SPEC.md) §5/§7/§8, [`PEER_SETUP.md`](PEER_SETUP.md),
 [`AUDIT-SPOREPEER.md`](../AUDIT-SPOREPEER.md)).*
@@ -155,7 +156,7 @@ contract + the fabric index persisted temp+rename, exactly
 | Slice | Delivers | Gate |
 |---|---|---|
 | **F1** — **shipped, adversarially reviewed** | envelope + store/reap reuse; `freg`/`fput`/`fpop` in spore-peer behind `-fabric`; hostile-frame tests (wrong-length pointers, deadline abuse, handle/token mismatches, cap eviction) | **done**: `fabric_v1` vectors in `interop-vectors.json` ([`WIRE_SPEC.md`](WIRE_SPEC.md) §8) generated first, then consumed by Go (`internal/fabric` + `internal/secure` conformance) and Rust (spore-peer `fabric` mod) — byte-identical handles from `(seed, epoch, sid)` proven, negatives refused. Post-ship adversarial review (leases, quota abuse, token handling, dedupe) landed the hardening below |
-| **F2** | Go side: `internal/fabric` client, `spore fabric subscribe` drain loop → E2 ingestion, `-route-fabric` on send; **both-direction cross-binary interop tests** mirroring `sporepeer_interop_test.go` (Rust `fput` → Go drain, Go `fput` → Rust hold) | the contract workflow exercises them on every push, as the body interop does now |
+| **F2** — **shipped** | Go side: `internal/fabric` client (freg/fput/fpop + lease renewal + re-register-on-403), `spore fabric subscribe` drain loop → shared `e2Ingestor` pipeline (ONE decrypt path with `msg recv-e2`), `-route-fabric` on `msg send-e2`/`msg reply-e2` (dual-publish n/n−1, chain stays carrier of record), seed + relays ride the contact card (`-invite` → `mail add`), `spore fabric handle` for derivation. Cross-binary: real Rust relay + real `spore fabric subscribe` binary end-to-end (publish-poll past the honest 404 → freg → fpop → decrypt → maildb) plus Go-side drain interop in `internal/peerstore`; bootstrap fence pinned by unit tests (unknown sessions are never derivable; FrameInit refused on the fabric path) | the cross-binary test rides `SPORE_PEER_BIN` + `RACE_PKGS` (every push via gates); unit fence tests run hermetic |
 | **F3** | N-relay redundancy + drain-union dedupe by CID, per-handle quotas + jitter, durable fabric index, `AUDIT-RELAYFABRIC.md` with the same hash-pinned remediation treatment | doc-refs CI over the new audit |
 | **F4** | transport adapters (Iroh/Waku) behind `FabricTransport`; cover traffic; multi-hop onion publish; CBOR method variants | separate design addendum per adapter, same audit discipline |
 
