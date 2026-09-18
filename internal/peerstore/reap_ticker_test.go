@@ -84,7 +84,21 @@ func TestReapTickerCompostsExpiredBodiesWithoutAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	time.Sleep(300 * time.Millisecond) // many ticks at 25ms
+	// Poll for the compost instead of sleeping a fixed window: the property
+	// is monotone (the expired body only ever leaves), so polling cannot
+	// mask a real bug, while a fixed 300ms can be starved entirely under
+	// gate load - seen once as "2 .body files on disk, want 1" when the
+	// -race suite ran alongside the Rust gates (2026-09-18).
+	pollDeadline := time.Now().Add(3 * time.Second)
+	for {
+		if left := holdBodyFiles(t, dir); len(left) <= 1 {
+			break
+		}
+		if time.Now().After(pollDeadline) {
+			t.Fatalf("expired body not composted within 3s of ticker ticks: %v", holdBodyFiles(t, dir))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if left := holdBodyFiles(t, dir); len(left) != 1 {
 		t.Fatalf("after reap: %d .body files on disk, want 1 (the unexpired one): %v", len(left), left)
