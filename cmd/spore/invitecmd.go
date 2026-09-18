@@ -25,6 +25,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -99,6 +101,8 @@ func inviteIssue(args []string) {
 	spkID := fs.Uint("spk-id", 1, "signed-prekey id matching your published bundle")
 	mailbox := fs.String("mailbox", "", "optional prekey URL senders may fetch a fresh bundle from")
 	storeURL := fs.String("store", "", "optional body store URL")
+	fabricSeed := fs.String("fabric-seed", "", "optional relay-fabric seed: auto-generates when set to 'new', or accepts a 64-char hex seed; enables -route-fabric sends to this contact (WIRE_SPEC §8)")
+	fabricRelays := fs.String("fabric-relays", "", "optional comma-separated default fabric relay list carried in the invite")
 	note := fs.String("note", "", "optional note carried in the invite")
 	ttl := fs.Duration("ttl", 0, "optional validity window (0 = no expiry)")
 	opkFile := fs.String("opk", "", "optional one-time prekey file — SINGLE RECIPIENT ONLY")
@@ -119,13 +123,15 @@ func inviteIssue(args []string) {
 		check(errors.New("-opk embeds a one-time prekey that must reach exactly one person; " +
 			"pass -allow-opk to confirm this invite goes to a single recipient"))
 	}
+	seedVal, err := fabricSeedValue(*fabricSeed)
+	check(err)
 
 	ik, err := readHexFile(*identity, 32)
 	check(err)
 	sk, err := readHexFile(*spk, 32)
 	check(err)
 
-	inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, *note, *spkID, *ttl, *opkFile, *opkID, *allowOPK)
+	inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, seedVal, *fabricRelays, *note, *spkID, *ttl, *opkFile, *opkID, *allowOPK)
 	check(err)
 
 	encoded, err := inv.Encode()
@@ -160,7 +166,29 @@ func inviteIssue(args []string) {
 // buildInvite constructs and signs the invite object from the shared
 // issue/QR flag values. The one-time-prekey guard lives here so both commands
 // inherit the single-recipient rule.
-func buildInvite(ik, sk []byte, address, chain, name, mailbox, storeURL, note string, spkID uint, ttl time.Duration, opkFile string, opkID uint, allowOPK bool) (*invite.Invite, error) {
+// fabricSeedValue resolves the -fabric-seed flag: empty (no fabric field),
+// "new" (generate 32 random bytes and return their hex), or a 64-char hex
+// seed. The returned value is what the invite carries; callers printing the
+// invite should surface it so the recipient's side derives the same handle.
+func fabricSeedValue(flagVal string) (string, error) {
+	if flagVal == "" {
+		return "", nil
+	}
+	if flagVal == "new" {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return "", fmt.Errorf("invite: generate fabric seed: %w", err)
+		}
+		return hex.EncodeToString(raw), nil
+	}
+	raw, err := hex.DecodeString(flagVal)
+	if err != nil || len(raw) != 32 {
+		return "", errors.New("invite: -fabric-seed must be 'new' or 64 hex chars (32 bytes)")
+	}
+	return flagVal, nil
+}
+
+func buildInvite(ik, sk []byte, address, chain, name, mailbox, storeURL, fabricSeed, fabricRelays, note string, spkID uint, ttl time.Duration, opkFile string, opkID uint, allowOPK bool) (*invite.Invite, error) {
 	var opkPtr *[32]byte
 	if opkFile != "" {
 		raw, err := readHexFile(opkFile, 32)
@@ -175,15 +203,17 @@ func buildInvite(ik, sk []byte, address, chain, name, mailbox, storeURL, note st
 		return nil, err
 	}
 	return invite.New(ik, invite.Options{
-		Name:      name,
-		Chain:     chain,
-		Address:   address,
-		Bundle:    *bundle,
-		PrekeyURL: mailbox,
-		StoreURL:  storeURL,
-		Note:      note,
-		TTL:       ttl,
-		AllowOPK:  opkPtr != nil,
+		Name:         name,
+		Chain:        chain,
+		Address:      address,
+		Bundle:       *bundle,
+		PrekeyURL:    mailbox,
+		StoreURL:     storeURL,
+		FabricSeed:   fabricSeed,
+		FabricRelays: fabricRelays,
+		Note:         note,
+		TTL:          ttl,
+		AllowOPK:     opkPtr != nil,
 	})
 }
 
@@ -224,7 +254,7 @@ func inviteQR(args []string) {
 		check(err)
 		sk, err := readHexFile(*spk, 32)
 		check(err)
-		inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, *note, *spkID, *ttl, "", 1, false)
+		inv, err := buildInvite(ik, sk, *address, *chain, *name, *mailbox, *storeURL, "", "", *note, *spkID, *ttl, "", 1, false)
 		check(err)
 		encoded, err = inv.Encode()
 		check(err)

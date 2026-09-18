@@ -52,6 +52,12 @@ type Contact struct {
 	Bundle    *ratchet.SPKBundle `json:"bundle,omitempty"`
 	Added     int64              `json:"added"`
 	Blocked   bool               `json:"blocked,omitempty"`
+	// FabricSeed is the shared relay-fabric handle seed (64-char hex, from
+	// the contact's invite; WIRE_SPEC §8). Empty = no fabric routing.
+	FabricSeed string `json:"fabric_seed,omitempty"`
+	// FabricRelays is the comma-separated default relay list for this
+	// contact. Empty = chain-carried whisper pointers only.
+	FabricRelays string `json:"fabric_relays,omitempty"`
 }
 
 // Thread is one conversation, keyed by ratchet session id (hex). It holds

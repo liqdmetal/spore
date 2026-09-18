@@ -88,8 +88,10 @@ func msgMail(args []string) {
 		// Fields supplied by an invite, if one was given. Declared outside the
 		// invite branch so the contact write below can use them in both paths.
 		var (
-			invPrekeyURL string
-			invBundle    *ratchet.SPKBundle
+			invPrekeyURL    string
+			invBundle       *ratchet.SPKBundle
+			invFabricSeed   string
+			invFabricRelays string
 		)
 		// An invite fills the contact fields itself, after verifying that the
 		// signature is valid and the bundle is bound to the pinned key. The
@@ -120,6 +122,8 @@ func msgMail(args []string) {
 			// fallback.
 			invPrekeyURL = inv.PrekeyURL
 			invBundle = &inv.Bundle
+			invFabricSeed = inv.FabricSeed
+			invFabricRelays = inv.FabricRelays
 			fmt.Printf("invite verified (fingerprint %s)\n", inv.Fingerprint())
 			if inv.PrekeyURL != "" {
 				fmt.Printf("  prekey URL  %s\n", inv.PrekeyURL)
@@ -136,11 +140,13 @@ func msgMail(args []string) {
 			os.Exit(2)
 		}
 		if err := db.UpsertContact(maildb.Contact{
-			Address:   *addr,
-			Nickname:  *nick,
-			Pinned:    *pinned,
-			PrekeyURL: invPrekeyURL,
-			Bundle:    invBundle,
+			Address:      *addr,
+			Nickname:     *nick,
+			Pinned:       *pinned,
+			PrekeyURL:    invPrekeyURL,
+			Bundle:       invBundle,
+			FabricSeed:   invFabricSeed,
+			FabricRelays: invFabricRelays,
 		}); err != nil {
 			fmt.Fprintln(os.Stderr, "mail add:", err)
 			os.Exit(2)

@@ -82,6 +82,16 @@ type Invite struct {
 	Note      string `json:"note,omitempty"`
 	IssuedAt  string `json:"issued_at"`
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// FabricSeed is the OPTIONAL shared seed for relay-fabric handles:
+	// both sides derive FabricHandle(seed, epoch, sid) from it (WIRE_SPEC
+	// §8). One seed per contact, riding the same channel that already
+	// carries the prekey bundle and store URL. Empty = this contact uses
+	// no fabric routing yet.
+	FabricSeed string `json:"fabric_seed,omitempty"`
+	// FabricRelays is the OPTIONAL comma-separated default relay list for
+	// this contact. Senders publish pointers there; the recipient drains
+	// from them. Empty = chain-carried whisper pointers only.
+	FabricRelays string `json:"fabric_relays,omitempty"`
 	// Sig is the hex Ed25519 signature over transcript(Invite) with Sig unset.
 	Sig string `json:"sig"`
 }
@@ -140,6 +150,11 @@ func transcript(i *Invite) []byte {
 	putStr(i.Note)
 	putStr(i.IssuedAt)
 	putStr(i.ExpiresAt)
+	// F2 additions, appended (never reordered): the transcript is a
+	// positional sequence of length-prefixed fields, so new fields extend
+	// it and old signatures still verify byte-for-byte.
+	putStr(i.FabricSeed)
+	putStr(i.FabricRelays)
 	return b
 }
 
@@ -319,6 +334,11 @@ type Options struct {
 	PrekeyURL string
 	StoreURL  string
 	Note      string
+	// FabricSeed/FabricRelays are the optional relay-fabric fields
+	// (WIRE_SPEC §8): the shared handle-derivation seed and the default
+	// relay list. Empty means the contact does not use fabric routing.
+	FabricSeed   string
+	FabricRelays string
 	// TTL optionally bounds the invite's validity. Zero means no expiry.
 	TTL time.Duration
 	// AllowOPK acknowledges the single-recipient constraint when Bundle
@@ -360,15 +380,17 @@ func New(identityPriv []byte, o Options) (*Invite, error) {
 		now = o.Now
 	}
 	i := &Invite{
-		V:         Version,
-		Name:      o.Name,
-		Chain:     chain,
-		Address:   o.Address,
-		Bundle:    o.Bundle,
-		PrekeyURL: o.PrekeyURL,
-		StoreURL:  o.StoreURL,
-		Note:      o.Note,
-		IssuedAt:  now().UTC().Format(time.RFC3339),
+		V:            Version,
+		Name:         o.Name,
+		Chain:        chain,
+		Address:      o.Address,
+		Bundle:       o.Bundle,
+		PrekeyURL:    o.PrekeyURL,
+		StoreURL:     o.StoreURL,
+		Note:         o.Note,
+		FabricSeed:   o.FabricSeed,
+		FabricRelays: o.FabricRelays,
+		IssuedAt:     now().UTC().Format(time.RFC3339),
 	}
 	if o.TTL > 0 {
 		i.ExpiresAt = now().Add(o.TTL).UTC().Format(time.RFC3339)
