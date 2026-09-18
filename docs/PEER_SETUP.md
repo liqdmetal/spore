@@ -163,3 +163,46 @@ fetch the (inert-without-the-ratchet-key) ciphertext, so firewall the port
 if that bothers you. A body whose TTL has passed composts on the holder's
 disk; a late fetch then gets a clean 404, not silence. Interoperates with
 the standalone Rust `spore-peer serve/fetch` binary in both directions.
+
+## Running a fabric relay (volunteer operators)
+
+If a contact hands you a `FabricRelays` line for their card, they are asking
+you to run the pointer-forwarding half ([`RELAY_FABRIC.md`](RELAY_FABRIC.md)):
+a `spore-peer serve -fabric` daemon that queues 74-byte pointers for
+recipients to drain. It is the same binary and the same hold as above — one
+flag turns the body node into a relay:
+
+```bash
+spore-peer serve --dir /var/lib/spore-peer/hold --listen 0.0.0.0:8099 \
+  -fabric \
+  --announce-addr relay.example.org:8099 \
+  --pidfile /run/spore-peer/spore-peer.pid \
+  --fabric-per-handle 32 --fabric-horizon 604800 --fabric-max-lease 604800 \
+  --fabric-fput-rate 60 --fabric-max-regs 50000
+```
+
+- `--announce-addr` — what fabric clients and `sporepeer://` senders must
+  dial: your PUBLIC host:port (behind NAT/container boundaries), not the
+  bind address. Echoed on stderr ahead of the readiness line.
+- `--pidfile` — written atomically **before** the bind; a graceful stop
+  (SIGTERM, Ctrl+C/Ctrl+Break) removes it, a SIGKILL leaves it — the
+  dead-run signal a supervisor keys on. See `deploy/` in the spore-peer
+  repo for a hardened systemd unit and a Windows wrapper.
+
+The fabric knobs (every one is optional; these are the defaults). The
+daemon echoes the effective values on the `listening on` readiness line,
+so you can verify a tuning change on the running process:
+
+| Flag | Default | What it bounds |
+|---|---|---|
+| `--fabric-per-handle` | 32 | Queued pointers per handle. FIFO, evict-oldest — compost, don't hoard. This is the flood bound: a handle-spammer's garbage evicts itself, and a drain costs at most this much. |
+| `--fabric-horizon` | 604800 (7d) | How far out a pointer's burn deadline may be. Every compost path is deadline-triggered, so uncapped far-future deadlines would be immortal envelopes — unbounded disk. Lower it if you want tighter churn. |
+| `--fabric-max-lease` | 604800 (7d) | freg lease cap in seconds. A recipient re-registers at renewal; leases are memory-only (a restart clears them; clients re-register on their next drain — queues are NOT lost). |
+| `--fabric-fput-rate` | 60 | Per-IP publish rate per minute. fpop shares this window: both are unauthenticated parser paths and neither is cheaper to flood than the other. |
+| `--fabric-max-regs` | 50000 | Live registration budget. freg is unauthenticated, so this — not memory growth — is the DoS answer; a full budget answers 503 and never evicts others' registrations. |
+
+What a relay operator can and cannot learn: pointers are inert (the
+ratchet is the filter — a relay sees a public handle, timing, and a sender
+IP; never message content, never the session id). Running a relay exposes
+your IP to publishers and drainers exactly as running the body node
+exposes it to fetchers — same posture, one more port.

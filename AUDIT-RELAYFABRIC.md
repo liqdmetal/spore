@@ -12,7 +12,9 @@ threat model, and the F1 adversarial-review dispositions) and
 > **FIX STATUS (2026-09-18): the F1-baseline HIGHs are already fixed in
 > spore-peer `fee4d8a` `no-verify-hash`; the new findings from this review (H-N1, M-N2/M-N3)
 > are fixed in spore-peer `78e69a4` `no-verify-hash`; R-N1 (drain-union dedupe) is fixed in
-> spore `3ec84c0`; R-N2 (drain jitter) is fixed in spore `444122f`.** Regression tests:
+> spore `3ec84c0`; R-N2 (drain jitter) is fixed in spore `444122f`; the operator
+> knobs (scope-table "Per-handle quotas → partial") are exposed as serve flags in
+> spore-peer `7fcda6e` `no-verify-hash`.** Regression tests:
 > `src/fabric.rs` `tests` mod (`fput_deadline_horizon_cap_refuses_immortal_envelope`,
 > `freg_sweep_is_time_gated`, `expired_registration_re_registrable_before_sweep`)
 > plus the pre-existing hostile-frame battery. The accepted risks at the end
@@ -31,6 +33,7 @@ threat model, and the F1 adversarial-review dispositions) and
 > | Deploy wrappers (systemd + Windows) | `7691059` `no-verify-hash` | `deploy/` |
 > | Graceful shutdown (SIGTERM/Ctrl+Break) | `7be409a` `no-verify-hash` | pidfile removal on the graceful path |
 > | **This review's fixes (H-N1, M-N2/M-N3)** | `78e69a4` `no-verify-hash` | horizon cap + sweep gate |
+> | Operator knobs as serve flags (R-N3) | `7fcda6e` `no-verify-hash` | `--fabric-*` flags + listening-line echo |
 > | F2 client face audited here | `9996fbc` | spore: `internal/fabric` + drain loop + `-route-fabric` |
 > | F2 contact-card plumbing | `6953092` | spore: seed + relays ride the invite |
 > | F2 docs | `823fbc2` | spore: RELAY_FABRIC status, WIRE_SPEC §8 |
@@ -65,7 +68,7 @@ its hardening, and the operator/deploy story:
 | F3 deliverable | Pushed state (at `2a701c9` `no-verify-hash`) | Verdict |
 |---|---|---|
 | Durable fabric index | **Shipped** — envelopes persist as `<cid>.fenv`, temp+rename, re-indexed at `open()` with FIFO order restored; the dedupe-refresh corruption (F1 #4) is fixed. Registrations deliberately stay memory-only (F1 #9). | done |
-| Per-handle quotas | **Shipped for abuse** — `max_per_handle` FIFO eviction, per-IP rate windows on fput AND fpop, `max_regs` budget. Not yet *operator-facing* config: knobs exist in code, `-fabric` exposes no flags to tune them. | partial |
+| Per-handle quotas | **Shipped for abuse, operator-facing now too** — `max_per_handle` FIFO eviction, per-IP rate windows on fput AND fpop, `max_regs` budget; all tunable via `--fabric-per-handle/--fabric-fput-rate/--fabric-max-regs/--fabric-max-lease/--fabric-horizon`, effective posture echoed on the `listening on` line. | done |
 | N-relay redundancy + drain-union dedupe | **Client-side only** — the F2 sender fputs to every `-route-fabric` relay (best-effort, ≥1 accepted ⇒ send). The drain-union dedupe-by-CID across relays is NOT in the pushed code: `spore fabric subscribe` feeds every pointer from every relay into the ingest path, and dedupe happens implicitly at the ratchet (a replayed pointer fails closed) rather than explicitly before ingestion. | gap → tracked below (R-N1) |
 | Jitter | **Not shipped** — the drain loop's cadence is a fixed `-every` interval; the sync-loop-style jitter the design promises is not wired. | gap → tracked below (R-N2) |
 | `AUDIT-RELAYFABRIC.md` | This document. | done |
@@ -223,3 +226,4 @@ across seeds).
 | M-N3 expired-equals-absent | spore-peer `78e69a4` `no-verify-hash` — explicit live-check | `expired_registration_re_registrable_before_sweep` |
 | R-N1 drain-union dedupe | spore `3ec84c0` — SeenCIDs consumed-set in the drain loop | `TestDrainUnion*` + `TestSeen*` |
 | R-N2 drain jitter | spore `444122f` — per-pass ±20% cadence jitter (`-fabric-jitter`) | `TestJitteredInterval*` |
+| Operator knobs as serve flags | spore-peer `7fcda6e` `no-verify-hash` — `--fabric-per-handle/--fabric-max-lease/--fabric-fput-rate/--fabric-max-regs/--fabric-horizon`, echoed on the listening line; documented in PEER_SETUP.md | `fabric_operator_knobs_bind_through_serve_flags` |
