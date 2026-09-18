@@ -5,3 +5,4 @@
 docs:
   - path: AUDIT-E2.md
   - path: AUDIT-SPOREPEER.md
+  - path: AUDIT-RELAYFABRIC.md
