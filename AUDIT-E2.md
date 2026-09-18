@@ -301,3 +301,76 @@ Extended: dry-runs now also exercise the consumer verification itself —
 provenance is uploaded as an artifact even when detached), with
 `--source-uri` still enforced and tag binding only on real releases — commit
 `42f265de9d3952481c794a2b6c7c428c41b2c608`.
+
+## Test-timing conventions (2026-09-18)
+
+Every CI flake this week was one anti-pattern family: a test observing
+asynchronous state on a schedule instead of synchronizing with it. The
+hardening campaign (four suites swept) also exposed a real production bug the
+old fixed sleeps had been masking. The conventions below are recorded so new
+tests inherit the discipline instead of rediscovering it; every rule is
+backed by a pinned commit.
+
+**T1 — poll a monotone property; never sleep a fixed window before a
+positive assertion.** If a test asserts that something HAS happened, poll
+for it (generous budget, small step, fatal with collected state on
+timeout). Polling is only sound when the property is monotone — the state
+only ever moves one way — because then a poll cannot mask a bug; it can
+only wait. A fixed sleep can be starved entirely under CI load and fails
+with a misleading signature. Evidence chain: the starved reaper flake
+("2 .body files on disk, want 1" under full gate load) fixed by polling in
+commit `3f74afaeb4ea4914ed6520e742453a324e2e1758`; the suite-wide sweep
+(httpserver reaper, relay backoff boundary, evm chain latency, scanhub
+goroutine-leak counts) in commit `f865275fbb2a6d195bcfd6e8af4f6e70fe9ca2d3`;
+and the payoff — the strengthened 3-second poll failed on Windows CI because
+~120 tick opportunities passed with no reap, which was NOT a flake but a
+production bug: DiskStore.Reap removed the .body before the .exp marker and
+ignored remove errors, so one transient sharing violation orphaned the body
+forever (the glob keys on *.exp). Fixed in commit
+`0385e32fe7612f44db9eafd9d445d27fa54e2ef8` by treating the marker as the
+commit point: payload first, marker last, abort and retry the hold on the
+next pass if any remove fails. The stronger test found the bug; the fixed
+sleep had hidden it.
+
+**T2 — quiesce before observing; never read worker-mutated state
+concurrently.** If a constructor starts a background worker, a test must
+not read that worker's state while it runs — neither internal fields (the
+race detector fires: the Linux `-race` outbox failure was the drain
+worker's post-send removal racing the test's unsynchronized read, fixed in
+commit `d04727910d05ad1ca1ddfbb25b27c0ca3b0f1ba1`) nor files the worker
+rewrites (Windows refuses a concurrent open: the outbox compaction
+file-sharing violation, fixed in commit
+`684e3a3f5c7b6f4f90ddcb9dc4d81b1e629ffdb4`). Quiesce with the type's own
+shutdown (Close/Close-join gives happens-before via the WaitGroup), then
+read once. Precedent inside the suite: TestOutboxRetainsFailedEventAcross
+Restart already did exactly this. Caveat that bit once: closing changes
+the state — a drain worker with a succeeding dispatcher empties the queue,
+so the test must arrange the state it wants to observe BEFORE quiescing
+(delivery failure keeps events pending), not assume quiesce is
+observationally neutral.
+
+**T3 — the test must pin the case it claims to pin.** The outbox
+dedup test used a no-op dispatcher while claiming to pin enqueue-time
+deduplication — a property only observable while delivery is FAILING (a
+succeeding dispatcher legitimately removes the event). T1 and T2 alone
+would have made the broken assertion deterministic. Choose fixture state
+so the property under test is both observable and stable.
+
+**T4 — verify by execution, under repetition, on the platform that
+failed.** Every hardening above was proven with `-race` repeats (20–50x)
+locally on the failing platform before push, and the pre-push gates re-run
+the suite under load. The same behavioral-over-inspection discipline exists
+for the hook shims: scripts/test-pre-push-failclosed.sh renders and
+EXECUTES the shim through its scenario battery instead of grepping for
+text — commit `c6ca2f01c90aeb42251a094ea32d71967f6cbf9e`.
+
+**Verified-clean classes (do not "fix" these):** negative windows (a
+must-NOT-happen assertion cannot flake — it can only miss a detection,
+which more waiting improves); rate-measurement windows that measure
+throughput over an interval; pacing sleeps that exist to trigger a
+rate-limit; deadline waits bounded by the monotonic clock (a sleep longer
+than a TTL cannot pass early); and poll loops that already poll a
+monotone property. The reap deadline-mint helpers (`mintDeadline`,
+`spinPastDeadline`, mirrored across the store and peerstore test
+packages) remain the reference implementation for wall-clock-step
+tolerance — commit `adfc03545f1a655edc575abba1d88b01ccf4d578`.
