@@ -49,16 +49,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Dispatches gate the pushed sha; workflow_call and manual runs default
-      # to the audited pin (7fcda6e: fabric F1+F2+F3 — freg/fput/fpop relay
+      # to the audited pin (2530e2a: fabric F1+F2+F3 — freg/fput/fpop relay
       # verbs behind `-fabric`, the spore-peer fabric client subcommand,
-      # --pidfile/--announce-addr, graceful shutdown (SIGTERM/Ctrl+Break),
-      # the H-N1 pointer-deadline horizon cap + sweep gate, and the
-      # --fabric-* operator knobs; every interop test here — the
+      # --pidfile/--announce-addr, graceful shutdown (SIGTERM/Ctrl+Break) —
+      # whose unix signal FFI is declared and cross-target typechecked —
+      # the H-N1 pointer-deadline horizon cap + sweep gate, the
+      # --fabric-* operator knobs, and the LF-pinned hook script; every
+      # interop test here — the
       # §5 wire contract, the fabric CLI roundtrip, and the F2
       # `spore fabric subscribe` cross-binary drain — needs the -fabric
       # serve from this pin). Full 40-char sha on the liqdmetal/spore-peer
       # default branch.
-      SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '7fcda6ef9ae0608a363e39c8b07a593518ccfc59' }}
+      SPORE_PEER_PIN: ${{ inputs.spore_peer_pin || github.event.client_payload.sha || '2530e2a63ca68ca5144c3f1f2599f339809dd046' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v7
