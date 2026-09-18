@@ -331,8 +331,39 @@ call_lefthook()
       # Fail CLOSED when this repo actually uses lefthook but no binary was
       # found: exiting 0 would silently skip the pre-push gate. Repos that
       # do not use lefthook stay a silent no-op (exit 0).
-      if test -f "$dir/lefthook.yml" || test -f "$dir/.lefthook.yml" || \
-         test -f "$dir/lefthook.yaml" || test -f "$dir/.config/lefthook.yml"
+      # The config set is lefthook's own search list from
+      # internal/config/loader.go: MainConfigNames + LocalConfigNames
+      # (lefthook, .lefthook, .config/lefthook [+ -local] variants) x
+      # Extensions (.yml .yaml .json .jsonc .toml). Keep in sync with the
+      # upstream template (PR evilmartians/lefthook#1549); the generated
+      # shim will converge with this when lefthook re-renders hooks.
+      found=""
+      for base in lefthook .lefthook .config/lefthook \
+                  lefthook-local .lefthook-local .config/lefthook-local
+      do
+        for ext in .yml .yaml .json .jsonc .toml
+        do
+          if test -f "$dir/$base$ext"
+          then
+            found=1
+            break
+          fi
+        done
+        if test -n "$found"
+        then
+          break
+        fi
+      done
+      if test -n "$LEFTHOOK_CONFIG"
+      then
+        # Match the loader's resolution: absolute paths (incl. UNC/rooted
+        # Windows forms) are used as-is; relative ones join the repo root.
+        # A missing override makes lefthook itself error out, so no-op here
+        # cannot bypass a working setup.
+        test -f "$LEFTHOOK_CONFIG" && found=1
+        test -f "$dir/$LEFTHOOK_CONFIG" && found=1
+      fi
+      if test -n "$found"
       then
         echo "ERROR: Operation is aborted due to lefthook settings."
         echo "Make sure lefthook is available in your environment and re-try."
