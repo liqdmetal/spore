@@ -110,5 +110,9 @@ if [ "$status" -eq 0 ]; then
   echo "no drift."
 else
   echo "DRIFT DETECTED — compare against scripts/hooks-manifest.sha256" >&2
+  # If the drifted hook is pre-push: a re-render from a pre-#1549 lefthook
+  # restores the fail-open shim — a regression, not progress. Prove any new
+  # shim with scripts/test-pre-push-failclosed.sh BEFORE regenerating
+  # (runbook: gen-hooks-backup.sh header; regeneration embeds what's live).
 fi
 exit "$status"

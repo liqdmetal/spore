@@ -328,6 +328,13 @@ call_lefthook()
     else
       echo "Can't find lefthook in PATH"
       dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      # Self-identify for scripts/test-pre-push-failclosed.sh (retirement
+      # plan in gen-hooks-backup.sh): lets the battery tell this hand-patch
+      # from a native render. Remove when a passing native render retires it.
+      if [ "$LEFTHOOK_CLAUDE_SHIM_ASSERT" = "1" ]; then
+        echo "LEFTHOOK_CLAUDE_SHIM_ASSERT: hand-patched fail-closed shim (spore f016bab)"
+        exit 1
+      fi
       # Fail CLOSED when this repo actually uses lefthook but no binary was
       # found: exiting 0 would silently skip the pre-push gate. Repos that
       # do not use lefthook stay a silent no-op (exit 0).
@@ -337,6 +344,8 @@ call_lefthook()
       # Extensions (.yml .yaml .json .jsonc .toml). Keep in sync with the
       # upstream template (PR evilmartians/lefthook#1549); the generated
       # shim will converge with this when lefthook re-renders hooks.
+      # Retirement runbook: gen-hooks-backup.sh header in the spore repo
+      # (battery: scripts/test-pre-push-failclosed.sh).
       found=""
       for base in lefthook .lefthook .config/lefthook \
                   lefthook-local .lefthook-local .config/lefthook-local

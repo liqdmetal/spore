@@ -20,6 +20,36 @@
 # prepare-commit-msg (surfacing as manifest drift). Catch: verify-hooks.sh
 # warnings. Cleanup: delete the stray file and the scratch clone, then
 # re-run this script if real hooks were also re-rendered.
+#
+# RETIREMENT PLAN for the pre-push hand-patch (2026-09-18) -------------------
+# The not-found guard in ~/.config/git/hooks/pre-push is a hand-patch for
+# lefthook 1.13.6's fail-open shim; upstream PR evilmartians/lefthook#1549
+# (open as of this writing) renders the guard natively. The patch must
+# retire — not fight — the native render:
+#
+#   TRIGGER (both must hold):
+#     a. PR #1549 is merged AND the installed lefthook version includes the
+#        fix (currently 1.13.6 locally, which predates it).
+#     b. A lefthook pass re-rendered the shim (manifest drift on pre-push)
+#        and the NEW shim passes scripts/test-pre-push-failclosed.sh.
+#   Until both hold, pre-push drift means a REGRESSION, not progress:
+#   restore the embedded body from install-global-hooks.sh, never regenerate.
+#
+#   STEPS (in order):
+#     1. Confirm trigger (a); after the next re-render, run
+#        sh scripts/test-pre-push-failclosed.sh against the new shim.
+#        All behavioral scenarios must pass. The battery's
+#        LEFTHOOK_CLAUDE_SHIM_ASSERT self-check going quiet ("assertion not
+#        claimed") is EXPECTED here — it is the hand-patch being gone.
+#     2. Re-run this script (it refuses to regenerate from a shim that
+#        fails the battery, below) and commit the pair together.
+#     3. Set RETIREMENT_DONE=1 in scripts/test-pre-push-failclosed.sh so
+#        the battery stops expecting the self-assertion, and commit that
+#        in the same change.
+#   ROLLBACK: restore the guarded body from install-global-hooks.sh's
+#   "pre-push (verbatim)" section, re-run the battery, regenerate.
+#   NEVER hand-edit a native render to keep the patch alive — that restarts
+#   the patch/fight cycle this plan exists to end.
 set -eu
 
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum not found" >&2; exit 2; }
@@ -37,6 +67,21 @@ done
   echo "missing fallback: $HOME/.config/git/pre-push.lfs.orig" >&2
   exit 2
 }
+
+# ---- fail-closed guard: refuse to embed a regression -----------------------
+# The pre-push shim's not-found branch MUST fail closed. A lefthook pass
+# from a pre-#1549 version re-renders the fail-open original; regenerating
+# from that would embed the regression into the installer and bless it in
+# the manifest. The battery doubles as this script's precondition and as
+# the retirement plan's verification gate (see header above).
+if ! sh "$ROOT/scripts/test-pre-push-failclosed.sh" "$HOOKS/pre-push" >/dev/null 2>&1; then
+  echo "REFUSING to regenerate: the live pre-push fails the fail-closed battery." >&2
+  echo "A lefthook pass probably re-rendered the fail-open shim (pre-#1549" >&2
+  echo "render), or the guard was otherwise lost. Restore the guarded body from" >&2
+  echo "install-global-hooks.sh (pre-push verbatim section), re-run" >&2
+  echo "scripts/test-pre-push-failclosed.sh, then regenerate." >&2
+  exit 1
+fi
 
 # ---- installer (hook bodies embedded verbatim) -----------------------------
 {
