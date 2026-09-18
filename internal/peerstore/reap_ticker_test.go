@@ -30,6 +30,32 @@ func holdBodyFiles(t *testing.T, dir string) []string {
 	return matches
 }
 
+// mintDeadline and spinPastDeadline are mirrors of the helpers in
+// internal/store/diskstore_subsecond_test.go (same mechanism, same anchor;
+// different package, so shared via copy): deadlines anchored just past a
+// second boundary survive CI wall-clock corrections, and the spin exits
+// strictly after the deadline with an explicit signature if the wall
+// clock steps backward instead of hanging or failing with a mystery
+// number. See the store copies for the full rationale.
+func mintDeadline() time.Time {
+	d := time.Now().Truncate(time.Second).Add(time.Second + 300*time.Millisecond)
+	if time.Until(d) < 700*time.Millisecond {
+		d = d.Add(time.Second)
+	}
+	return d
+}
+
+func spinPastDeadline(t *testing.T, deadline time.Time) {
+	t.Helper()
+	start := time.Now()
+	for !time.Now().After(deadline) {
+		if time.Since(start) > 2*time.Second {
+			t.Fatal("wall clock did not reach the deadline within 2s (stepped backward?)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestReapTickerCompostsExpiredBodiesWithoutAccess: with ReapEvery set, an
 // expired body must leave the disk on the ticker's cadence even though NO
 // one ever fetched it — the exact gap the on-access-only behavior left.
@@ -143,17 +169,12 @@ func TestReapTickerCompostsOnTheMillisecondDeadline(t *testing.T) {
 	defer s.Close()
 	addr := s.LocalAddr()
 
-	deadline := time.Now().Truncate(time.Second).Add(time.Second + 300*time.Millisecond)
-	// The seconds-floor read path refuses anything after the deadline's
-	// second boundary, so the whole pre-deadline phase (two Puts, the .expms
-	// stat, two wire fetches) must finish inside the anchor second. On a
-	// loaded -race runner that setup can outlive a late-anchored window and
-	// the first fetch would misreport "expired" (seen once on CI). When less
-	// than 700ms of the window remains, use the NEXT second's boundary:
-	// ≥1.3s of margin, same millisecond-precision assertions.
-	if time.Until(deadline) < 700*time.Millisecond {
-		deadline = deadline.Add(time.Second)
-	}
+	deadline := mintDeadline()
+	// Anchor at a second boundary (see mintDeadline above): the
+	// pre-deadline phase gets >=1.3s of margin against slow -race runners,
+	// and the deadline keeps >=700ms of sub-second room, so a wall-clock
+	// correction lands in padded zones instead of at a phase edge — the
+	// forward-step case that failed CI as "reaped 1 before the deadline".
 
 	alive := []byte("ticker must never touch me (unexpired)")
 	aliveCID := sha256.Sum256(alive)
@@ -186,11 +207,14 @@ func TestReapTickerCompostsOnTheMillisecondDeadline(t *testing.T) {
 		t.Fatalf("unexpired body disturbed before its time: %v", err)
 	}
 
-	// Cross the millisecond deadline (5ms spin — the whole test window stays
-	// inside one wall-clock second).
-	for time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	// Cross the millisecond deadline with the same strict comparison the
+	// store classifies by (After, not a Before-negation): exiting on
+	// equality would let a sample land exactly on the boundary and read the
+	// body back spuriously. The monotonic anchor bounds the spin if the
+	// wall clock steps backward mid-test (the spin fails with an explicit
+	// signature instead); the whole window still stays inside one
+	// wall-clock second.
+	spinPastDeadline(t, deadline)
 
 	// The ticker must compost within a few ticks. While the bytes are still
 	// on disk the read path classifies them expired (410 semantics); the

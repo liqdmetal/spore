@@ -35,6 +35,40 @@ func writeHolds(t *testing.T, s *DiskStore, cid [32]byte, body []byte, sec, ms i
 	}
 }
 
+// mintDeadline returns a wall-clock deadline ~300ms past a second boundary:
+// the caller's pre-deadline phase gets >=1.3s of margin and the deadline
+// itself keeps >=700ms of sub-second room before the next boundary. Fixed
+// now+300ms deadlines (the original shape) race CI clock corrections: a
+// forward wall step consumes the whole margin and the first classification
+// sees the hold as already expired ("reaped before the deadline", seen on
+// Windows -race). Anchoring at the boundary pads both phases; a residual
+// backward step is unobservable to wall-only tests and fails with an
+// explicit signature instead of a mysterious number. (Mirror of the helper
+// in internal/peerstore/reap_ticker_test.go — same mechanism, same anchor.)
+func mintDeadline() time.Time {
+	d := time.Now().Truncate(time.Second).Add(time.Second + 300*time.Millisecond)
+	if time.Until(d) < 700*time.Millisecond {
+		d = d.Add(time.Second)
+	}
+	return d
+}
+
+// spinPastDeadline advances to strictly after the wall-clock deadline using
+// the same comparison the store's classification uses (After, not a
+// Before-negation): exiting on equality would let one Get/Reap sample land
+// exactly on the millisecond boundary and fail spuriously. The monotonic
+// anchor bounds the spin even if the wall clock steps backward mid-test.
+func spinPastDeadline(t *testing.T, deadline time.Time) {
+	t.Helper()
+	start := time.Now()
+	for !time.Now().After(deadline) {
+		if time.Since(start) > 2*time.Second {
+			t.Fatal("wall clock did not reach the deadline within 2s (stepped backward?)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestDiskStoreSubSecondExpiryEnforcedAtRead: with a .expms deadline 300ms in
 // the future, Get must refuse (ErrExpired) once the deadline passes WITHOUT
 // the seconds-floor boundary being crossed — the exact case the old
@@ -42,13 +76,13 @@ func writeHolds(t *testing.T, s *DiskStore, cid [32]byte, body []byte, sec, ms i
 func TestDiskStoreSubSecondExpiryEnforcedAtRead(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(7)
-	deadline := time.Now().Add(300 * time.Millisecond)
+	deadline := mintDeadline()
 	writeHolds(t, s, cid, []byte("mid-second body"), deadline.Unix(), deadline.UnixMilli())
 
 	if _, err := s.Get(cid); err != nil {
 		t.Fatalf("before deadline, get = %v, want the body", err)
 	}
-	time.Sleep(400 * time.Millisecond) // crosses .expms; NOT the next second boundary necessarily
+	spinPastDeadline(t, deadline) // crosses .expms; NOT the next second boundary
 	if _, err := s.Get(cid); err != ErrExpired {
 		t.Fatalf("after ms deadline, get err = %v, want ErrExpired", err)
 	}
@@ -60,13 +94,13 @@ func TestDiskStoreSubSecondExpiryEnforcedAtRead(t *testing.T) {
 func TestDiskStoreSubSecondReapPromptness(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(8)
-	deadline := time.Now().Add(300 * time.Millisecond)
+	deadline := mintDeadline()
 	writeHolds(t, s, cid, []byte("reap me mid-second"), deadline.Unix(), deadline.UnixMilli())
 
 	if n := s.Reap(time.Now()); n != 0 {
-		t.Fatalf("reaped %d before the deadline, want 0", n)
+		t.Fatalf("reaped %d before the deadline, want 0 (wall clock stepped past the minted margin?)", n)
 	}
-	time.Sleep(400 * time.Millisecond)
+	spinPastDeadline(t, deadline)
 	if n := s.Reap(time.Now()); n != 1 {
 		t.Fatalf("reaped %d after the ms deadline, want 1", n)
 	}
