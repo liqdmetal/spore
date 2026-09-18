@@ -251,10 +251,15 @@ func isAuthError(err error) bool {
 }
 
 // DrainOnce is the subscribe tick: ensure the lease, drain, and return the
-// deduped pointers. Dedupe is by CID (bytes 34:66 of the pointer payload) so
-// a re-published pointer is ingested once. A 403/404 (lease expired
+// raw pointer payloads for the caller to dedupe and ingest. Dedupe moved to
+// the drain-union store (SeenCIDs, F3 / AUDIT-RELAYFABRIC R-N1): the old
+// per-client map could only dedupe within one (relay, handle), so N-relay
+// redundancy delivered the same CID once per relay, and a restart forgot
+// everything. The union keys by CID (bytes 34:66) and marks CONSUMED only —
+// the caller observes successes, so a pointer whose body fetch failed still
+// rides a redundant copy from another relay. A 403/404 (lease expired
 // server-side between renewals) triggers exactly one re-register + retry.
-func (c *Client) DrainOnce(ctx context.Context, seed [32]byte, lease time.Duration, seen map[string]bool) ([][]byte, error) {
+func (c *Client) DrainOnce(ctx context.Context, seed [32]byte, lease time.Duration) ([][]byte, error) {
 	if err := c.EnsureRegistered(ctx, seed, lease); err != nil {
 		return nil, err
 	}
@@ -268,17 +273,5 @@ func (c *Client) DrainOnce(ctx context.Context, seed [32]byte, lease time.Durati
 	if err != nil {
 		return nil, err
 	}
-	var out [][]byte
-	for _, p := range ptrs {
-		if len(p) < 66 {
-			continue
-		}
-		key := hex.EncodeToString(p[34:66])
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, p)
-	}
-	return out, nil
+	return ptrs, nil
 }

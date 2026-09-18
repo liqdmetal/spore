@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -253,7 +254,16 @@ func fabricSubscribe(args []string) {
 	// created by a chain-watcher FrameInit between ticks, a rotated epoch)
 	// join on the next pass with no restart.
 	clients := map[string]*fabric.Client{} // key: addr|handleHex
-	seen := map[string]map[string]bool{}   // per client key: drained CIDs
+	// Drain union (F3, AUDIT-RELAYFABRIC R-N1): ONE consumed-CID set across
+	// every relay and tick, persisted beside the ratchet state. The first
+	// copy of a pointer to ingest successfully consumes the CID; duplicates
+	// from other relays (or re-drains after a restart) are skipped BEFORE
+	// the body fetch — M relays cost ONE fetch, not M. Marked on success
+	// only: a pointer whose fetch failed stays unmarked, so a second
+	// relay's copy can still deliver it (the CONSUMED-set contract).
+	seenPath := filepath.Join(flagValueOr(fs, "state-dir", ""), "fabric-seen.txt")
+	seen := fabric.NewSeenCIDs(seenPath)
+	defer seen.Prune(time.Now())
 	// Pointers whose BODY fetch failed ride an in-process retry list — the
 	// same transient state the chain watcher queues. Bounded: attempts die
 	// at the pointer's own burn deadline (the relay composts then anyway).
@@ -265,6 +275,7 @@ func fabricSubscribe(args []string) {
 	retrying := map[string]fabricRetry{} // key: hex CID
 
 	drainOnce := func() {
+		seen.Prune(time.Now())
 		targets := fabricSessionTargets(ing.ep, seed, epoch, latestOnly)
 		for _, addr := range relays {
 			for handleHex, tgt := range targets {
@@ -277,17 +288,24 @@ func fabricSubscribe(args []string) {
 						continue
 					}
 					clients[key] = cl
-					if seen[key] == nil {
-						seen[key] = map[string]bool{}
-					}
 				}
-				ptrs, err := cl.DrainOnce(ctx, seed, lease, seen[key])
+				ptrs, err := cl.DrainOnce(ctx, seed, lease)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "fabric %s: drain: %v\n", addr, err)
 					continue
 				}
 				for _, raw := range ptrs {
+					// Drain-union gate: the first union-wide sighting consumes
+					// the CID; duplicates from other relays/ticks are skipped
+					// before FetchFrame can burn a body fetch.
+					if !seen.Observe(raw) {
+						continue
+					}
 					if retry, ok := ing.ingestPointer(raw, time.Now()); !ok {
+						// Ingest failed (body not yet available, ...): un-mark
+						// so another relay's copy stays eligible, and queue the
+						// bounded in-process retry as before.
+						seen.Forget(raw)
 						if retry.CID != ([32]byte{}) {
 							retrying[hex.EncodeToString(retry.CID[:])] = fabricRetry{raw: raw, deadline: retry.BurnDeadline, tries: 1}
 						}
@@ -297,12 +315,16 @@ func fabricSubscribe(args []string) {
 				}
 			}
 		}
-		// Retry pass: bodies whose stores only now hold the frame.
+		// Retry pass: bodies whose stores only now hold the frame. A retry
+		// attempt re-observes (it was un-marked at failure time) and forgets
+		// again on failure, keeping the union a CONSUMED set.
 		for cidHex, ent := range retrying {
+			seen.Observe(ent.raw)
 			if _, ok := ing.ingestPointer(ent.raw, time.Now()); ok {
 				delete(retrying, cidHex)
 				continue
 			}
+			seen.Forget(ent.raw)
 			ent.tries++
 			if ent.tries > 3 || (ent.deadline != 0 && uint64(time.Now().Unix()) >= ent.deadline) {
 				fmt.Fprintf(os.Stderr, "fabric: gave up on %s (deadline passed or unfetchable — message lost)\n", shortTx(cidHex))

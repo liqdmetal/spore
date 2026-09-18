@@ -82,6 +82,7 @@ func fabricDrainKit(t *testing.T) (bodyStore ratchetwire.BodyStore, recvEP *ratc
 	recvEP = newEP()
 	bodyStore = st
 	ptr, _, sess, err := sender.SendFirstSession(id, bundle, sig, []byte("handshake"), time.Now().Add(time.Hour))
+	fabricKitSender, fabricKitSession = sender, sess
 	if err != nil {
 		t.Fatal(err)
 	}
