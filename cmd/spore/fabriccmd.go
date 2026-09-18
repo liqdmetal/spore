@@ -206,6 +206,7 @@ func fabricSubscribe(args []string) {
 	registerFabricFlags(fs)
 	once := fs.Bool("once", false, "drain once and exit (no ticker loop)")
 	interval := fs.Duration("fabric-interval", 5*time.Second, "drain cadence")
+	jitterPct := fs.Int("fabric-jitter", 20, "drain cadence jitter percent (+/-N% per pass; 0 = fixed interval)")
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
 		check(err)
@@ -337,13 +338,23 @@ func fabricSubscribe(args []string) {
 		drainOnce()
 		return
 	}
-	tick := time.NewTicker(*interval)
-	defer tick.Stop()
+	// Jittered cadence (F3, AUDIT-RELAYFABRIC R-N2): a fixed drain interval
+	// is a timing signature a relay operator can read per handle. Each pass
+	// waits interval +/-N% (default 20, the shape internal/relay's backoff
+	// uses), so drain starts decorrelate across processes and relays. A
+	// timer, not a Ticker: the wait is recomputed per pass, and Ticker would
+	// also panic on an explicitly-zero interval.
+	if *interval <= 0 {
+		check(fmt.Errorf("-fabric-interval must be positive (got %s)", *interval))
+	}
 	for {
+		wait := fabric.JitteredInterval(*interval, *jitterPct, nil)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-tick.C:
+		case <-timer.C:
 			drainOnce()
 		}
 	}
