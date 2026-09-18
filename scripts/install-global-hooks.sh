@@ -20,6 +20,17 @@
 # scripts/gates.sh wiring and spore-peer's cargo gates). Escape hatches:
 #   LEFTHOOK=0 git push ...   |   git push --no-verify   |   git commit --no-verify
 #
+# MACHINE SETUP NOTE — remote URLs vs the global insteadOf rule: git config
+# on this machine rewrites scp-style SSH remotes back to HTTPS
+# (url.https://github.com/.insteadof git@github.com:), so a remote set as
+# git@github.com:owner/repo.git silently pushes over HTTPS and can fail
+# with "refusing to allow an OAuth App to create or update workflow" when
+# the gh credential lacks the workflow scope. Use the explicit ssh:// form,
+# which the rewrite rule does not match:
+#   git remote set-url origin ssh://git@github.com/owner/repo.git
+# Pass --push too if a separate pushurl was already set (plain set-url
+# then only changes fetch). Real case: liqdmetal/spore, 2026-09-18.
+#
 # After installing, the script self-verifies against
 # scripts/hooks-manifest.sha256 when it sits next to this installer, so a
 # bad or tampered install is caught immediately. Drift on any machine can
