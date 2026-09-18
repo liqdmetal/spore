@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,7 +263,15 @@ func TestFabricSubscribeCrossBinary(t *testing.T) {
 		"SPORE_CONFIG="+filepath.Join(dir, "absent-config.json"),
 	)
 	svc.Env = svcEnv
-	var svcOut bytes.Buffer
+	// Race-safe live output: os/exec streams Stdout and Stderr through
+	// SEPARATE copy goroutines, so sharing one bytes.Buffer and polling
+	// String() while the process runs is a data race (the release gate's
+	// -race run caught exactly that; local Windows timing never did).
+	// Guard every access — the retry/poll loops below read while the
+	// subscriber is still streaming.
+	var svcOutMu sync.Mutex
+	var svcOutBuf bytes.Buffer
+	svcOut := syncBuffer{mu: &svcOutMu, buf: &svcOutBuf}
 	svc.Stdout = &svcOut
 	svc.Stderr = &svcOut
 	if err := svc.Start(); err != nil {
@@ -323,4 +332,25 @@ func sporeBinLocal(t *testing.T) string {
 		t.Fatalf("go build for cross-binary test: %v\n%s", err, out)
 	}
 	return exe
+}
+
+// syncBuffer is a bytes.Buffer safe for one concurrent writer (os/exec's
+// copy goroutine) plus reads from the test goroutine while the subprocess
+// is still running. Both Stdout and Stderr point at the same value; the
+// mutex serializes the exec goroutines against each other and the polls.
+type syncBuffer struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
