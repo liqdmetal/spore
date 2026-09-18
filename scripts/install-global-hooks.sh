@@ -23,10 +23,14 @@
 # MACHINE SETUP NOTE — remote URLs vs the global insteadOf rule: git config
 # on this machine rewrites scp-style SSH remotes back to HTTPS
 # (url.https://github.com/.insteadof git@github.com:), so a remote set as
-# git@github.com:owner/repo.git silently pushes over HTTPS and can fail
-# with "refusing to allow an OAuth App to create or update workflow" when
-# the gh credential lacks the workflow scope. Use the explicit ssh:// form,
-# which the rewrite rule does not match:
+# git@github.com:owner/repo.git silently pushes over HTTPS and — when the
+# gh credential lacks the workflow scope — fails with "refusing to allow
+# an OAuth App to create or update workflow". Status 2026-09-18: that
+# scope has since been granted (gh auth refresh -s workflow, device flow)
+# and a live HTTPS push of workflow-file content was accepted, so HTTPS
+# works repo-wide — but it hinges on one OAuth credential staying scoped.
+# SSH is immune to both the rewrite rule and credential scopes; prefer the
+# explicit ssh:// form, which the rewrite rule does not match:
 #   git remote set-url origin ssh://git@github.com/owner/repo.git
 # Pass --push too if a separate pushurl was already set (plain set-url
 # then only changes fetch). Real case: liqdmetal/spore, 2026-09-18.
