@@ -2,9 +2,14 @@ name: ClusterFuzzLite cron tasks
 
 # Housekeeping required by the batch workflow (ClusterFuzzLite docs: batch
 # fuzzing must be paired with pruning — an unpruned corpus grows without
-# bound and slows every subsequent batch run). Coverage reports are omitted
-# for now: they only pay off with a storage-repo + gh-pages to publish to,
-# which is deliberately not configured yet.
+# bound and slows every subsequent batch run).
+#
+# Storage: same-repo branches per the docs' "Git repo for storage" section
+# — prune writes the minimized corpus back to cfl-corpus, coverage publishes
+# reports to gh-pages (viewable at
+# https://liqdmetal.github.io/spore/coverage/latest/report/linux/report.html).
+# No PAT: the storage repo is this workflow's own repo, so the default
+# token's contents: write covers both jobs with exactly one repo's scope.
 
 on:
   schedule:
@@ -12,7 +17,10 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch: {}
 
-permissions: read-all
+permissions:
+  # contents: write — prune pushes the minimized corpus to cfl-corpus and
+  # coverage publishes reports to gh-pages. Scoped to this repo only.
+  contents: write
 
 jobs:
   Pruning:
@@ -31,3 +39,33 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         fuzz-seconds: 600
         mode: 'prune'
+        storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/liqdmetal/spore.git
+        storage-repo-branch: cfl-corpus
+
+  Coverage:
+    # The report producer: publishes to gh-pages so PR fuzzing can do
+    # affected-fuzzer selection and the report is viewable on the web
+    # instead of riding 90-day artifacts. Runs after the day's batch so the
+    # report reflects a full corpus, on the pruned state.
+    runs-on: ubuntu-latest
+    steps:
+    - name: Build Fuzzers (coverage)
+      id: build
+      uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+      with:
+        language: go
+        sanitizer: coverage
+
+    - name: Run Fuzzers (coverage)
+      id: run
+      uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        fuzz-seconds: 600
+        mode: 'coverage'
+        sanitizer: 'coverage'
+        storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/liqdmetal/spore.git
+        storage-repo-branch: cfl-corpus
+        # storage-repo-branch-coverage defaults to gh-pages — named here so
+        # the publish target is explicit, not implicit.
+        storage-repo-branch-coverage: gh-pages

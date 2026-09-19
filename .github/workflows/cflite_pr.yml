@@ -10,7 +10,12 @@ name: ClusterFuzzLite PR fuzzing
 # Mode 'code-change' runs each fuzzer over the PR with the batch-produced
 # corpus as its starting point and reports only findings that reproduce on
 # main too (or on a continuous build when cflite_build.yml is enabled).
-# With no storage-repo configured, corpora ride run artifacts.
+#
+# Storage: PR fuzzing only ever READS — it downloads the batch corpus from
+# the cfl-corpus branch so PR fuzzing starts from accumulated structure.
+# It never uploads (code-change mode has no corpus upload), so this
+# workflow keeps permissions: read-all while batch/cron carry contents:
+# write for their uploads.
 
 on:
   pull_request:
@@ -59,3 +64,7 @@ jobs:
         # needs security-events: write, which the read-all grant above
         # deliberately does not carry. Findings fail the check itself — that
         # is the gate; SARIF annotations would be a second surface.
+        # Storage (read-only from this workflow): start from the batch
+        # corpus instead of cold seeds. No upload happens in this mode.
+        storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/liqdmetal/spore.git
+        storage-repo-branch: cfl-corpus

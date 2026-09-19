@@ -2,9 +2,14 @@ name: ClusterFuzzLite batch fuzzing
 
 # Batch mode: continuous fuzzing of main so a corpus builds up over time —
 # this is where CFL outgrows the 15s fuzz-smoke gate. Scheduled (not on
-# push) to keep every-push CI latency at the house budget; the corpus
-# persists between runs as run artifacts (no storage-repo until one is
-# wanted — see the docs' "Git repo for storage" section).
+# push) to keep every-push CI latency at the house budget.
+#
+# Storage: corpora persist to the cfl-corpus branch of THIS repo (same-repo
+# storage per the docs' "Git repo for storage" section — no PAT needed when
+# the storage repo is the workflow's own repo, so the default token carries
+# exactly one repo's write scope instead of a repo-scoped PAT's all-repo
+# scope). Git history is the retention mechanism: nothing expires at 90
+# days the way run artifacts do.
 #
 # NOTE (per ClusterFuzzLite docs): batch fuzzing must be paired with corpus
 # pruning — .github/workflows/cflite_cron.yml owns prune + coverage.
@@ -20,7 +25,10 @@ on:
   # target or importing a regression corpus.
   workflow_dispatch: {}
 
-permissions: read-all
+permissions:
+  # read-all + the storage write: batch mode uploads the corpus to the
+  # cfl-corpus branch. contents: write is scoped to this repo only.
+  contents: write
 
 jobs:
   BatchFuzzing:
@@ -47,3 +55,7 @@ jobs:
         mode: 'batch'
         sanitizer: ${{ matrix.sanitizer }}
         # output-sarif off: same permission reasoning as cflite_pr.yml.
+        # Storage: same-repo branch (see header). Token embedded in the URL
+        # per the docs' storage pattern; GitHub masks GITHUB_TOKEN in logs.
+        storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/liqdmetal/spore.git
+        storage-repo-branch: cfl-corpus
