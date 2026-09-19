@@ -309,13 +309,17 @@ is lying; this one doesn't.
 | Slice | Delivers | Gate |
 |---|---|---|
 | **F4a — transport seam: SHIPPED** | `FabricTransport` + `TCPTransport` + `MemTransport`; client state machine proven transport-agnostic (scripted-relay tests over the seam); the rpc2 method family (`Peer.FabricReg/FabricPut/FabricPop`) on the Rust relay behind the same cores as the JSON verbs, byte-exact frames pinned in `fabric_v1.rpc2_*` vectors, Go `CBORTransport` + `NewCBORClient` conformant, cross-binary Go-CBOR-client → Rust-relay test drives all three verbs over the second encoding | vectors extended first (the generator itself was caught pinning `false` for CBOR `true` — the Rust conformance test refused it); Go + Rust byte-exact conformance; cross-binary CBOR roundtrip green |
-| **F4b — cover traffic** | Poisson cover scheduler, per-pointer decoy bodies, `-fabric-cover-rph` / `-fabric-cover-fold`, independent-clock property pinned by tests | distribution-shape tests (no periodicity), drain-union interplay, recipient-cost bound |
+| **F4b — cover traffic: SHIPPED** | Poisson cover scheduler (`internal/fabric/cover.go`: inverse-transform Exp(λ) draws over an injected rng, independent of the drain ticker and jitter — the shape tests prove the exponential against exact per-bucket CDF mass and prove the jitter-uniform from the *same seed* has a different shape), per-pointer decoy bodies (crypto/rand minted, sha256 content-addressed like every body store, fresh CID per cover — never a global constant), `spore fabric cover` publisher loop mirroring the real send fan-out (relay × session × drain epoch, real seed-derived handles — a beacon handle would be observable as such and leave the real handle naked), `-fabric-cover-rph` (default 0 = off, no implicit default; hard-capped at 720/h), `-fabric-cover-fold` (Uniform[0, interval) draw, one per publish so dual-publish copies move together, off by default), drain-side `DecoyRoute` pre-filter before the drain union | distribution-shape tests (no periodicity — the anti-wig check: 39% of Exp mass below 2.5s where the jitter-uniform holds exactly zero), decoy non-constancy, fail-closed `FetchFrame` rejection, fan-out-mirror assertion, drain-union interplay (decoys never consume seen-state or a body fetch), recipient-cost bound (one local comparison — the store `Get` that precedes `FetchFrame`'s binding check never happens) |
 | **F4c — onion publish** | `fput2` verb (Rust + Go conformance), route descriptors, chain builder, asymmetric dual-publish defaults | hostile-layer tests (wrong-length, wrong-key, depth abuse, replay), vectors for layer construction, AUDIT-RELAYFABRIC F4 section |
 | **F4d — Iroh sidecar** | `spore-iroh-bridge` adapter process (client and relay flavors) behind the seam | adapter audit: sidecar sees client-visible surface only; loopback firewalling documented |
 
-Kill criteria, honestly: if F4b's recipient-side cost turns out to matter at
-real cover rates (it should not, at one failed decrypt per cover), or if F4c's
-layer crypto cannot reuse the body path's primitives without new code (it
-should, X25519+AEAD exist), the slice shrinks rather than grows. The fabric's
-availability story — N-relay redundancy — is never traded for metadata
-improvements; features that reduce redundancy are rejected by definition.
+Kill criteria, honestly: F4b's recipient-side cost turned out to be **zero**
+at the wire level (the `DecoyRoute` pre-filter means no fetch and no
+decrypt — the one-failed-decrypt-per-cover cost predicted above was
+removed by filtering before the fetch, which the shipped `FetchFrame`
+order made necessary anyway: its store `Get` precedes the route-binding
+check). The remaining criterion was F4c's: if the layer crypto cannot
+reuse the body path's primitives without new code (it should, X25519+AEAD
+exist), the slice shrinks rather than grows. The fabric's availability
+story — N-relay redundancy — is never traded for metadata improvements;
+features that reduce redundancy are rejected by definition.

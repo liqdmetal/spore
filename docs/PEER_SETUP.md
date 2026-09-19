@@ -200,9 +200,55 @@ so you can verify a tuning change on the running process:
 | `--fabric-max-lease` | 604800 (7d) | freg lease cap in seconds. A recipient re-registers at renewal; leases are memory-only (a restart clears them; clients re-register on their next drain — queues are NOT lost). |
 | `--fabric-fput-rate` | 60 | Per-IP publish rate per minute. fpop shares this window: both are unauthenticated parser paths and neither is cheaper to flood than the other. |
 | `--fabric-max-regs` | 50000 | Live registration budget. freg is unauthenticated, so this — not memory growth — is the DoS answer; a full budget answers 503 and never evicts others' registrations. |
-
 What a relay operator can and cannot learn: pointers are inert (the
 ratchet is the filter — a relay sees a public handle, timing, and a sender
 IP; never message content, never the session id). Running a relay exposes
 your IP to publishers and drainers exactly as running the body node
 exposes it to fetchers — same posture, one more port.
+
+## Sender cover traffic (F4b, optional)
+
+If you send over the fabric (`-route-fabric`), a first-hop relay sees your
+publish times per handle and can fingerprint your sending cadence. Cover
+traffic buries that signal: a small background loop publishes **decoy
+pointers** to the same handles at Poisson-drawn intervals, so the relay's
+view of your handle is a dense stream that hides the sparse real sends.
+
+Run it on the SENDER's machine, long-lived (screen/tmux/service), one loop
+per contact you fabric-send to:
+
+```
+spore fabric cover \
+  -fabric-seed <recipient's contact seed> \
+  -fabric-relay relay1.example.org:9000 -fabric-relay relay2.example.org:9000 \
+  -fabric-epoch 2 \
+  -cover-session <sid>,<sid> \
+  -fabric-cover-rph 2 \
+  -state-dir ~/.spore/state
+```
+
+- `-cover-session` — the session ids your sends actually use (`spore msg
+  sessions`). Cover parked on any other handle hides nothing; the loop
+  targets every relay × session × drain epoch (n and n−1), exactly like a
+  real send.
+- `-fabric-cover-rph` — cover events per hour. **Recommended: 2** for
+  personal handles. Cover must roughly dominate your real send rate, not
+  sprinkle: a rate wildly mismatched to your actual volume is its own
+  signal. There is no default — cover changes your node's public request
+  profile, so enabling it is a conscious choice. (Implementation caps the
+  rate at 720/h.)
+- Cost: ~3.5 KB/day of relay traffic at 2/h, plus a short-TTL decoy body
+  on your own disk (reaped automatically).
+- Your recipient's drain loop **pre-filters** decoys by route — cover
+  costs them one local comparison per decoy, never a fetch or decrypt.
+- `-fabric-cover-fold` (on `send-e2`/`reply-e2`) delays a real publish by
+  one Uniform[0, cover-interval) draw so it lands inside the cover stream —
+  trade up to a full cover interval of send latency for send-time hiding.
+  Off by default; if you enable it, the rate you pass here must match your
+  cover loop's `-fabric-cover-rph`.
+
+What cover does NOT do (docs/RELAY_FABRIC_F4.md §2): it does not hide your
+IP (decoys come from the same address), does not protect a recipient's
+drain dials at all, and does not defeat a global traffic observer. Volume
+itself remains a signal — five sends in an hour after a silent week shows
+through everything except fold.
