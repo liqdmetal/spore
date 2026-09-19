@@ -110,8 +110,9 @@ jobs:
             target: FuzzContinuityArtifactParsers
           - package: ./internal/anchor
             target: FuzzFromArguments
-          # wirefuzz: the standalone SPR2 parser targets (OSS-Fuzz mirrors
-          # these; keep the package in sync with projects/spore/build.sh).
+          # wirefuzz: the standalone SPR2 parser targets. Mirrored by
+          # ClusterFuzzLite (.clusterfuzzlite/) and the oss-fuzz fork's
+          # projects/spore — keep all three target lists in sync.
           - package: ./internal/wirefuzz
             target: FuzzFrameParse
           - package: ./internal/wirefuzz

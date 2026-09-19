@@ -1,0 +1,49 @@
+name: ClusterFuzzLite batch fuzzing
+
+# Batch mode: continuous fuzzing of main so a corpus builds up over time —
+# this is where CFL outgrows the 15s fuzz-smoke gate. Scheduled (not on
+# push) to keep every-push CI latency at the house budget; the corpus
+# persists between runs as run artifacts (no storage-repo until one is
+# wanted — see the docs' "Git repo for storage" section).
+#
+# NOTE (per ClusterFuzzLite docs): batch fuzzing must be paired with corpus
+# pruning — .github/workflows/cflite_cron.yml owns prune + coverage.
+# 1h/day split across four targets ≈ the upstream default cadence for a
+# project this size.
+
+on:
+  schedule:
+    # 03:10 UTC daily — off the collision minutes (pin-freshness owns
+    # Mondays 06:20 UTC; spore-peer-contract dispatches on demand).
+    - cron: '10 3 * * *'
+  # Manual dispatch so a fresh corpus can be forced after wiring a new
+  # target or importing a regression corpus.
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  BatchFuzzing:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer:
+        - address
+    steps:
+    - name: Build Fuzzers (${{ matrix.sanitizer }})
+      id: build
+      uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+      with:
+        language: go
+        sanitizer: ${{ matrix.sanitizer }}
+
+    - name: Run Fuzzers (${{ matrix.sanitizer }})
+      id: run
+      uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        fuzz-seconds: 3600
+        mode: 'batch'
+        sanitizer: ${{ matrix.sanitizer }}
+        # output-sarif off: same permission reasoning as cflite_pr.yml.

@@ -1,0 +1,61 @@
+name: ClusterFuzzLite PR fuzzing
+
+# ClusterFuzzLite — the maintainer-suggested successor to the declined
+# OSS-Fuzz upstream submission (google/oss-fuzz PR 16145, DavidKorczynski:
+# "Am not sure the project is mature enough for OSS-Fuzz ... I suggest
+# taking a look at ClusterFuzzLite"). Same libFuzzer binaries as the
+# fork's projects/spore build, but fuzzing runs HERE, on every PR, with
+# no upstream gate. Build integration lives in .clusterfuzzlite/.
+#
+# Mode 'code-change' runs each fuzzer over the PR with the batch-produced
+# corpus as its starting point and reports only findings that reproduce on
+# main too (or on a continuous build when cflite_build.yml is enabled).
+# With no storage-repo configured, corpora ride run artifacts.
+
+on:
+  pull_request:
+    paths:
+      # Build + fuzz only when the fuzzed code or its build recipe changed;
+      # docs-only PRs do not need a 10-minute fuzz bill.
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.clusterfuzzlite/**'
+      - '.github/workflows/cflite_pr.yml'
+
+permissions: read-all
+
+jobs:
+  PR:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer:
+        - address
+        # undefined runner builds the Go targets as well; keep one sanitizer
+        # in the PR gate until its cost is proven worth it.
+    steps:
+    - name: Build Fuzzers (${{ matrix.sanitizer }})
+      id: build
+      uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+      with:
+        language: go
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        sanitizer: ${{ matrix.sanitizer }}
+
+    - name: Run Fuzzers (${{ matrix.sanitizer }})
+      id: run
+      uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        fuzz-seconds: 600
+        mode: 'code-change'
+        sanitizer: ${{ matrix.sanitizer }}
+        # output-sarif stays at its false default: uploading to code scanning
+        # needs security-events: write, which the read-all grant above
+        # deliberately does not carry. Findings fail the check itself — that
+        # is the gate; SARIF annotations would be a second surface.
