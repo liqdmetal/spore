@@ -1,0 +1,162 @@
+name: pin freshness
+
+# The audited-pin tripwire, made automatic. spore-peer-contract.yml gates
+# spore against an AUDITED pin — a specific spore-peer sha — and advancing
+# that pin is a deliberate, reviewed act: dispatch the contract against
+# spore-peer main, watch it green, then move the pin. The failure mode this
+# workflow prevents is silent drift: spore-peer moves for weeks, no release
+# is cut, and the release gate keeps certifying an increasingly stale
+# relay. The v0.6.0 cycle proved both directions — dispatch caught two real
+# gate failures before a tag forced the question, and the pin was advanced
+# deliberately afterward.
+#
+# Weekly (Monday 06:20 UTC — an unusual minute on purpose; :00 collides
+# with every cron in the world):
+#   1. Extract the audited pin from spore-peer-contract.yml.
+#   2. Read spore-peer's main tip over HTTPS.
+#   3. Equal  -> exit 0 (nothing to do; this is the healthy case and the
+#                workflow stays quiet — no issue, no spam).
+#      Differ -> dispatch spore-peer-contract.yml (same repo, via its
+#                workflow_dispatch + spore_peer_pin input — no cross-repo
+#                token needed) with the tip as the pin. Green: a review-
+#                ready link. Red: even more urgent.
+#   4. Open/update ONE issue (label: pin-freshness) with both shas and the
+#      run link. Updated in place on later detections (never a pile of
+#      duplicates); auto-closed the next week if the pin catches up.
+#
+# Concurrency keeps one scheduled probe at a time; a run in flight is
+# replaced rather than queued (the next Monday's probe would only see
+# fresher state anyway).
+
+on:
+  schedule:
+    - cron: "20 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  actions: write # workflow_dispatch spore-peer-contract.yml (same repo)
+  contents: read
+  issues: write
+
+concurrency:
+  group: pin-freshness
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract the audited pin
+        id: pin
+        run: |
+          pin="$(curl -fsSL \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/.github/workflows/spore-peer-contract.yml" \
+            | grep -o "'[0-9a-f]\{40\}'" | head -1 | tr -d "'")"
+          if [ -z "$pin" ]; then
+            echo "::error::could not extract the audited pin from spore-peer-contract.yml (looking for a 40-hex quoted literal on the SPORE_PEER_PIN default)"
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Read spore-peer main tip
+        id: tip
+        run: |
+          tip="$(git ls-remote https://github.com/liqdmetal/spore-peer.git refs/heads/main | cut -f1)"
+          if [ -z "$tip" ]; then
+            echo "::error::could not read spore-peer main tip over HTTPS"
+            exit 1
+          fi
+          echo "tip=$tip" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        id: cmp
+        run: |
+          if [ "${{ steps.pin.outputs.pin }}" = "${{ steps.tip.outputs.tip }}" ]; then
+            echo "state=fresh" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=drifted" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe the contract against spore-peer main
+        if: steps.cmp.outputs.state == 'drifted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIP: ${{ steps.tip.outputs.tip }}
+        run: |
+          # Same-repo workflow_dispatch with the pin input — deliberately
+          # NOT a cross-repo repository_dispatch: the default GITHUB_TOKEN
+          # cannot act on liqdmetal/spore-peer, and no PAT belongs in this
+          # pipeline. The contract job's own env resolves
+          # inputs.spore_peer_pin first, so this run gates exactly the
+          # tip. Fire-and-forget by API design; the issue below carries
+          # the pointer to the runs list where its result lands.
+          gh workflow run spore-peer-contract.yml \
+            --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f "spore_peer_pin=$TIP"
+          # The probe run is the review artifact either way: green means
+          # "the pin can advance", red means "advance only with care".
+
+      - name: Manage the tripwire issue
+        # Always: a drifted-but-probe-failed run must still raise the issue
+        # (the probe failing does NOT mean the pin is fine). But only when
+        # the comparison actually ran — a pin-extraction failure must not
+        # post an issue with empty shas.
+        if: always() && steps.cmp.outputs.state != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN: ${{ steps.pin.outputs.pin }}
+          TIP: ${{ steps.tip.outputs.tip }}
+          STATE: ${{ steps.cmp.outputs.state }}
+        run: |
+          title="spore-peer pin has drifted from main"
+          label="pin-freshness"
+          gh label create "$label" --repo "$GITHUB_REPOSITORY" \
+            --description "audited spore-peer pin lags spore-peer main" \
+            --color D93F0B 2>/dev/null || true
+          if [ "$STATE" = "fresh" ]; then
+            # Healthy: close any open tripwire issue (the pin caught up),
+            # otherwise stay silent — no nagging on a fresh pin.
+            for n in $(gh issue list --repo "$GITHUB_REPOSITORY" \
+                       --label "$label" --state open --json number \
+                       -q '.[].number'); do
+              gh issue close "$n" --repo "$GITHUB_REPOSITORY" \
+                -c "Pin is fresh again (audited pin = spore-peer main = ${PIN:0:12}); auto-closing."
+            done
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The audited spore-peer pin in \`spore-peer-contract.yml\` no longer
+          matches spore-peer's \`main\` — the release gate is certifying a
+          stale relay surface.
+
+          | | sha |
+          |---|---|
+          | audited pin (spore-peer-contract.yml) | \`${PIN}\` |
+          | spore-peer main | \`${TIP}\` |
+
+          **How to advance (the deliberate act):**
+          1. Dispatch the contract against main — \`${TIP:0:12}\`:
+             \`gh workflow run spore-peer-contract.yml -f spore_peer_pin=${TIP}\`
+             (or Actions → "spore-peer wire contract" → Run workflow).
+          2. Watch it. Green = the pin can advance; red = advance only with
+             the failures understood.
+          3. Update the pin default in \`spore-peer-contract.yml\`, documenting
+             the new surface in the env comment, and commit \`ci(release): ...\`.
+          4. This issue auto-closes on the next weekly check once the pin is
+             fresh.
+
+          Probe dispatched against `${TIP:0:12}` by this run — see the
+          "spore-peer wire contract" runs in the Actions tab for its result
+          (dispatched with spore_peer_pin=${TIP}).
+          EOF
+          )"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" \
+                      --label "$label" --state open --json number \
+                      -q '.[].number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Still drifted as of this run: pin \`${PIN:0:12}\` vs main \`${TIP:0:12}\`. Probe re-dispatched."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body "$body" --label "$label"
+          fi

@@ -1,0 +1,20 @@
+name: 'doc-refs'
+description: >-
+  Verify that every commit hash cited in the docs listed in docs/refs.yml
+  resolves to a commit in this repository's history. Fails on typos, rebases,
+  stale pins, and ambiguous short hashes; lines containing `no-verify-hash`
+  are exempt. See README.md in this directory for the contract. Requires a
+  full-history checkout (fetch-depth: 0).
+inputs:
+  manifest:
+    description: 'Path to the refs manifest, relative to the repository root.'
+    required: false
+    default: 'docs/refs.yml'
+runs:
+  using: 'composite'
+  steps:
+    - id: verify
+      shell: bash
+      # Invoked via bash rather than executed directly: the vendored copy's
+      # exec bit is not guaranteed to survive every checkout/host.
+      run: 'bash "${{ github.action_path }}/verify_doc_refs.sh" "${{ inputs.manifest }}"'

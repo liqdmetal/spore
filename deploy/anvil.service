@@ -1,0 +1,12 @@
+[Unit]
+Description=Anvil local EVM dev node (mycelium verification)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/root/.foundry/bin/anvil --port 8545 --host 127.0.0.1
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
