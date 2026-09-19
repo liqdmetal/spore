@@ -118,6 +118,8 @@ jobs:
             target: FuzzHandshakeUnmarshal
           - package: ./internal/wirefuzz
             target: FuzzMessageUnmarshal
+          - package: ./internal/wirefuzz
+            target: FuzzFabricRPC2Frame
           # ratchetwire: the restored SecureWire seam targets (pin
           # enforcement, durable state, full roundtrip).
           - package: ./internal/ratchetwire

@@ -182,7 +182,7 @@ func (t *CBORTransport) RoundTrip(ctx context.Context, req Request) (Outcome, er
 	if err != nil {
 		return Outcome{}, err
 	}
-	msg, err := decodeRPC2Frame(resp)
+	msg, err := DecodeRPC2Frame(resp)
 	if err != nil {
 		return Outcome{}, err
 	}

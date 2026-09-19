@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // CBOR major types used by the rpc2 subset.
@@ -139,6 +140,13 @@ const rpc2MaxDepth = 64
 // decodeCBORItem decodes one CBOR item, returning the value and the byte
 // count consumed (measured consumption, mirroring p2p.rs decode_value:
 // no heuristics, indefinite lengths and reserved infos rejected).
+//
+// Allocation discipline: item sizes are bounded by the FRAME, never by the
+// attacker's declared length — maps and arrays are grown by append as real
+// items are decoded, so a 27-head claiming 2^64 elements costs O(bytes
+// present), not O(declared). Text is UTF-8-validated to match the Rust
+// decoder exactly (std::str::from_utf8 in p2p.rs): the two implementations
+// must accept the same frames, not merely the same bytes-into-structs.
 func decodeCBORItem(buf []byte, depth int) (any, int, error) {
 	if depth > rpc2MaxDepth {
 		return nil, 0, errRPC2Deep
@@ -189,19 +197,34 @@ func decodeCBORItem(buf []byte, depth int) (any, int, error) {
 	case cborMajorUint:
 		return n, pos, nil
 	case cborMajorText:
-		if uint64(pos)+n > uint64(len(buf)) {
+		// n > len(buf) — computed WITHOUT addition, so a near-2^64 length
+		// cannot wrap the check (the wrap made a huge-length frame pass
+		// truncation and panic in the allocator; caught by FuzzFabricRPC2
+		// Frame's seed corpus on its first run — the Rust decoder's
+		// checked_add was right all along).
+		if n > uint64(len(rest)) {
 			return nil, 0, errRPC2Truncated
 		}
-		return string(rest[:n]), pos + int(n), nil
+		// UTF-8 gate — byte-for-byte parity with the Rust decoder's
+		// std::str::from_utf8: invalid UTF-8 in a text item is malformed
+		// on both sides of the wire.
+		s := rest[:n]
+		if !utf8.Valid(s) {
+			return nil, 0, errRPC2Malformed
+		}
+		return string(s), pos + int(n), nil
 	case cborMajorBytes:
-		if uint64(pos)+n > uint64(len(buf)) {
+		if n > uint64(len(rest)) {
 			return nil, 0, errRPC2Truncated
 		}
 		b := make([]byte, n)
 		copy(b, rest[:n])
 		return b, pos + int(n), nil
 	case cborMajorArray:
-		arr := make([]any, 0, n)
+		// No capacity hint from n: the declared length is attacker input.
+		// A 27-head may claim 2^64 items while carrying none; append-grown
+		// slices bound allocation by the bytes actually present.
+		arr := make([]any, 0)
 		used := pos
 		for i := uint64(0); i < n; i++ {
 			item, u, err := decodeCBORItem(buf[used:], depth+1)
@@ -213,7 +236,9 @@ func decodeCBORItem(buf []byte, depth int) (any, int, error) {
 		}
 		return arr, used, nil
 	case cborMajorMap:
-		m := make(map[string]any, n)
+		// Same allocation discipline as arrays: size hints from a hostile
+		// head would turn a 9-byte frame into a multi-gigabyte map.
+		m := make(map[string]any)
 		used := pos
 		for i := uint64(0); i < n; i++ {
 			key, u, err := decodeCBORItem(buf[used:], depth+1)
@@ -260,11 +285,16 @@ type RPC2Message struct {
 	Payload any
 }
 
-// decodeRPC2Frame parses one rpc2 frame (the LE32 prefix is expected to be
+// DecodeRPC2Frame parses one rpc2 frame (the LE32 prefix is expected to be
 // stripped by the caller, matching the Rust read_frame boundary): a CBOR
 // header map {M,S,E} followed optionally by one payload item. A zero-
 // consumption decode is malformed by definition — same rule as Rust.
-func decodeRPC2Frame(body []byte) (RPC2Message, error) {
+//
+// Exported (F4a follow-up) as the hostile-frame entry point for the fuzz
+// target: the decoder is the relay-facing parse surface of the second
+// encoding, so it is fuzzed like the other wire parsers
+// (internal/wirefuzz, OSS-Fuzz projects/spore).
+func DecodeRPC2Frame(body []byte) (RPC2Message, error) {
 	var msg RPC2Message
 	head, used, err := decodeCBORItem(body, 0)
 	if err != nil {

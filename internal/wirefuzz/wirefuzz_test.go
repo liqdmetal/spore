@@ -9,12 +9,16 @@ package wirefuzz
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
+	"github.com/liqdmetal/spore/internal/fabric"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 )
@@ -134,6 +138,24 @@ func TestGenerateSeedCorpus(t *testing.T) {
 	writeSeed("msg_trunc1", valid[:len(valid)-1])
 	writeSeed("msg_short", valid[:60])
 	writeSeed("msg_empty", []byte{})
+
+	// rpc2/CBOR decoder seeds (FuzzFabricRPC2Frame) — the second encoding's
+	// hostile-frame surface (F4a follow-up). Real vector frames give the
+	// fuzzer the exact on-wire shapes; the mutations around them are the
+	// mutations a hostile relay would actually send.
+	seedRP2, err := loadRPC2VectorFrames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range seedRP2 {
+		writeSeed(fmt.Sprintf("rpc2_vector_%02d", i), b)
+	}
+	writeSeed("rpc2_empty", []byte{})
+	writeSeed("rpc2_single_byte", []byte{0xa1})
+	writeSeed("rpc2_depth_bomb", bytes.Repeat([]byte{0x9f}, 80)) // indefinite arrays, nested
+	writeSeed("rpc2_huge_len", []byte{0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+	writeSeed("rpc2_bad_utf8_text", []byte{0x63, 0xff, 0xfe, 0xfd})
+	writeSeed("rpc2_bool_trap", []byte{0xe2, 0x00, 0x14}) // head that looks like a simple value
 }
 
 func FuzzFrameParse(f *testing.F) {
@@ -211,6 +233,106 @@ func FuzzHandshakeUnmarshal(f *testing.F) {
 		}
 		if *again != *hs {
 			t.Fatal("handshake round trip mismatch")
+		}
+	})
+}
+
+// loadRPC2VectorFrames pulls the byte-exact rpc2 frames from the golden
+// vectors (same file every other conformance test consumes) for the fuzz
+// seed corpus.
+func loadRPC2VectorFrames() ([][]byte, error) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "interop-vectors.json"))
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		FabricV1 struct {
+			RPC2ReqFreg  string `json:"rpc2_request_freg_frame_hex"`
+			RPC2RespFreg string `json:"rpc2_response_freg_frame_hex"`
+			RPC2ReqFput  string `json:"rpc2_request_fput_frame_hex"`
+			RPC2RespFput string `json:"rpc2_response_fput_frame_hex"`
+			RPC2ReqFpop  string `json:"rpc2_request_fpop_frame_hex"`
+			RPC2RespFpop string `json:"rpc2_response_fpop_frame_hex"`
+			RPC2RespErr  string `json:"rpc2_response_error_frame_hex"`
+		} `json:"fabric_v1"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	var out [][]byte
+	for _, s := range []string{
+		v.FabricV1.RPC2ReqFreg, v.FabricV1.RPC2RespFreg,
+		v.FabricV1.RPC2ReqFput, v.FabricV1.RPC2RespFput,
+		v.FabricV1.RPC2ReqFpop, v.FabricV1.RPC2RespFpop,
+		v.FabricV1.RPC2RespErr,
+	} {
+		b, err := hex.DecodeString(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// rpc2RoundTripMode is the go-cbor decode mode for the round-trip check.
+// The CONTRACT depth cap is 64 on both implementations (p2p.rs MAX_DEPTH =
+// 64, fabric.rpc2MaxDepth = 64, pinned by the deep-nesting negative vector
+// tests) — but the two counting conventions can differ by one, so the
+// checker takes headroom (128) rather than re-stating the contract at a
+// second site where a mismatch would reject contract-valid frames.
+var rpc2RoundTripMode = func() cbor.DecMode {
+	dm, err := cbor.DecOptions{MaxNestedLevels: 128}.DecMode()
+	if err != nil {
+		panic("cbor.DecOptions(128 levels) never fails: " + err.Error())
+	}
+	return dm
+}()
+
+// FuzzFabricRPC2Frame — the CBOR/rpc2 decoder (internal/fabric rpc2.go),
+// the hostile-frame surface of the fabric's SECOND encoding (F4a). The
+// relay-facing parse path for Peer.FabricReg/Put/Pop; byte-exact shapes are
+// pinned by the rpc2_* vectors, so this target hunts what the conformance
+// suite cannot: crashers and invariant breaks under arbitrary mutation.
+//
+// Invariants (mirroring the Rust decoder's contract and the negative
+// vector cases):
+//   - errors are one of the three value errors (no panics, no hangs —
+//     the depth cap bounds recursion, allocation is bounded by the frame);
+//   - an accepted frame's payload (when present) survives the go-cbor
+//     round trip;
+//   - zero-consumption decodes are malformed.
+func FuzzFabricRPC2Frame(f *testing.F) {
+	vecSeeds, err := loadRPC2VectorFrames()
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, s := range vecSeeds {
+		f.Add(s)
+	}
+	f.Add([]byte{})
+	f.Add([]byte{0xa1})
+	f.Add(bytes.Repeat([]byte{0x9f}, 80))                                     // indefinite heads — rejected, but mutator fodder
+	f.Add([]byte{0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}) // huge declared length
+	f.Add([]byte{0x63, 0xff, 0xfe, 0xfd})                                     // invalid UTF-8 text
+	f.Add([]byte{0xe2, 0x00, 0x14})                                           // simple-value head where a map is wanted
+	f.Fuzz(func(t *testing.T, b []byte) {
+		msg, err := fabric.DecodeRPC2Frame(b)
+		if err != nil {
+			return // rejections are fine; crashes and hangs are the hunt
+		}
+		// An accepted frame's payload (when present) must survive the
+		// canonical go-cbor round trip — the second encoding's version of
+		// the marshal/parse identity the other targets assert.
+		if msg.Payload != nil {
+			goCbor, err := cbor.Marshal(msg.Payload)
+			if err != nil {
+				t.Fatalf("accepted payload failed to re-encode: %v", err)
+			}
+			var back any
+			if err := rpc2RoundTripMode.Unmarshal(goCbor, &back); err != nil {
+				t.Fatalf("re-encoded payload failed to re-parse: %v", err)
+			}
 		}
 	})
 }

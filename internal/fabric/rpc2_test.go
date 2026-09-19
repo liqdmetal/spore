@@ -121,7 +121,7 @@ func TestRPC2ResponseFramesMatchVectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		msg, err := decodeRPC2Frame(raw[4:]) // strip the LE32 prefix read_frame consumes
+		msg, err := DecodeRPC2Frame(raw[4:]) // strip the LE32 prefix read_frame consumes
 		if err != nil {
 			t.Fatalf("%s response decode: %v", name, err)
 		}
@@ -158,7 +158,7 @@ func TestRPC2ResponseFramesMatchVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	errMsg, err := decodeRPC2Frame(errRaw[4:])
+	errMsg, err := DecodeRPC2Frame(errRaw[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,13 +231,30 @@ func TestRPC2DecoderRefusesHostileFrames(t *testing.T) {
 		t.Fatal("truncated map accepted")
 	}
 	// A header map that is not a map is refused.
-	if _, err := decodeRPC2Frame(cborText("not a map")); err == nil {
+	if _, err := DecodeRPC2Frame(cborText("not a map")); err == nil {
 		t.Fatal("non-map header accepted")
 	}
 	// Unknown simple values (floats, undefined) never appear in fabric
 	// payloads and are refused.
 	if _, _, err := decodeCBORItem([]byte{0xf9, 0x3c, 0x00}, 0); err == nil {
 		t.Fatal("float16 accepted")
+	}
+	// A near-2^64 declared length must REFUSE, not wrap the truncation
+	// check and panic the allocator (found by FuzzFabricRPC2Frame's first
+	// seed run; the regression pins the wrap-free comparison — n is
+	// compared against the remaining bytes directly, never added).
+	huge := []byte{0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00}
+	if _, _, err := decodeCBORItem(huge, 0); err == nil {
+		t.Fatal("huge declared byte length accepted (length check wrapped)")
+	}
+	hugeText := []byte{0x7b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	if _, _, err := decodeCBORItem(hugeText, 0); err == nil {
+		t.Fatal("huge declared text length accepted (length check wrapped)")
+	}
+	// The UTF-8 gate: text items carrying invalid UTF-8 are malformed,
+	// byte-for-byte parity with the Rust decoder's from_utf8.
+	if _, _, err := decodeCBORItem([]byte{0x63, 0xff, 0xfe, 0xfd}, 0); err == nil {
+		t.Fatal("invalid UTF-8 text accepted (Rust decoder refuses it)")
 	}
 }
 
@@ -262,7 +279,7 @@ func TestRPC2TransportVectorRoundTripOnSocket(t *testing.T) {
 			return
 		}
 		// The request must decode to the pinned semantic payload.
-		msg, derr := decodeRPC2Frame(req)
+		msg, derr := DecodeRPC2Frame(req)
 		if derr != nil || msg.Method != "Peer.FabricPut" {
 			return
 		}
