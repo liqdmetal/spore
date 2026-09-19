@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -46,6 +47,8 @@ func fabricCmd(args []string) {
 	switch args[0] {
 	case "subscribe":
 		fabricSubscribe(args[1:])
+	case "cover":
+		fabricCover(args[1:])
 	case "handle":
 		fabricHandle(args[1:])
 	default:
@@ -60,6 +63,9 @@ func fabricUsage() {
   subscribe     register at relays and drain pointers into E2 ingestion
                 (the recipient's half of the relay fabric; pairs with
                 -route-fabric on send)
+  cover         run the publisher-side cover-traffic loop (F4b):
+                Poisson-drawn decoy fputs at the real handles
+                (-fabric-cover-rph; see docs/RELAY_FABRIC_F4.md)
   handle        derive the fabric handle for a contact seed (send-side use)
 `)
 }
@@ -74,6 +80,7 @@ func registerFabricFlags(fs *flag.FlagSet) {
 	fs.Bool("fabric-latest-only", false, "drain ONLY epoch n (skip n-1); use when every pre-rotation pointer has burned")
 	fs.Duration("fabric-lease", 72*time.Hour, "fabric registration lease to request (relays cap at 7d)")
 	fs.String("fabric-relay", "", "fabric relay host:port to drain (repeatable: -fabric-relay a -fabric-relay b)")
+	fs.String("fabric-decoy-skip-file", "", "optional decoy-route filter file (64-hex routes, one per line); the default filter already covers the shipped cover route (F4b)")
 }
 
 // fabricSeedHex resolves the contact seed from flags or, absent both, from
@@ -265,6 +272,13 @@ func fabricSubscribe(args []string) {
 	seenPath := filepath.Join(flagValueOr(fs, "state-dir", ""), "fabric-seen.txt")
 	seen := fabric.NewSeenCIDs(seenPath)
 	defer seen.Prune(time.Now())
+	// Decoy pre-filter (F4b): cover pointers bind a constant route the
+	// ratchet can never accept. Skipping them BEFORE the drain-union means
+	// decoys never touch seen-state, never burn a body fetch (FetchFrame's
+	// store Get precedes its route-binding check), and never reach ratchet
+	// state. Recipient-side cost of sender cover: one local comparison.
+	decoyRoutes, derr := fabric.ReadDecoySkipFile(flagValueOr(fs, "fabric-decoy-skip-file", ""))
+	check(derr)
 	// Pointers whose BODY fetch failed ride an in-process retry list — the
 	// same transient state the chain watcher queues. Bounded: attempts die
 	// at the pointer's own burn deadline (the relay composts then anyway).
@@ -296,6 +310,12 @@ func fabricSubscribe(args []string) {
 					continue
 				}
 				for _, raw := range ptrs {
+					// Decoy pre-filter (F4b) BEFORE the drain union: a decoy
+					// must not consume seen-state or a body fetch. Malformed
+					// pointers are NOT treated as decoys — ingest reports them.
+					if isDecoy(raw, decoyRoutes) {
+						continue
+					}
 					// Drain-union gate: the first union-wide sighting consumes
 					// the CID; duplicates from other relays/ticks are skipped
 					// before FetchFrame can burn a body fetch.
@@ -448,14 +468,67 @@ func fabricSendConfig(fs *flag.FlagSet, to string) (*fabricSendRoute, error) {
 	if f := fs.Lookup("fabric-epoch"); f != nil {
 		epochN = flagUint(f)
 	}
-	return &fabricSendRoute{seed: seed, relays: relays, epochs: fabricEpochs(epochN, false)}, nil
+	// Fold setup: validated eagerly so a misconfigured fold fails before
+	// the message is committed anywhere (the fabricSendConfig discipline).
+	fold := false
+	var coverSched *fabric.CoverScheduler
+	if f := fs.Lookup("fabric-cover-fold"); f != nil && f.Value.String() == "true" {
+		fold = true
+	}
+	if fold {
+		rph, rerr := resolveCoverRPH(fs, contact)
+		if rerr != nil {
+			return nil, rerr
+		}
+		cs, cerr := fabric.NewCoverScheduler(rph, nil, nil)
+		if cerr != nil {
+			return nil, cerr
+		}
+		coverSched = cs
+	}
+	return &fabricSendRoute{seed: seed, relays: relays, epochs: fabricEpochs(epochN, false), fold: fold, coverSched: coverSched}, nil
+}
+
+// waitFoldReal is the production fold wait: the full delay unless the
+// caller's context is cancelled first (a cancelled fold publishes
+// immediately — never silently drops the message).
+func waitFoldReal(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "route-fabric: fold wait cancelled — publishing immediately")
+	case <-timer.C:
+	}
+}
+
+// resolveCoverRPH reads the sender's cover rate for fold scaling from the
+// command line (-fabric-cover-rph, the same flag `fabric cover` uses). A
+// zero/negative rate makes fold impossible to honor — the fold delay cap
+// comes from the cover interval — so it is a hard error.
+func resolveCoverRPH(fs *flag.FlagSet, contact maildb.Contact) (float64, error) {
+	var rph float64
+	if f := fs.Lookup("fabric-cover-rph"); f != nil {
+		if v, err := strconv.ParseFloat(f.Value.String(), 64); err == nil {
+			rph = v
+		}
+	}
+	if rph <= 0 {
+		return 0, fmt.Errorf("-fabric-cover-fold requires -fabric-cover-rph > 0 (the fold delay is scaled by the cover interval; the sender's cover loop should be running at the same rate)")
+	}
+	return rph, nil
 }
 
 // fabricSendRoute is the resolved -route-fabric configuration for one send.
 type fabricSendRoute struct {
-	seed   [32]byte
-	relays []string
-	epochs []uint32
+	seed       [32]byte
+	relays     []string
+	epochs     []uint32
+	fold       bool
+	coverSched *fabric.CoverScheduler
+	// waitFold blocks for the fold delay; nil = the production wait
+	// (cancellation-aware). Tests replace it to capture the draw.
+	waitFold func(ctx context.Context, d time.Duration)
 }
 
 // flagUint reads a uint FlagSet flag across Go versions: uintValue.Get()
@@ -501,9 +574,27 @@ func fabricRelayListFrom(csv string) ([]string, error) {
 // RELAY_FABRIC "Publish": at least one accepted relay means the fabric route
 // worked; zero accepted means the chain pointer still delivered, so this
 // only WARNS. Dedupe is the relay's (handle, CID) contract: re-sends refresh.
+//
+// Fold (F4b, -fabric-cover-fold): when the sender's cover loop is running
+// (route.coverRPH > 0) and the flag is set, the publish waits one
+// Uniform[0, one-cover-interval) draw — the mean is half a cover interval —
+// so the real fput lands INSIDE the cover stream instead of spiking above
+// it. One draw per call, so the dual-publish copies move together. Off by
+// default: it trades up to a full cover interval of latency for send-time
+// hiding, and that is the operator's conscious trade.
 func fabricPublishPointer(ctx context.Context, route *fabricSendRoute, sid [8]byte, raw []byte) {
 	if route == nil || len(raw) != 74 {
 		return
+	}
+	if route.fold && route.coverSched != nil {
+		if d := route.coverSched.FoldDelay(); d > 0 {
+			fmt.Printf("route-fabric: folding send into cover stream (delay %s)\n", d)
+			wait := route.waitFold
+			if wait == nil {
+				wait = waitFoldReal
+			}
+			wait(ctx, d)
+		}
 	}
 	deadline := time.Unix(int64(binary.LittleEndian.Uint64(raw[66:74])), 0)
 	accepted := 0

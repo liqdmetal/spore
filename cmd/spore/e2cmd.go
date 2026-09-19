@@ -374,6 +374,8 @@ func e2Common(fs *flag.FlagSet) {
 	// metadata relief, never a replacement. Requires the contact card to
 	// carry a fabric seed + relay list (saved by `msg mail add -invite`).
 	fs.Bool("route-fabric", false, "also queue the pointer at the recipient's relay-fabric handles (contact card must carry a fabric seed + relays)")
+	fs.Bool("fabric-cover-fold", false, "delay the fabric publish by a Uniform[0, cover-interval) draw so the real fput lands inside the sender's cover stream (F4b; requires -fabric-cover-rph and the recipient running `spore fabric cover` at the same rate)")
+	fs.Float64("fabric-cover-rph", 0, "sender's cover rate in events/hour (scales -fabric-cover-fold; MUST match the rate the operator's `spore fabric cover` loop runs at)")
 	fs.Uint("fabric-epoch", 1, "current fabric epoch n for -route-fabric (dual-publishes to n and n-1; must match the recipient's epoch)")
 }
 
