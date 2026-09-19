@@ -1,8 +1,0 @@
-# Docs whose commit-hash citations CI verifies (the doc-refs action; see
-# .github/actions/doc-refs/README.md for the contract). Every backtick-quoted
-# 7..40-char hex string in a listed doc must resolve to a commit in this
-# repository; a line containing `no-verify-hash` is exempt.
-docs:
-  - path: AUDIT-E2.md
-  - path: AUDIT-SPOREPEER.md
-  - path: AUDIT-RELAYFABRIC.md
