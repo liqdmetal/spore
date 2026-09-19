@@ -126,7 +126,11 @@ remaining; it does not re-state live status.*
 Closed since drafting: **Windows CI and release provenance** (Windows
 build+vet+test and `-race` jobs in CI; keyless SLSA attestation on release
 artifacts) and **bounded parsers** (E2 wire bounds + fuzz-smoke targets;
-continuity strict decode with size caps).
+continuity strict decode with size caps). Continuous fuzzing runs via
+ClusterFuzzLite (PR code-change mode on every fuzzed-code PR, daily batch
++ prune on main) after the OSS-Fuzz upstream submission was declined as
+premature (google/oss-fuzz PR 16145) — same libFuzzer binaries, no
+upstream gate.
 
 ### Product roadmap after the evidence gates
 
