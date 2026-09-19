@@ -1,0 +1,62 @@
+# Build artifacts
+dist/
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/spore
+/spore-*
+/compost-linux-amd64
+
+# Cross-compiled / scratch test binaries (no extension on Linux targets, so
+# *.exe does not catch them). Named forms used for local verification:
+# sp_linux_amd64, sp_android_arm64, sp_ux.exe, sp_fix.exe, ...
+/sp_*
+/sp-*/
+
+# Solidity / Foundry build output (regenerable from contracts/*.sol)
+out/
+cache/
+
+# Go workspace / coverage
+*.coverprofile
+coverage.*
+vendor/
+
+# LOCAL SECRETS + RUNTIME STATE — never commit these. These are exactly the
+# files `spore panic` wipes: identity/spk/state keys, the OPK pool, the
+# encrypted session-state dir, the local mail store, and the offline spool.
+*.key
+state/
+*.state
+opk-pool.json
+prekey.json
+prekey-batch.json
+batch*.json
+mail.json
+maildb.json
+spool/
+messages.log
+
+# Mailbox / relay runtime dirs
+mailbox-data/
+relay-data/
+
+# Solana signer keypairs (deploy uses an offline keypair, never committed)
+solana-program/*-keypair.json
+solana-program/target/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# local gate-latency log (scripts/gates.sh)
+.gate-timings.csv

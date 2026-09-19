@@ -1,0 +1,15 @@
+[Unit]
+Description=Monero Daemon (pruned)
+After=network.target
+
+[Service]
+Type=simple
+User=monero
+Group=monero
+ExecStart=/opt/monero/monerod --prune-blockchain --data-dir /var/lib/monero --restricted-rpc --rpc-bind-ip 127.0.0.1 --rpc-bind-port 18081 --p2p-bind-ip 0.0.0.0 --p2p-bind-port 18080 --confirm-external-bind --non-interactive
+Restart=on-failure
+RestartSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

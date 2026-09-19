@@ -1,0 +1,58 @@
+# Line-ending policy — explicit, so it cannot depend on a machine's git config.
+#
+# Windows dev boxes here have core.autocrlf=true from the SYSTEM gitconfig
+# (C:/Program Files/Git/etc/gitconfig). With no .gitattributes file that makes
+# git rewrite tracked files to CRLF on every touch, so `git status` reports
+# phantom "modified" entries that are really only line-ending churn. That noise
+# buries real changes in review and makes `git add .` dangerous.
+#
+# Declaring eol=lf here overrides core.autocrlf for every clone, on every OS.
+* text=auto eol=lf
+
+# Binary assets: never normalize, never diff as text.
+*.so    binary
+*.exe   binary
+*.dll   binary
+*.dylib binary
+*.bin   binary
+*.db    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+
+# Golden wire-format vectors. Byte-exact LF is load-bearing: these are consumed
+# by independent implementations (Rust spore-peer) as a conformance fixture, so
+# an incidental line-ending rewrite would corrupt cross-implementation checks.
+docs/interop-vectors.json text eol=lf
+
+# Generated but text, and worth diffing.
+go.sum        text eol=lf
+Cargo.lock    text eol=lf
+
+# Go sources: always LF.
+*.go  text eol=lf
+*.mod text eol=lf
+
+# Shell/systemd units deployed to Linux hosts must never gain CRLF — a CRLF
+# shebang or ExecStart line fails on the target host in a way that is painful
+# to diagnose.
+*.sh       text eol=lf
+*.service  text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+
+# Docs / config.
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf

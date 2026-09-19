@@ -1,0 +1,265 @@
+name: CI
+
+permissions:
+  contents: read
+
+
+on:
+  # Pushes to main run the gate. Tag pushes don't: a tag fires the Release
+  # workflow, whose pipeline is the tag's gate, and the tagged commit's CI
+  # already ran when it landed on main — running CI on the tag ref only ever
+  # duplicated that run. PRs run on their merge-refs; the concurrency group
+  # still cancels superseded runs on the same ref.
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded PR runs (same branch, newer commit) instead of letting
+# stale runs grind to completion.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # First signal: the fast, uninstrumented suite. Build/vet/test breakage
+  # surfaces here in minutes; the -race jobs below then double-check the
+  # same commit under the race detector without delaying this result.
+  test:
+    name: build + vet + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          # Pin to the repo's own go.mod directive so CI and dev never drift.
+          go-version-file: go.mod
+          # Built-in module/build cache is keyed off go.mod/go.sum.
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        # Blocking: vet is currently clean, keep it that way.
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  # The race pass runs as its own job so its slower instrumented build never
+  # gates the fast signal above. spore is networky (mailbox host, peers) —
+  # race detection is cheap here and catches the cross-goroutine bugs that
+  # matter most. Build and vet already passed on this exact commit in `test`.
+  test-race:
+    name: build + vet + test -race
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test (race)
+        # -race recompiles everything it needs; no separate build/vet steps.
+        run: go test -race ./...
+
+  windows:
+    name: Windows build + vet + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  windows-race:
+    name: Windows test -race
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test (race)
+        # Same commit already built and vetted on Windows by `windows`.
+        run: go test -race ./...
+
+  # The other half of the wire contract: liqdmetal/spore-peer (Rust) is the
+  # reference transport spore's peerstore speaks (WIRE_SPEC §5). The job body
+  # lives only in spore-peer-contract.yml — the same definition also gates
+  # spore-peer pushes via repository_dispatch — so the two call sites cannot
+  # drift apart. The audited pin lives in that file too.
+  spore-peer:
+    name: spore-peer Rust + wire contract
+    uses: ./.github/workflows/spore-peer-contract.yml
+
+  fuzz-smoke:
+    name: Fuzz smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One target finding a crash must not mask the others.
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/continuity
+            target: FuzzContinuityArtifactParsers
+          - package: ./internal/anchor
+            target: FuzzFromArguments
+          # wirefuzz: the standalone SPR2 parser targets. Mirrored by
+          # ClusterFuzzLite (.clusterfuzzlite/) and the oss-fuzz fork's
+          # projects/spore — keep all three target lists in sync.
+          - package: ./internal/wirefuzz
+            target: FuzzFrameParse
+          - package: ./internal/wirefuzz
+            target: FuzzHandshakeUnmarshal
+          - package: ./internal/wirefuzz
+            target: FuzzMessageUnmarshal
+          - package: ./internal/wirefuzz
+            target: FuzzFabricRPC2Frame
+          # ratchetwire: the restored SecureWire seam targets (pin
+          # enforcement, durable state, full roundtrip).
+          - package: ./internal/ratchetwire
+            target: FuzzWireRoundtrip
+          - package: ./internal/ratchetwire
+            target: FuzzWirePinEnforcement
+          - package: ./internal/ratchetwire
+            target: FuzzWireMalformedFrames
+          - package: ./internal/ratchetwire
+            target: FuzzDurableEndpointRoundtrip
+          - package: ./internal/ratchetwire
+            target: FuzzEndpointFullRoundTrip
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Fuzz ${{ matrix.target }} (15s smoke)
+        # Anchored -fuzz pattern: must match exactly one target per package.
+        run: go test ${{ matrix.package }} -run=^$ -fuzz=^${{ matrix.target }}$ -fuzztime=15s
+
+
+  windows-release:
+    name: Windows release binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build release binary
+        run: go build -ldflags="-s -w" -o dist/spore.exe ./cmd/spore
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: spore-windows-amd64
+          path: dist/spore.exe
+          retention-days: 7
+
+  linux-release:
+    name: Linux release binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build release binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/spore ./cmd/spore
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: spore-linux-amd64
+          path: dist/spore
+          retention-days: 7
+
+  release-manifest:
+    name: Release manifest
+    needs: [windows-release, linux-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: spore-*
+          path: dist/
+      - name: Generate SHA256 manifest
+        # download-artifact (v4 through v7) nests each artifact in its own
+        # subdirectory
+        # (dist/spore-windows-amd64/spore.exe, ...). A flat `sha256sum *`
+        # matches those DIRECTORY names too and exits 1. Flatten every file
+        # up one level, drop the emptied dirs, then hash only top-level files.
+        run: |
+          cd dist
+          find . -mindepth 2 -type f -exec mv {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          find . -maxdepth 1 -type f -name 'spore*' -print0 | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: spore-SHA256SUMS
+          path: dist/SHA256SUMS
+          retention-days: 7
+  gofmt:
+    name: gofmt (blocking gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        # Blocking since the backlog was drained: any file gofmt would
+        # rewrite fails the build immediately.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite:" "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+  audit-refs:
+    name: audit doc commit refs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The audit docs pin findings to the commits that fixed them; the
+          # check below resolves each cited hash against history, so a
+          # shallow clone would report everything missing.
+          fetch-depth: 0
+      - name: Verify every commit hash cited in the manifest docs resolves
+        # Fails on typos, rebases, stale pins, and ambiguous short hashes
+        # (.github/actions/doc-refs; mark a non-commit hex string with
+        # `no-verify-hash` on its line). Manifest: docs/refs.yml.
+        uses: ./.github/actions/doc-refs
+
+  goimports:
+    name: goimports (import-section gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check import grouping
+        # goimports = gofmt + canonical import sectioning (stdlib /
+        # third-party / module-internal groups, alphabetized) — the layer
+        # gofmt deliberately does not enforce. Pinned to v0.28.0: the newest
+        # release whose go directive the repo's Go 1.23 satisfies, so CI
+        # doesn't silently toolchain-switch the way @latest does.
+        run: |
+          go install golang.org/x/tools/cmd/goimports@v0.28.0
+          unformatted=$("$(go env GOPATH)/bin/goimports" -l .)
+          if [ -n "$unformatted" ]; then
+            echo "goimports would rewrite:" "$unformatted"
+            "$(go env GOPATH)/bin/goimports" -d $unformatted
+            exit 1
+          fi
