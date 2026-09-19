@@ -10,11 +10,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -29,8 +27,11 @@ const renewalWindow = 5 * time.Minute
 const maxDrain = 64
 
 // Client is one fabric relay connection set. Safe for concurrent use.
+// The wire ride is pluggable (F4a's FabricTransport seam): NewClient dials
+// TCP exactly as always; NewClientOn runs the identical state machine over
+// any transport (in-memory for hermetic tests; the F4d sidecars later).
 type Client struct {
-	addr string
+	tr FabricTransport
 
 	mu      sync.Mutex
 	handle  string // lowercase hex
@@ -42,15 +43,27 @@ type Client struct {
 // NewClient builds a client for the relay at addr. The handle derives from
 // (seed, epoch, sid); the token is bound to a nonce at Register time.
 func NewClient(addr string, seed [32]byte, epoch uint32, sid [8]byte) (*Client, error) {
+	return NewClientOn(NewTCPTransport(addr), seed, epoch, sid)
+}
+
+// NewClientOn builds a client over an arbitrary transport. The state machine
+// — lease renewal window, one re-register + retry on auth refusals, drain
+// batching — is transport-agnostic by construction: nothing below this line
+// knows how requests move.
+func NewClientOn(tr FabricTransport, seed [32]byte, epoch uint32, sid [8]byte) (*Client, error) {
 	handle, err := FabricHandle(seed, epoch, sid)
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
-		addr:   addr,
+		tr:     tr,
 		handle: hex.EncodeToString(handle[:]),
 	}, nil
 }
+
+// Close releases the underlying transport (a no-op for TCP and in-memory;
+// sidecar transports own real resources).
+func (c *Client) Close() error { return c.tr.Close() }
 
 // Handle returns the lowercase-hex fabric handle this client publishes under.
 func (c *Client) Handle() string { return c.handle }
@@ -86,39 +99,14 @@ func readFrame(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// verb sends one fabric verb and returns the parsed payload on 0x00, or an
-// error carrying the relay's verbatim status string.
-func (c *Client) verb(ctx context.Context, req map[string]any) (map[string]any, error) {
-	d := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", c.addr)
-	if err != nil {
-		return nil, fmt.Errorf("fabric: dial %s: %w", c.addr, err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-	payload, err := json.Marshal(req)
+// verb sends one fabric verb over the transport and returns the parsed
+// payload on success, or an error carrying the relay's verbatim status string.
+func (c *Client) verb(ctx context.Context, verbName string, req map[string]any) (map[string]any, error) {
+	out, err := c.tr.RoundTrip(ctx, Request{Verb: verbName, Payload: req})
 	if err != nil {
 		return nil, err
 	}
-	if err := writeFrame(conn, payload); err != nil {
-		return nil, err
-	}
-	resp, err := readFrame(conn)
-	if err != nil {
-		return nil, err
-	}
-	if len(resp) == 0 {
-		return nil, errors.New("fabric: empty reply")
-	}
-	if resp[0] != 0x00 {
-		return nil, fmt.Errorf("fabric: %s", strings.TrimSpace(string(resp[1:])))
-	}
-	out := map[string]any{}
-	if err := json.Unmarshal(resp[1:], &out); err != nil {
-		return nil, fmt.Errorf("fabric: bad ok payload: %w", err)
-	}
-	return out, nil
+	return out.Payload, nil
 }
 
 // Register performs freg against the relay. The possession token is the
@@ -140,8 +128,7 @@ func (c *Client) Register(ctx context.Context, seed [32]byte, lease time.Duratio
 	copy(handleArr[:], handleBytes)
 	token := RegToken(seed, handleArr, nonce)
 
-	out, err := c.verb(ctx, map[string]any{
-		"verb":   "freg",
+	out, err := c.verb(ctx, "freg", map[string]any{
 		"handle": c.handle,
 		"token":  token,
 		"nonce":  nonce,
@@ -166,8 +153,7 @@ func (c *Client) Publish(ctx context.Context, pointer []byte, deadline time.Time
 	if len(pointer) != 74 {
 		return fmt.Errorf("fabric: publish wants a 74-byte pointer, got %d bytes", len(pointer))
 	}
-	_, err := c.verb(ctx, map[string]any{
-		"verb":        "fput",
+	_, err := c.verb(ctx, "fput", map[string]any{
 		"handle":      c.handle,
 		"pointer_hex": hex.EncodeToString(pointer),
 		"deadline":    deadline.Unix(),
@@ -183,9 +169,8 @@ func PublishAs(ctx context.Context, addr, handleHex string, pointer []byte, dead
 	if len(pointer) != 74 {
 		return fmt.Errorf("fabric: publish wants a 74-byte pointer, got %d bytes", len(pointer))
 	}
-	c := &Client{addr: addr, handle: handleHex}
-	_, err := c.verb(ctx, map[string]any{
-		"verb":        "fput",
+	c := &Client{tr: NewTCPTransport(addr), handle: handleHex}
+	_, err := c.verb(ctx, "fput", map[string]any{
 		"handle":      handleHex,
 		"pointer_hex": hex.EncodeToString(pointer),
 		"deadline":    deadline.Unix(),
@@ -205,8 +190,7 @@ func (c *Client) Drain(ctx context.Context, max int) ([][]byte, error) {
 	if token == "" {
 		return nil, errors.New("fabric: drain before register")
 	}
-	out, err := c.verb(ctx, map[string]any{
-		"verb":   "fpop",
+	out, err := c.verb(ctx, "fpop", map[string]any{
 		"handle": c.handle,
 		"token":  token,
 		"max":    max,

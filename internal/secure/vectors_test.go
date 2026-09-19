@@ -59,6 +59,111 @@ func sporePeerFrameVectors() map[string]string {
 	}
 }
 
+// cborHead/cborText/cborUint/cborMap build the rpc2 CBOR items exactly as
+// spore-peer's p2p::cbor module does (fxamacker-compatible text keys, big-endian
+// length heads, no indefinite lengths). The fabric rpc2 vectors below pin the
+// BYTE-EXACT frames so the Go and Rust encoders cannot drift.
+func cborHead(major byte, n uint64) []byte {
+	var out []byte
+	switch {
+	case n < 24:
+		out = []byte{major<<5 | byte(n)}
+	case n <= 0xff:
+		out = []byte{major<<5 | 24, byte(n)}
+	case n <= 0xffff:
+		out = []byte{major<<5 | 25, byte(n >> 8), byte(n)}
+	case n <= 0xffff_ffff:
+		out = []byte{major<<5 | 26, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
+	default:
+		out = []byte{major<<5 | 27}
+		for i := 7; i >= 0; i-- {
+			out = append(out, byte(n>>(8*i)))
+		}
+	}
+	return out
+}
+func cborText(s string) []byte         { return append(cborHead(3, uint64(len(s))), s...) }
+func cborUint(v uint64) []byte         { return cborHead(0, v) }
+func cborKV(k string, v []byte) []byte { return append(cborText(k), v...) }
+func cborMap(n int) []byte             { return cborHead(5, uint64(n)) }
+func cborArray(n int) []byte           { return cborHead(4, uint64(n)) }
+
+// cborRPC2Frame frames one rpc2 exchange the way spore-peer does: LE32 length
+// prefix + header map {M,S,E} + one optional payload item.
+func cborRPC2Frame(method string, seq uint64, errMsg string, payload []byte) []byte {
+	hdr := cborMap(3)
+	hdr = append(hdr, cborKV("M", cborText(method))...)
+	hdr = append(hdr, cborKV("S", cborUint(seq))...)
+	hdr = append(hdr, cborKV("E", cborText(errMsg))...)
+	body := hdr
+	if payload != nil {
+		body = append(body, payload...)
+	}
+	out := make([]byte, 4, 4+len(body))
+	l := uint32(len(body))
+	out[0], out[1], out[2], out[3] = byte(l), byte(l>>8), byte(l>>16), byte(l>>24)
+	return append(out, body...)
+}
+
+// fabricRPC2Vectors adds the F4a CBOR/rpc2 method family (Peer.FabricReg /
+// Peer.FabricPut / Peer.FabricPop) to the fabric_v1 section: byte-exact
+// request and response frames over the same §5 length-prefix transport. The
+// semantic payload equals the legacy JSON verbs — same handle normalization,
+// same token checks, same caps — only the encoding differs. An implementation
+// whose CBOR encoder disagrees on any head/length/key byte fails here.
+func fabricRPC2Vectors(handle [32]byte, token string, pointer []byte, deadline uint64) map[string]string {
+	handleHex := h32(handle)
+
+	// fput request: Peer.FabricPut {handle, pointer_hex, deadline}, seq 1.
+	putPayload := cborMap(3)
+	putPayload = append(putPayload, cborKV("handle", cborText(handleHex))...)
+	putPayload = append(putPayload, cborKV("pointer_hex", cborText(h(pointer)))...)
+	putPayload = append(putPayload, cborKV("deadline", cborUint(deadline))...)
+	// fput ok response: the map encoding of {"queued":true}, seq 1.
+	// CBOR simple value 21 = true (20 is false) — the pinned bytes keep
+	// both decoders honest about it.
+	putOk := cborMap(1)
+	putOk = append(putOk, cborKV("queued", cborHead(7, 21))...)
+
+	// fpop request: Peer.FabricPop {handle, token, max}, seq 2. Response:
+	// {"pointers":["<hex>"]}, seq 2 — the vector queue holds exactly the one
+	// canonical pointer so the negative/positive story stays simple.
+	popPayload := cborMap(3)
+	popPayload = append(popPayload, cborKV("handle", cborText(handleHex))...)
+	popPayload = append(popPayload, cborKV("token", cborText(token))...)
+	popPayload = append(popPayload, cborKV("max", cborUint(64))...)
+	popOk := cborMap(1)
+	popOk = append(popOk, cborKV("pointers",
+		append(cborArray(1), cborText(h(pointer))...))...)
+
+	// freg request/response: same semantics as the legacy verb (the token is
+	// echoed; expires is the relay's lease decision as a CBOR uint). The
+	// client-chosen nonce rides the payload in BOTH encodings (the relay
+	// ignores it; the token already binds it).
+	regPayload := cborMap(4)
+	regPayload = append(regPayload, cborKV("handle", cborText(handleHex))...)
+	regPayload = append(regPayload, cborKV("token", cborText(token))...)
+	regPayload = append(regPayload, cborKV("nonce", cborText("spore-fabric-vectors"))...)
+	regPayload = append(regPayload, cborKV("lease", cborUint(3600))...)
+	regOk := cborMap(2)
+	regOk = append(regOk, cborKV("token", cborText(token))...)
+	regOk = append(regOk, cborKV("expires", cborUint(deadline))...)
+
+	return map[string]string{
+		"rpc2_seq_put":                 "1",
+		"rpc2_seq_pop":                 "2",
+		"rpc2_request_freg_frame_hex":  h(cborRPC2Frame("Peer.FabricReg", 3, "", regPayload)),
+		"rpc2_response_freg_frame_hex": h(cborRPC2Frame("", 3, "", regOk)),
+		"rpc2_request_fput_frame_hex":  h(cborRPC2Frame("Peer.FabricPut", 1, "", putPayload)),
+		"rpc2_response_fput_frame_hex": h(cborRPC2Frame("", 1, "", putOk)),
+		"rpc2_request_fpop_frame_hex":  h(cborRPC2Frame("Peer.FabricPop", 2, "", popPayload)),
+		"rpc2_response_fpop_frame_hex": h(cborRPC2Frame("", 2, "", popOk)),
+		// A refusal keeps the legacy "NNN text" discipline inside the CBOR
+		// error field, with no payload item.
+		"rpc2_response_error_frame_hex": h(cborRPC2Frame("", 4, "503 registry full", nil)),
+	}
+}
+
 // fabricV1Vectors builds the relay-fabric vectors (WIRE_SPEC §8;
 // RELAY_FABRIC.md open question 1, DECIDED): epoch-salted handle derivation,
 // HMAC registration token, envelope codec. Fixed seed/epoch/sid/nonce; the
@@ -112,7 +217,7 @@ func fabricV1Vectors() map[string]string {
 	shortPtr := make([]byte, 73)
 	shortPtr[0] = 1 // PointerV1 — negative: 73-byte "pointer"
 
-	return map[string]string{
+	vec := map[string]string{
 		"seed_hex":                           h32(seed),
 		"epoch":                              "7",
 		"sid_hex":                            h(sid[:]),
@@ -129,6 +234,13 @@ func fabricV1Vectors() map[string]string {
 		"envelope_negative_bad_version_hex":  h(badVersion),
 		"pointer_negative_len73_hex":         h(shortPtr),
 	}
+	// F4a: the CBOR/rpc2 method family (Peer.FabricReg/Put/Pop) — same
+	// semantics, byte-exact encoding pinned so the Go and Rust encoders
+	// cannot drift.
+	for k, v := range fabricRPC2Vectors(handle, token, pointerBytes, 4102444800) {
+		vec[k] = v
+	}
+	return vec
 }
 
 func TestGenerateWireSpecVectors(t *testing.T) {

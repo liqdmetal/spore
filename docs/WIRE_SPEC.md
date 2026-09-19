@@ -166,6 +166,21 @@ RELAY_FABRIC.md design law 1). Verbs are JSON objects dispatched per-frame,
 served ONLY on nodes started with `-fabric`; others answer
 `0x01 + "501 fabric disabled"`. Requests carry `"verb"` — a `§5` `{"cid":…}`
 request never does, so the paths are disjoint.
+
+**rpc2/CBOR method family (F4a — same semantics, second encoding):** the
+same three verbs are ALSO served as `Peer.FabricReg` / `Peer.FabricPut` /
+`Peer.FabricPop` over the §5 frame with the rpc2 encoding — a CBOR header
+map `{"M": method, "S": seq, "E": ""}` (always 3 pairs, text keys) followed
+by one CBOR payload item; refusals put the legacy `NNN text` string in `E`
+with no payload. Dispatch shares the rpc2/JSON disjointness rule (a JSON
+frame never decodes as a CBOR header map). Payload keys and semantics are
+the legacy verbs' verbatim (`handle`/`token`/`nonce`/`lease`,
+`handle`/`pointer_hex`/`deadline`, `handle`/`token`/`max`); map key order in
+requests is canonical — the order the golden vectors pin — so the Go and
+Rust encoders are byte-identical. All frames are pinned byte-exact in
+`interop-vectors.json` `fabric_v1.rpc2_*`; a decoder refusing reserved or
+indefinite CBOR heads, non-text map keys, or over-deep nesting is part of
+the contract (the hostile-frame posture of the rpc2 sync subset).
 **FabricHandle derivation (the decided handle-epoch scheme):**
 
     FabricHandle = HKDF-SHA256-Expand(HKDF-SHA256-Extract(zero-salt, seed),

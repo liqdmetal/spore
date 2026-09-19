@@ -308,7 +308,7 @@ is lying; this one doesn't.
 
 | Slice | Delivers | Gate |
 |---|---|---|
-| **F4a — transport seam** | `FabricTransport` + `TCPTransport` + `MemTransport`; client state machine proven transport-agnostic; CBOR `Peer.FabricPut/Pop` conformant to extended `fabric_v1` vectors | vectors extended first; Go conformance + cross-binary unchanged |
+| **F4a — transport seam: SHIPPED** | `FabricTransport` + `TCPTransport` + `MemTransport`; client state machine proven transport-agnostic (scripted-relay tests over the seam); the rpc2 method family (`Peer.FabricReg/FabricPut/FabricPop`) on the Rust relay behind the same cores as the JSON verbs, byte-exact frames pinned in `fabric_v1.rpc2_*` vectors, Go `CBORTransport` + `NewCBORClient` conformant, cross-binary Go-CBOR-client → Rust-relay test drives all three verbs over the second encoding | vectors extended first (the generator itself was caught pinning `false` for CBOR `true` — the Rust conformance test refused it); Go + Rust byte-exact conformance; cross-binary CBOR roundtrip green |
 | **F4b — cover traffic** | Poisson cover scheduler, per-pointer decoy bodies, `-fabric-cover-rph` / `-fabric-cover-fold`, independent-clock property pinned by tests | distribution-shape tests (no periodicity), drain-union interplay, recipient-cost bound |
 | **F4c — onion publish** | `fput2` verb (Rust + Go conformance), route descriptors, chain builder, asymmetric dual-publish defaults | hostile-layer tests (wrong-length, wrong-key, depth abuse, replay), vectors for layer construction, AUDIT-RELAYFABRIC F4 section |
 | **F4d — Iroh sidecar** | `spore-iroh-bridge` adapter process (client and relay flavors) behind the seam | adapter audit: sidecar sees client-visible surface only; loopback firewalling documented |
