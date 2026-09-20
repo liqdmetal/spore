@@ -1,0 +1,4 @@
+handshakeunmarshal_fuzzer
+fabricrpc2frame_fuzzer
+frameparse_fuzzer
+messageunmarshal_fuzzer
