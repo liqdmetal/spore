@@ -13,6 +13,21 @@
 # own go.mod stays dependency-free for normal users. All modifications to
 # the source tree are reverted on exit so the build is side-effect free.
 
+# record_coverage_function_name F <func>
+#
+# base-runner's coverage script maps binary -> fuzz-function via
+# $OUT/fuzzer_function_names.json to build its -test.run flag; the v1 flow
+# never writes that file (only the v2 flow does), so the mapping is
+# recorded here alongside each coverage binary.
+record_coverage_function_name() {
+  if [ "${SANITIZER:-}" = coverage ]; then
+    [ -s "${OUT}/fuzzer_function_names.json" ] || echo '{}' > "${OUT}/fuzzer_function_names.json"
+    jq --arg k "$1" --arg v "$2" '.[$k] = $v' "${OUT}/fuzzer_function_names.json" \
+      > "${OUT}/fuzzer_function_names.json.tmp" \
+      && mv "${OUT}/fuzzer_function_names.json.tmp" "${OUT}/fuzzer_function_names.json"
+  fi
+}
+
 cd $SRC/spore
 
 cleanup() {
@@ -47,13 +62,48 @@ for target in frameparse handshakeunmarshal messageunmarshal fabricrpc2frame; do
     internal/wirefuzz/testdata/fuzz/seedcorpus/*
 done
 
-# Uses the v1 flow (compile_native_go_fuzzer -> go-118-fuzz-build), which
-# rewrites the harness file's `testing` import to the shim package. The v2
-# tool instead overlays GOROOT/src/testing/testing.go with hooks and is
-# sensitive to the exact Go stdlib layout; v1 is stable across Go releases.
-compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzFrameParse frameparse_fuzzer
-compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzHandshakeUnmarshal handshakeunmarshal_fuzzer
-compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzMessageUnmarshal messageunmarshal_fuzzer
-# The fabric's second encoding (CBOR/rpc2, F4a): DecodeRPC2Frame is the
-# relay-facing hostile-frame parse surface for Peer.FabricReg/Put/Pop.
-compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzFabricRPC2Frame fabricrpc2frame_fuzzer
+if [ "${SANITIZER:-}" = coverage ]; then
+  # The stock v1 coverage build CANNOT work for this repo, structurally:
+  # wirefuzz is a test-only package (the harness lives in wirefuzz_test.go),
+  # and `go test -cover` instruments only a package's non-test files — so
+  # build_native_go_fuzzer_legacy's `go test -c -cover` yields binaries
+  # whose profile is empty by construction ("coverage: [no statements]",
+  # an all-zeros report — observed live on 2026-09-20). Build the coverage
+  # binaries here instead, with -coverpkg over every spore-module package
+  # the harness imports, and emit the companion files base-runner's
+  # coverage script consumes: fuzzer_function_names.json (v1 never writes
+  # it; only the v2 flow does) and the per-target .gocovpath path-
+  # translation file, byte-compatible with the legacy build's format.
+  # (Known limitation: the script's non-std-lib Go path exercises the
+  # harness's inline seeds, not the downloaded corpus — corpus-driven Go
+  # coverage would need the v2 flow's parameters machinery.)
+  coverpkgs=$(go list -tags gofuzz -deps -test ./internal/wirefuzz \
+    | grep -E '^github.com/liqdmetal/spore/[a-z/]+$' | paste -sd, -)
+  fuzzed_repo=$(go list -tags gofuzz -f {{.Module}} ./internal/wirefuzz)
+  abspath_repo=$(go list -m -tags gofuzz -f {{.Dir}} "$fuzzed_repo" 2>/dev/null \
+    || go list -tags gofuzz -f {{.Dir}} "$fuzzed_repo")
+  harness_file=$(grep -rl --include='*.go' 'func FuzzFrameParse' ./internal/wirefuzz)
+  mkdir -p "$OUT/rawfuzzers"
+  for pair in \
+    'frameparse_fuzzer FuzzFrameParse' \
+    'handshakeunmarshal_fuzzer FuzzHandshakeUnmarshal' \
+    'messageunmarshal_fuzzer FuzzMessageUnmarshal' \
+    'fabricrpc2frame_fuzzer FuzzFabricRPC2Frame'; do
+    set -- $pair
+    go test -tags gofuzz -c -coverpkg="$coverpkgs" -o "$OUT/$1" ./internal/wirefuzz
+    cp "$harness_file" "$OUT/rawfuzzers/$1"
+    echo "s=${fuzzed_repo}=${abspath_repo}=" > "$OUT/$1.gocovpath"
+    record_coverage_function_name "$1" "$2"
+  done
+else
+  # Uses the v1 flow (compile_native_go_fuzzer -> go-118-fuzz-build), which
+  # rewrites the harness file's `testing` import to the shim package. The v2
+  # tool instead overlays GOROOT/src/testing/testing.go with hooks and is
+  # sensitive to the exact Go stdlib layout; v1 is stable across Go releases.
+  compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzFrameParse frameparse_fuzzer
+  compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzHandshakeUnmarshal handshakeunmarshal_fuzzer
+  compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzMessageUnmarshal messageunmarshal_fuzzer
+  # The fabric's second encoding (CBOR/rpc2, F4a): DecodeRPC2Frame is the
+  # relay-facing hostile-frame parse surface for Peer.FabricReg/Put/Pop.
+  compile_native_go_fuzzer github.com/liqdmetal/spore/internal/wirefuzz FuzzFabricRPC2Frame fabricrpc2frame_fuzzer
+fi
