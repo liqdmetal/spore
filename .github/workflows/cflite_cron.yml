@@ -64,6 +64,13 @@ jobs:
         fuzz-seconds: 600
         mode: 'coverage'
         sanitizer: 'coverage'
+        # The coverage script dispatches on FUZZING_LANGUAGE: with the action
+        # default (c++) it greps every binary for LLVMFuzzerTestOneInput,
+        # which go-118-fuzz-build binaries never contain — every target is
+        # then silently skipped and the report uploads empty. go selects the
+        # native Go profile path (coverprofile/.gocovpath), which the
+        # coverage build emits.
+        language: go
         storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/liqdmetal/spore.git
         storage-repo-branch: cfl-corpus
         # storage-repo-branch-coverage defaults to gh-pages — named here so
