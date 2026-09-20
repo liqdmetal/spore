@@ -1,3 +1,2 @@
-testing: warning: no tests to run
 PASS
-coverage: [no statements]
+coverage: 0.6% of statements in github.com/liqdmetal/spore/internal/wirefuzz, github.com/liqdmetal/spore/internal/fabric, github.com/liqdmetal/spore/internal/crypto, github.com/liqdmetal/spore/internal/chain, github.com/liqdmetal/spore/internal/anchor, github.com/liqdmetal/spore/internal/dero, github.com/liqdmetal/spore/internal/whisper, github.com/liqdmetal/spore/internal/secure, github.com/liqdmetal/spore/internal/ratchet, github.com/liqdmetal/spore/internal/bounds, github.com/liqdmetal/spore/internal/store, github.com/liqdmetal/spore/internal/ratchetwire
