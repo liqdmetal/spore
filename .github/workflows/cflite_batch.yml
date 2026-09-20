@@ -30,6 +30,16 @@ permissions:
   # cfl-corpus branch. contents: write is scoped to this repo only.
   contents: write
 
+concurrency:
+  # One batch run at a time: a delayed cron firing (GitHub's scheduler can
+  # deliver schedules hours late) must not race an operator dispatch on the
+  # cfl-corpus branch — two runs fetching, fuzzing, and pushing concurrently
+  # would fail the second's corpus upload on a non-fast-forward. Queuing
+  # (cancel-in-progress: false) keeps every firing's fuzz hours; a queued
+  # run still downloads the freshest corpus at its start.
+  group: cflite-batch
+  cancel-in-progress: false
+
 jobs:
   BatchFuzzing:
     runs-on: ubuntu-latest
