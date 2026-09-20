@@ -310,3 +310,38 @@ binary prove the full loop — recipient registers by drain, sender publishes
 decrypts through the shared E2 pipeline and lands in maildb
 (`cmd/spore/fabric_cross_binary_test.go`); Go drains Rust-published pointers
 in `internal/peerstore/fabric_smoke_interop_test.go`.
+
+## 9. Fuzzing, corpus, and coverage — the wire contract under continuous attack
+
+Every parser this spec defines has a libFuzzer target in
+`internal/wirefuzz` (harness: `wirefuzz_test.go`, committed seeds:
+`testdata/fuzz/seedcorpus/`, regenerable via `SPORE_GEN_SEED_CORPUS=1`):
+
+| target | wire surface |
+|---|---|
+| `frameparse_fuzzer` | §2 SPR2 frames (Go receive path) |
+| `handshakeunmarshal_fuzzer` | X3DH bundle unmarshal (SENDER_AUTH.md) |
+| `messageunmarshal_fuzzer` | ratchet message envelope + header |
+| `fabricrpc2frame_fuzzer` | §8 rpc2/CBOR fabric verbs (relay-facing) |
+
+**Continuous (ClusterFuzzLite, in-repo):** PRs touching fuzzed code get a
+code-change fuzz; main gets a daily batch on a corpus that compounds
+across runs; nightly prune minimizes it and publishes coverage. The corpus
+lives on the machine-managed **`cfl-corpus` branch** (git history is the
+retention mechanism — nothing expires at 90 days), and the coverage
+dashboard is published from the **`gh-pages` branch** to
+<https://liqdmetal.github.io/spore/coverage/latest/report/index.html>.
+
+**Cross-binary:** spore-peer's Rust decoder (`src/p2p.rs`) is the second
+implementation of §5 and is fuzzed the same way on its side — its
+dashboard lives at
+<https://liqdmetal.github.io/spore-peer/coverage/latest/report/linux/index.html>,
+its workflow/contribution notes in spore-peer's `CONTRIBUTING.md` §Fuzzing.
+Both decoders are pinned to the shared vectors in `docs/interop-vectors.json`,
+so neither can drift from this spec or from each other. The Rust cargo-fuzz
+target's corpus is seeded from those same vectors.
+
+**Local:** the pre-push gate (`scripts/gates.sh`) runs a short
+fuzz-smoke pass so a regression in any target fails before it can be
+pushed; the OSS-Fuzz-shaped build recipe this whole pipeline descends from
+is preserved in the `projects/spore` integration of the oss-fuzz fork.
