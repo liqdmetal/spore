@@ -76,7 +76,18 @@ if [ "${SANITIZER:-}" = coverage ]; then
   # translation file, byte-compatible with the legacy build's format.
   # (Known limitation: the script's non-std-lib Go path exercises the
   # harness's inline seeds, not the downloaded corpus — corpus-driven Go
-  # coverage would need the v2 flow's parameters machinery.)
+  # coverage would need the v2 flow's parameters machinery.
+  #
+  # Fairness pass, 2026-09-21: replayed the FULL mined cfl-corpus (315
+  # files) through these -coverpkg builds with -run '^FuzzX$' (deterministic
+  # corpus replay, no mutation). Result: 2.3% -> 2.7% of the 12-package
+  # denominator; the ENTIRE delta is fabric/rpc2 (26.8% -> 37.5%), because
+  # the other three targets' corpora are pruned to seed size (9-14 files)
+  # — their seeds already saturate the reachable parse paths. Verdict: the
+  # v2 flow (GOROOT testing-package overlay, corpus-parameters machinery)
+  # would buy ~+0.4pt on the published dashboard at the cost of Go-release
+  # fragility — the exact instability v1's import-rewrite avoids — so v1
+  # stays. If fabric/rpc2 coverage itself becomes a reviewed gate, revisit.)
   coverpkgs=$(go list -tags gofuzz -deps -test ./internal/wirefuzz \
     | grep -E '^github.com/liqdmetal/spore/[a-z/]+$' | paste -sd, -)
   fuzzed_repo=$(go list -tags gofuzz -f {{.Module}} ./internal/wirefuzz)

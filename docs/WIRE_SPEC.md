@@ -345,3 +345,21 @@ target's corpus is seeded from those same vectors.
 fuzz-smoke pass so a regression in any target fails before it can be
 pushed; the OSS-Fuzz-shaped build recipe this whole pipeline descends from
 is preserved in the `projects/spore` integration of the oss-fuzz fork.
+
+**Reading the coverage numbers fairly** (measured 2026-09-21): the Go
+dashboard's coverage build exercises the inline seeds only — the stock
+legacy flow cannot feed the downloaded corpus to the non-std-lib Go
+harness. Replaying the full mined corpus through identical `-coverpkg`
+builds moves the published figure just 2.3% → 2.7%, and the entire delta
+is `fabric/rpc2` (26.8% → 37.5%), the only target whose corpus outgrew
+its seeds; the other three prune to seed size because the seeds already
+saturate their reachable parse paths. The published figure therefore
+understates the corpus effect by ~0.4pt, not by much — and the honest
+comparison lens for *parser hardening* is the decode-path subset
+(`fabric/rpc2`, `ratchetwire/wire`, `ratchet/x3dh`, `ratchet`), which is
+19.4% corpus-driven (16.4% seeds-only). The alternative fix — the v2
+go-118-fuzz-build flow, whose testing-package overlay can receive corpus
+parameters — was evaluated and declined for now: it buys the ~0.4pt at
+the cost of coupling the build to exact Go stdlib layout, the fragility
+the v1 import-rewrite flow exists to avoid. Revisit if `fabric/rpc2`
+coverage itself becomes a review gate.
