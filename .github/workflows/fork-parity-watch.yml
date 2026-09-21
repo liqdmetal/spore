@@ -1,0 +1,159 @@
+name: fork-parity-watch
+
+# Sentinel hosted in spore (where Actions is proven), watching the derohe fork
+# from outside. Relocated from the fork itself on 2026-09-21 — the documented
+# fallback from PARITY-WATCH-STATUS.md. Both repos are public, so the default
+# GITHUB_TOKEN needs no extra permissions and no secrets are involved.
+#
+# Drift semantics (pure git, no opinions):
+#   upstream_tip == merge-base(fork_main, upstream)  -> in-sync
+#   anything else (including no common ancestor)     -> DRIFT
+# A red run is the primary flag; the tracking issue is the durable, searchable
+# one (opened on drift, updated while drifting, auto-closed on recovery).
+
+permissions:
+  contents: read
+  issues: write
+
+on:
+  schedule:
+    - cron: "47 6 * * *" # daily 06:47 UTC — offset from the fork's old 06:23 slot
+  workflow_dispatch:
+    inputs:
+      force_flag:
+        description: "Open the tracking issue even if in sync (drill)"
+        type: boolean
+        default: false
+
+env:
+  FORK_REPO: liqdmetal/derohe-improvements-by-liqdmetal
+  UPSTREAM_REPO: DEROFDN/derohe
+
+jobs:
+  watch-derohe-fork:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch both repos and compute parity (merge-base, both lines)
+        id: parity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q parity-repo && cd parity-repo
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch -q --no-tags upstream main:refs/upstream/main community-dev:refs/upstream/community-dev
+          git remote add fork "https://github.com/${FORK_REPO}.git"
+          git fetch -q --no-tags fork main:refs/forkmain
+
+          UP_MAIN=$(git rev-parse refs/upstream/main)
+          UP_CDEV=$(git rev-parse refs/upstream/community-dev)
+          MB_MAIN=$(git merge-base refs/forkmain refs/upstream/main || true)
+          MB_CDEV=$(git merge-base refs/forkmain refs/upstream/community-dev || true)
+          echo "MB_MAIN=${MB_MAIN:-NONE}"
+          echo "MB_CDEV=${MB_CDEV:-NONE}"
+
+          # Empty merge-base (no common ancestor) must DRIFT, never silently pass.
+          if [ -z "$MB_MAIN" ]; then MB_MAIN=NONE; fi
+          if [ -z "$MB_CDEV" ]; then MB_CDEV=NONE; fi
+          if [ "$MB_MAIN" = "$UP_MAIN" ]; then MAIN_STATE="in-sync"; else MAIN_STATE="DRIFT"; fi
+          if [ "$MB_CDEV" = "$UP_CDEV" ]; then CDEV_STATE="in-sync"; else CDEV_STATE="DRIFT"; fi
+          echo "verdict: MAIN_STATE=$MAIN_STATE CDEV_STATE=$CDEV_STATE"
+          echo "main_state=$MAIN_STATE" >> "$GITHUB_OUTPUT"
+          echo "cdev_state=$CDEV_STATE" >> "$GITHUB_OUTPUT"
+          echo "up_main=$UP_MAIN" >> "$GITHUB_OUTPUT"
+          echo "up_cdev=$UP_CDEV" >> "$GITHUB_OUTPUT"
+          echo "mb_main=$MB_MAIN" >> "$GITHUB_OUTPUT"
+          echo "mb_cdev=$MB_CDEV" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Fork parity: \`$FORK_REPO\` vs \`$UPSTREAM_REPO\`"
+            echo ""
+            echo "| line | upstream tip | fork merge-base | state |"
+            echo "|---|---|---|---|"
+            echo "| main | \`$UP_MAIN\` | \`$MB_MAIN\` | $MAIN_STATE |"
+            echo "| community-dev | \`$UP_CDEV\` | \`$MB_CDEV\` | $CDEV_STATE |"
+            echo ""
+            if [ "$MAIN_STATE" = "DRIFT" ] || [ "$CDEV_STATE" = "DRIFT" ]; then
+              echo "**Action:** merge the liqd line onto the new upstream tip, then"
+              echo "ff fork \`main\` (server-verified: \`PATCH /git/refs/heads/main\`, \`force=false\`)."
+              echo "Runbook: \`freebuff/prune-analysis/RUNBOOK-branch-governance.md\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the run on drift (run history is the flag)
+        # String compare, not contains(): values are state names that never
+        # overlap, and '<' inside if-expressions breaks workflow parsing.
+        if: steps.parity.outputs.main_state == 'DRIFT' || steps.parity.outputs.cdev_state == 'DRIFT'
+        run: |
+          echo "UPSTREAM HAS ADVANCED past the fork's merge-base."
+          echo "main: ${{ steps.parity.outputs.main_state }}; community-dev: ${{ steps.parity.outputs.cdev_state }}"
+          exit 1
+
+      - name: Manage tracking issue (open on drift, close on recovery)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- fork-parity-watch:derohe -->';
+            const mainState = '${{ steps.parity.outputs.main_state }}';
+            const cdevState = '${{ steps.parity.outputs.cdev_state }}';
+            const upMain = '${{ steps.parity.outputs.up_main }}';
+            const upCdev = '${{ steps.parity.outputs.up_cdev }}';
+            const mbMain = '${{ steps.parity.outputs.mb_main }}';
+            const mbCdev = '${{ steps.parity.outputs.mb_cdev }}';
+            const drift = mainState === 'DRIFT' || cdevState === 'DRIFT';
+            const force = '${{ inputs.force_flag }}' === 'true';
+            const body = [
+              'Fork parity report (sentinel hosted in spore, watching from outside):',
+              '',
+              '| line | upstream tip | fork merge-base | state |',
+              '|---|---|---|---|',
+              `| main | \`${upMain}\` | \`${mbMain}\` | **${mainState}** |`,
+              `| community-dev | \`${upCdev}\` | \`${mbCdev}\` | **${cdevState}** |`,
+              '',
+              drift
+                ? 'Upstream advanced past the fork merge-base. Merge the liqd line onto the new tip, then fast-forward fork `main` (server-verified ff, `force=false`). Runbook: `freebuff/prune-analysis/RUNBOOK-branch-governance.md`.'
+                : 'All lines back in sync. (This issue auto-closes.)',
+              '',
+              marker,
+            ].join('\n');
+            const q = 'repo:' + context.repo.owner + '/' + context.repo.repo +
+                      ' is:issue is:open in:body "' + marker + '"';
+
+            // Issue tracking is best-effort: the red run above is the primary
+            // flag. This step must never break the signal.
+            try {
+              const found = await github.paginate(github.rest.search.issuesAndPullRequests, {
+                q, per_page: 1,
+              });
+              const existing = found.find(i => !i.pull_request);
+
+              if (drift || force) {
+                if (existing) {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: existing.number, body,
+                  });
+                  console.log('updated existing drift issue #' + existing.number);
+                } else {
+                  const made = await github.rest.issues.create({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    title: 'fork-parity-watch: DEROFDN/derohe advanced past ' + context.repo.owner + '/derohe-improvements-by-liqdmetal merge-base',
+                    body,
+                    labels: ['upstream-drift'],
+                  });
+                  console.log('opened drift issue #' + made.data.number);
+                }
+              } else if (existing) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number,
+                  state: 'closed',
+                  body,
+                });
+                console.log('parity restored; closed issue #' + existing.number);
+              } else {
+                console.log('in sync, no issue to manage');
+              }
+            } catch (e) {
+              core.warning('Issue tracking unavailable (run status above remains the flag): ' + e.message);
+            }
