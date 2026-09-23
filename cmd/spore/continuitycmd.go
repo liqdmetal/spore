@@ -53,6 +53,8 @@ func continuitycmd(args []string) {
 		continuityVerifyNotice(args[1:])
 	case "watch":
 		continuityWatch(args[1:])
+	case "watch-reaper":
+		continuityWatchdog(args[1:])
 	case "watch-init":
 		continuityWatchInit(args[1:])
 	case "recovery-create":
@@ -106,6 +108,7 @@ func continuityUsage() {
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
   spore continuity watch-init -vault VAULT -observer-key OBSERVER_KEY -out WATCH_STATE
   spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush]
+  spore continuity watch-reaper -log NODE_LOG -state STATE -outbox OUTBOX -webhook URL [-node spore|spore-peer] [-grace N]
   spore continuity recovery-create -vault VAULT [-policy POLICY] [-quorum QUORUM] [-anchor ANCHOR] [-receipt RECEIPT] [-watch WATCH_STATE] [-notice NOTICE] -out BUNDLE
   spore continuity recovery-verify -bundle BUNDLE
   spore continuity recovery-restore -bundle BUNDLE -dir EMPTY_DIR
@@ -113,6 +116,11 @@ func continuityUsage() {
 Watch is metadata-only. It signs one release-ready observer notice per exact
 check-in epoch and queues a generic wake-up through the durable outbox. Provider
 failure remains queued for retry; delivery is at-least-once, not exactly-once.
+watch-reaper rides the same loop: it reads the node daemon's reaper-heartbeat
+lines (both the Go and Rust daemons print them identically), compares the pass
+counter with the last watch's value, and queues a metadata-only alert when the
+counter freezes — a dead background reaper on the node holding the bodies is a
+continuity failure with no other signal. Run them from the same cron entry.
 Recovery bundles contain encrypted/signed artifacts only; private keys and
 released plaintext must be transferred separately by the operator.
   spore continuity quorum-create -vault VAULT -threshold N -attester-pub HEX[,HEX,...] -out POLICY
