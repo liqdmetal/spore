@@ -11,6 +11,11 @@
 #               msg escrow refund returns the funds to alice
 #   swap        msg dex swap (+ wrap/unwrap) against the sim's
 #               constant-product pool with min-out enforced in the "contract"
+#   watchdog    continuity watch-reaper against a LIVE `spore serve` node:
+#               baseline, alive-advance, SIGKILL the daemon, watch the
+#               frozen pass counter escalate through grace to a durable
+#               outbox alert, confirm the alert latch dedupes, then restart
+#               the daemon and prove recovery re-arms the watchdog
 #
 # Every assertion is checked; any failure aborts naming the step.
 # Usage: scripts/escrow_dex_soak.sh [path-to-spore-binary]
@@ -36,9 +41,9 @@ export SPORE_SAP_DEX_SC="sim-dex-00000000000000000000000000000000000000000000000
 export SPORE_SAP_WDERO_SC="sim-wdero-0000000000000000000000000000000000000000000000000000000003"
 
 PASS=0
-SIM_PID=""; MAILBOX_PID=""; WEB_A_PID=""; WEB_B_PID=""
+SIM_PID=""; MAILBOX_PID=""; WEB_A_PID=""; WEB_B_PID=""; NODE_PID=""
 cleanup() {
-  for pid in "$SIM_PID" "$MAILBOX_PID" "$WEB_A_PID" "$WEB_B_PID"; do
+  for pid in "$SIM_PID" "$MAILBOX_PID" "$WEB_A_PID" "$WEB_B_PID" "$NODE_PID"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done
 }
@@ -313,6 +318,132 @@ jq -s -e '[.[] | select(.kind=="escrow-refund")] | length > 0' "$ROOT/alice/rece
   && ok "alice's ledger has escrow-refund"
 jq -s -e '[.[] | select(.kind=="dex-swap")] | length > 0' "$ROOT/bob/receipts.json" >/dev/null \
   && ok "bob's ledger has dex-swap"
+
+# ================= flow 4: stale-reaper watchdog against a live node ==========
+# The watchdog's contract is pinned by unit tests; this section proves it
+# against a REAL daemon: heartbeat lines with a live advancing pass counter,
+# a SIGKILLed daemon whose counter freezes forever, alerts queueing in a
+# durable outbox, and recovery re-arming after a restart. The node reaps on
+# a 1s cadence while the watches are back-to-back, so freezes resolve in
+# seconds. The webhook points at a dead port ON PURPOSE: the alert path then
+# exercises the durable behavior (exit 1 with the alert still owed) that a
+# delivered-and-forgotten webhook would hide.
+step "watchdog: start a live spore serve node (1s reaper)"
+NODE_DIR="$ROOT/node"; mkdir -p "$NODE_DIR" "$NODE_DIR/hold"
+NODE_LOG="$NODE_DIR/serve.log"
+NODE_STATE="$NODE_DIR/watchdog-state.json"
+NODE_OUTBOX="$NODE_DIR/watchdog-outbox.jsonl"
+WD_WEBHOOK="http://127.0.0.1:9/notifier"   # nothing listens: alerts stay durably queued (by design)
+start_node() {
+  "$SPORE" serve -dir "$NODE_DIR/hold" -reap-every 1s >"$NODE_LOG" 2>&1 &
+  NODE_PID=$!
+}
+wait_for_node_status() { # wait until the log carries a parseable reaper status line
+  local i
+  for i in $(seq 1 100); do
+    grep -q "reaper status:" "$NODE_LOG" 2>/dev/null && return 0
+    sleep 0.2
+  done
+  fail "node never printed a reaper status heartbeat: $NODE_LOG"
+}
+start_node
+wait_for_node_status
+ok "node up, reaper heartbeat live (log $NODE_LOG)"
+
+watchdog() { # watchdog EXTRA-ARGS... — one watch pass; stdout on stdout, exit code returned
+  run_spore alice continuity watch-reaper -log "$NODE_LOG" -state "$NODE_STATE" \
+    -node spore -outbox "$NODE_OUTBOX" -webhook "$WD_WEBHOOK" "$@"
+}
+last_passes() { # the pass counter from the newest heartbeat in the log
+  grep "reaper status:" "$NODE_LOG" | tail -1 | sed -E 's/.*reaper status: ([0-9]+) passes.*/\1/'
+}
+
+step "watchdog: baseline watch records the first observation"
+BASE_OUT=$(watchdog)
+[[ "$BASE_OUT" == *baseline* ]] || fail "first watchdog pass did not baseline: $BASE_OUT"
+ok "baseline recorded from a real heartbeat ($BASE_OUT)"
+
+step "watchdog: alive watch — the counter advances while the daemon runs"
+sleep 2.5
+ALIVE_BASE=$(last_passes)
+ALIVE_OUT=$(watchdog)
+if [[ "$ALIVE_OUT" == *"ok passes="* ]]; then
+  ok "alive watch: ok passes=$ALIVE_BASE"
+elif [[ "$ALIVE_OUT" == *re-baselined* ]]; then
+  # A respawn can truncate the log; re-baselining on the SAME live daemon is
+  # honest too (the counter is only comparable within one log file).
+  ok "alive watch: re-baselined (log was truncated) passes=$ALIVE_BASE"
+else
+  fail "watch against a live daemon did not report alive: $ALIVE_OUT"
+fi
+
+step "watchdog: SIGKILL the node — grace tolerates, then the freeze alerts"
+kill -9 "$NODE_PID" 2>/dev/null || fail "could not kill the node"
+wait "$NODE_PID" 2>/dev/null || true
+NODE_PID=""
+ok "node SIGKILLed — its reaper can never pass again"
+
+FROZEN_BASE=$(last_passes)
+G1_OUT=$(watchdog -grace 2 || true)   # || true: watch-reaper may exit 1 when it queues an alert
+if [[ "$(last_passes)" -gt "$FROZEN_BASE" ]]; then
+  # Inherent ±1 race: a pass completed between the last alive watch and the
+  # kill, so the FIRST dead-watch still sees an advance. Absorb it once.
+  G1_OUT=$(watchdog -grace 2 || true)
+  FROZEN_BASE=$(last_passes)
+fi
+[[ "$G1_OUT" == *"1/2 within grace"* ]] || fail "frozen watch 1 expected within-grace 1/2: $G1_OUT"
+ok "frozen watch 1: within grace (1/2)"
+
+G2_OUT=$(watchdog -grace 2 || true)
+[[ "$G2_OUT" == *"2/2 within grace"* ]] || fail "frozen watch 2 expected within-grace 2/2: $G2_OUT"
+ok "frozen watch 2: within grace (2/2)"
+
+step "watchdog: freeze past grace — the alert is queued and the watch exits 1"
+# With the webhook down, watch-reaper exits 1 AFTER the alert is durably
+# queued (the non-zero exit is the cron-visible signal; the outbox is the
+# durable one). That is the design being tested: delivery failure must not
+# eat the alert.
+ALERT_RC=0
+ALERT_OUT=$(watchdog -grace 2) || ALERT_RC=$?
+[[ "$ALERT_RC" -eq 1 ]] || fail "alert watch should exit 1 when delivery fails (rc=$ALERT_RC): $ALERT_OUT"
+ok "alert watch exited 1 with the alert durably owed (counter frozen at $FROZEN_BASE)"
+
+step "watchdog: the alert is durable and deduped in the outbox"
+[[ -s "$NODE_OUTBOX" ]] || fail "outbox file missing after ALERT"
+[[ "$(jq -s '[.[] | select(.TxID=="watchdog/reaper/stale reaper")] | length' "$NODE_OUTBOX")" -eq 1 ]] \
+  || fail "outbox should carry exactly one stale-reaper alert"
+ok "outbox holds exactly one durable stale-reaper alert (webhook down, delivery still owed)"
+
+# Watch again while still frozen: the alert is re-raised (delivery is still
+# failing) but the outbox TxID-dedupe keeps it at exactly one record — no
+# alert storms while the counter holds still.
+DUP_RC=0
+DUP_OUT=$(watchdog -grace 2) || DUP_RC=$?
+[[ "$DUP_RC" -eq 1 ]] || fail "repeat frozen watch should still exit 1 while delivery fails (rc=$DUP_RC): $DUP_OUT"
+[[ "$(jq -s '[.[] | select(.TxID=="watchdog/reaper/stale reaper")] | length' "$NODE_OUTBOX")" -eq 1 ]] \
+  || fail "repeat frozen watch must not duplicate the outbox alert"
+ok "repeat frozen watch: still one alert, no duplicate (state $NODE_STATE)"
+
+step "watchdog: restart the daemon — recovery re-arms the watchdog"
+start_node                            # >"$NODE_LOG" truncates: the fresh daemon restarts its counter
+wait_for_node_status
+# Recovery needs the first post-restart watch to re-baseline (fresh log =
+# counter regression) or coincide by chance with the old count (within
+# grace); either way, keep watching until the counter ADVANCES — ok passes=N
+# is the re-armed state. Bounded, because a daemon that never advances is
+# exactly the failure this watchdog exists to catch.
+REC_OK=""
+for i in $(seq 1 12); do
+  OUT=$(watchdog -grace 2 || true)
+  case "$OUT" in
+    *"ok passes="*) REC_OK="$OUT"; break ;;
+    *re-baselined*|*within*grace*) : ;;
+    *) fail "recovery watch unexpected: $OUT" ;;
+  esac
+  sleep 1
+done
+[[ -n "$REC_OK" ]] || fail "recovery never reached 'ok passes=N' (counter did not advance)"
+ok "recovery: watch reports ok passes=$(last_passes) — the watchdog is re-armed"
 
 step "SOAK COMPLETE — $PASS checks passed"
 echo "  workspace kept for inspection: $ROOT"
