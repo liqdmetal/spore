@@ -56,7 +56,7 @@ global.crypto = { getRandomValues: a => { for (let i = 0; i < a.length; i++) a[i
 
 // capture exported-for-test handles by appending a probe to the script
 const probe = `
-;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join, whisperSend, whisperRecv, esc };
+;globalThis.__t = { lsGet, lsSet, showWelcome, hideWelcome, state, join, whisperSend, whisperRecv, esc, sniffEnvelope, renderCard };
 `;
 const runner = new Function("globalThis", m[1] + probe);
 let failed = 0;
@@ -139,6 +139,48 @@ t.join("#somewhere").then(async () => {
   } else {
     console.log("  ok: esc() output exact for sender names (entity-encoded)");
   }
+  console.log("settlement cards (typed envelopes)");
+  // sniffEnvelope: the browser-side backstop for servers that predate the
+  // structured card field — raw envelope JSON must never leak as text.
+  ok(t.sniffEnvelope("hello") === null, "sniffEnvelope: ordinary text is not an envelope");
+  ok(t.sniffEnvelope("{") === null, "sniffEnvelope: invalid JSON is not an envelope");
+  ok(t.sniffEnvelope("") === null, "sniffEnvelope: empty text is not an envelope");
+  for (const [ty, want] of [["spore/escrow/v1","escrow"],["spore/dex/v1","dex"],["spore/invoice/v1","invoice"],["spore/payment/v1","payment"],["spore/receipt/v1","receipt"]]) {
+    const got = t.sniffEnvelope(JSON.stringify({ type: ty }));
+    ok(got && got.kind === want, "sniffEnvelope: " + ty + " -> " + want);
+  }
+  ok(t.sniffEnvelope(JSON.stringify({ type: "spore/unknown/v9" })) === null, "sniffEnvelope: unknown spore type is not a card");
+
+  // renderCard: structured, escaped, classed.
+  const ce = t.renderCard({ kind: "escrow", summary: "ESCROW CLAIMED 6b18…: preimage revealed, tx settle-1", direction: "received", amount: "1.2", asset: "dero", txid: "settle-tx-1" });
+  ok(ce.className === "wcard escrow", "card gets the semantic class (wcard escrow)");
+  ok(ce.innerHTML.includes("escrow"), "card shows the kind badge");
+  ok(ce.innerHTML.includes("received"), "card shows the direction");
+  ok(ce.innerHTML.includes("1.2 dero"), "card shows the amount chip");
+  ok(ce.innerHTML.includes("tx settle-tx-1"), "card shows the settlement txid");
+  const hostile = t.renderCard({ kind: "dex", summary: "<img src=x onerror=window.__pwnd=1> DEX SWAPPED", txid: "t" });
+  ok(hostile.innerHTML.indexOf("<img") === -1 && hostile.innerHTML.includes("&lt;img"), "card escapes a hostile summary (no live img node)");
+  const weird = t.renderCard({ kind: "mystery" });
+  ok(weird.className === "wcard mystery", "unknown kinds still class (forward-compat rendering)");
+  const noAmt = t.renderCard({ kind: "dex", summary: "DEX SWAPPED tA->tB (pool-settled)" });
+  ok(!noAmt.innerHTML.includes("amt"), "pool-settled swap renders no zero amount chip");
+
+  // whisperRecv integration: server-classified card wins, local sniff covers
+  // old servers, and ordinary text still renders as a plain wtext line.
+  global.fetch = async () => ({ ok: true, text: async () => JSON.stringify([
+    { txid: "plain1", text: "just a message" },
+    { txid: "card1", text: "{raw json}" , card: { kind: "escrow", summary: "ESCROW REFUNDED 6b18…: expired", direction: "received", amount: "1.2", asset: "dero", txid: "r1" } },
+    { txid: "old1", text: JSON.stringify({ type: "spore/dex/v1", action: "swap", pair: "tA->tB", txid: "d1" }) },
+  ]) });
+  await t.whisperRecv();
+  const inbox = els.get("wInbox").children;
+  const plainLine = inbox.find(x => x.className === "wline" && x.children.some(c => c.className === "wtext"));
+  ok(!!plainLine && plainLine.children.some(c => c.className === "wtext" && c.textContent === "just a message"), "ordinary text still renders as a plain line");
+  const cardLine = inbox.find(x => x.className === "wline" && x.children.some(c => c.className === "wcard escrow"));
+  ok(!!cardLine && cardLine.children.some(c => c.className === "wcard escrow"), "server card field renders a styled card");
+  ok(!cardLine.children.some(c => c.className === "wtext"), "a carded line never renders raw JSON text");
+  const oldLine = inbox.find(x => x.className === "wline" && x.children.some(c => c.className === "wcard dex"));
+  ok(!!oldLine, "raw envelope JSON from an old server is sniffed into a card, not shown as text");
 
 
   console.log(failed ? `\n${failed} check(s) FAILED` : "\nall checks passed");

@@ -176,10 +176,51 @@ func (e *webE2) send(ctx context.Context, to, msg string, wrc, wlogin string) (t
 	return res.TxID, hex.EncodeToString(sessID[:]), nil
 }
 
+// webCard is the structured form of a typed plaintext (money envelope or
+// receipt). When Kind is empty the plaintext is an ordinary message and the
+// browser renders Text verbatim; otherwise the browser renders a styled card
+// from Kind/Summary/Txid/InReplyTo and must NOT display Text (raw JSON).
+type webCard struct {
+	Kind      string `json:"kind,omitempty"`      // "invoice"|"payment"|"escrow"|"dex"|"receipt"
+	Summary   string `json:"summary,omitempty"`   // one-line human summary (same strings the CLI prints)
+	Direction string `json:"direction,omitempty"` // "sent"|"received"; empty for receipts
+	Amount    string `json:"amount,omitempty"`    // display form, e.g. "5.5"
+	Asset     string `json:"asset,omitempty"`     // "dero"|...
+	Txid      string `json:"txid,omitempty"`      // settlement txid on the carrier chain
+	InReplyTo string `json:"in_reply_to,omitempty"`
+}
+
+// classifyWebPlain identifies typed plaintexts riding a ratcheted session.
+// It reuses the CLI ingest parsers (parseReceipt, parseMoneyEnvelope,
+// parseMoneyRecord) so the CLI and the browser agree on the wire: a change to
+// an envelope shape changes both renderings at once. Never fatal: an
+// unclassifiable plaintext is an ordinary message.
+func classifyWebPlain(plain []byte) webCard {
+	if inReplyTo, status, ok := parseReceipt(plain); ok {
+		return webCard{Kind: "receipt", Summary: status, InReplyTo: inReplyTo}
+	}
+	if kind, summary, ok := parseMoneyEnvelope(plain); ok {
+		c := webCard{Kind: kind, Summary: summary, Direction: "received"}
+		if rec, ok := parseMoneyRecord(plain); ok {
+			// Atomic == 0 means "not stated" (dex swaps settle in the pool; the
+			// min-out bound was the only promise). Rendering "0" would claim a
+			// zero-value settlement about money that did move — omit the chip.
+			if rec.Atomic > 0 {
+				c.Amount = formatAmount(rec.Asset, rec.Atomic)
+			}
+			c.Asset = rec.Asset
+			c.Txid = rec.TxID
+		}
+		return c
+	}
+	return webCard{}
+}
+
 // webMsg is one delivered message returned to the browser inbox.
 type webMsg struct {
-	Txid string `json:"txid"`
-	Text string `json:"text"`
+	Txid string   `json:"txid"`
+	Text string   `json:"text"`
+	Card *webCard `json:"card,omitempty"` // set when the plaintext is a typed envelope
 }
 
 // recvOnce performs one inbox scan: fetch incoming entries at/after the cursor,
@@ -248,7 +289,11 @@ func (e *webE2) recvOnce(ctx context.Context, wrc, wlogin string) ([]webMsg, err
 			continue
 		}
 		e.seen[entryID] = true
-		out = append(out, webMsg{Txid: entry.TXID, Text: string(plain)})
+		m := webMsg{Txid: entry.TXID, Text: string(plain)}
+		if card := classifyWebPlain(plain); card.Kind != "" {
+			m.Card = &card
+		}
+		out = append(out, m)
 	}
 	e.cursor = maxHeight
 	if b := []byte(strconv.FormatUint(e.cursor, 10)); len(b) > 0 {

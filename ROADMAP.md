@@ -110,6 +110,10 @@ remaining; it does not re-state live status.*
   SPORE_SAP_* contract-ID configuration state. All sap entry points refuse
   locally when a contract ID is unconfigured — the empty-SCID invoke the
   fund path previously allowed is gone.
+- **Settlements render in the browser:** `spore web` classifies typed
+  plaintexts (escrow/dex/invoice/payment/receipt) with the SAME parsers the
+  CLI ingest uses and the inbox renders them as styled cards — never raw
+  envelope JSON; a client-side sniff backstops servers predating the field.
 
 ### Onboarding + ops
 - `spore init` one-shot identity kit + `config.json` defaults (every E2 command

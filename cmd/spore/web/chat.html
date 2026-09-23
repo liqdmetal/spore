@@ -90,6 +90,25 @@
   .wlegacyhint{font-size:9.5px;color:var(--muted);opacity:.75;padding:4px 2px 0;word-break:break-all}
   .inbox .wline.replying{border-left:2px solid var(--accent2);background:var(--panel2)}
   .repInfo{font-size:10px;color:var(--accent2);padding:2px 4px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* settlement / money cards in the inbox: typed envelopes (spore/escrow/v1,
+     spore/dex/v1, invoice/payment, receipts) arrive as structured JSON from
+     the server; they render as cards, never as raw JSON text. Colors follow
+     the semantic: escrow=amber, dex=cyan, invoice=orange, payment=green. */
+  .wcard{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;
+    padding:7px 9px;margin-top:2px;background:var(--panel2)}
+  .wcard .wk{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
+    display:flex;align-items:center;gap:5px}
+  .wcard .wk .badge{padding:1px 6px;border-radius:8px;font-weight:700;color:#04121a}
+  .wcard .sum{display:block;margin-top:3px;color:var(--fg);word-break:break-word}
+  .wcard .ref{display:block;margin-top:2px;font-size:9.5px;color:var(--muted);opacity:.85;word-break:break-all}
+  .wcard .amt{margin-left:auto;font-weight:700;color:var(--accent)}
+  .wcard.escrow{border-left-color:#fbbf24}.wcard.escrow .badge{background:#fbbf24}
+  .wcard.dex{border-left-color:var(--accent2)}.wcard.dex .badge{background:var(--accent2)}
+  .wcard.invoice{border-left-color:#fb923c}.wcard.invoice .badge{background:#fb923c}
+  .wcard.payment{border-left-color:var(--ok)}.wcard.payment .badge{background:var(--ok)}
+  .wcard.receipt{border-left-color:var(--line);opacity:.9}
+  .wcard.receipt .badge{background:var(--muted);color:#0c0f14}
+  .wcard.receipt .sum{color:var(--muted);font-size:11px}
   .contact{display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:12px;border-left:2px solid transparent}
   .contact:hover{background:var(--panel2)}
   .contact .addr{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -449,6 +468,42 @@ let friends = loadFriends();
 function loadFriends(){try{return new Map(Object.entries(JSON.parse(lsGet("friends")||"{}")));}catch(e){return new Map();}}
 function saveFriends(){const o={};for(const[a,f]of friends)o[a]=f.name;lsSet("friends",JSON.stringify(o));}
 function shortAddr(a){return a&&a.length>18?a.slice(0,10)+"…"+a.slice(-4):a;}
+// classifyCard: server side already classified the plaintext (webe2.go
+// classifyWebPlain reuses the CLI envelope parsers), but old servers and any
+// cached line still carrying raw envelope JSON must not leak it as text. The
+// shape check mirrors the wire: a typed envelope is an object with a
+// spore/* /v1 type field. Anything else is an ordinary message.
+function sniffEnvelope(text){
+  if(!text||text[0]!=="{")return null;
+  try{
+    const o=JSON.parse(text);
+    const t=o&&typeof o.type==="string"?o.type:"";
+    if(t==="spore/escrow/v1"||t==="spore/dex/v1")return {kind:t==="spore/escrow/v1"?"escrow":"dex"};
+    if(t==="spore/invoice/v1")return {kind:"invoice"};
+    if(t==="spore/payment/v1")return {kind:"payment"};
+    if(t==="spore/receipt/v1")return {kind:"receipt"};
+  }catch(e){}
+  return null;
+}
+// renderCard builds the styled settlement card for one classified envelope.
+// c = {kind, summary, direction, amount, asset, txid, in_reply_to}. Content
+// is composed from structured fields only — Summary lines from the server are
+// escaped like any other text — and every insertion point goes through esc().
+function renderCard(c){
+  const d=document.createElement("div");
+  d.className="wcard "+esc(c.kind||"");
+  const names={escrow:"⏳ escrow",dex:"⇄ dex",invoice:"⧉ invoice",payment:"✓ payment",receipt:"✓✓ ack"};
+  const dir=c.direction==="sent"?"sent":(c.direction==="received"?"received":"");
+  let head=`<span class="badge">${esc(names[c.kind]||c.kind||"envelope")}</span>`;
+  if(dir)head+=`<span>${esc(dir)}</span>`;
+  if(c.amount)head+=`<span class="amt">${esc(c.amount)}${c.asset?" "+esc(c.asset):""}</span>`;
+  let body="";
+  if(c.summary)body+=`<span class="sum">${esc(c.summary)}</span>`;
+  if(c.txid)body+=`<span class="ref">tx ${esc(String(c.txid).slice(0,18))}${String(c.txid).length>18?"…":""}</span>`;
+  if(c.in_reply_to)body+=`<span class="ref">for ${esc(String(c.in_reply_to).slice(0,18))}${String(c.in_reply_to).length>18?"…":""}</span>`;
+  d.innerHTML=`<div class="wk">${head}</div>${body}`;
+  return d;
+}
 function pickRecipient(addr){
   $("wTo").value=addr||"";
   $("repInfo").style.display=addr?"block":"none";
@@ -510,7 +565,23 @@ async function whisperRecv(){
       if(wseen.has(m.txid))continue;
       wseen.add(m.txid);
       const d=document.createElement("div");d.className="wline";
-      d.innerHTML=`<span class="wsender">${esc((m.txid||"?").slice(0,16))}…</span><span class="wtext">${esc(m.text)}</span>`;
+      const s=document.createElement("span");s.className="wsender";
+      s.textContent=(m.txid||"?").slice(0,16)+"…";
+      d.appendChild(s);
+      // Typed envelopes (money settlements, receipts) render as styled
+      // cards, never as raw JSON. Server classification wins; the local
+      // sniff only covers servers that predate the card field.
+      if(m.card&&m.card.kind){
+        d.appendChild(renderCard(m.card));
+      }else{
+        const sniff=sniffEnvelope(m.text);
+        if(sniff){
+          d.appendChild(renderCard({kind:sniff.kind,summary:"(settlement notice — run `spore msg escrow`/`dex` for details)"}));
+        }else{
+          const t=document.createElement("span");t.className="wtext";t.textContent=m.text||"";
+          d.appendChild(t);
+        }
+      }
       $("wInbox").prepend(d);
     }
     if(changed)renderContacts();
