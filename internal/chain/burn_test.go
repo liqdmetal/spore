@@ -15,6 +15,10 @@ type fakeBurnChain struct {
 	served  bool
 	burned  []string
 	burnErr error
+	// burnedCh signals each Burn call so tests await the effect directly.
+	// A previous shape busy-polled len(burned) after receiving the delivery —
+	// a scheduler-dependent wait that could flake under parallel load.
+	burnedCh chan struct{}
 }
 
 func (f *fakeBurnChain) Name() string                                { return "fake" }
@@ -34,16 +38,21 @@ func (f *fakeBurnChain) ListIncoming(ctx context.Context, minHeight uint64) ([]I
 }
 func (f *fakeBurnChain) Burn(ctx context.Context, burnKey string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.burned = append(f.burned, burnKey)
-	return f.burnErr
+	err := f.burnErr
+	f.mu.Unlock()
+	select {
+	case f.burnedCh <- struct{}{}:
+	default:
+	}
+	return err
 }
 
 // TestWatchAutoBurnsAfterDelivery: with AutoBurn set, once a message is
 // emitted to the caller, Watch must call Burn with that message's BurnKey —
 // the "compostable" half of receive. Nothing should require a second pass.
 func TestWatchAutoBurnsAfterDelivery(t *testing.T) {
-	f := &fakeBurnChain{}
+	f := &fakeBurnChain{burnedCh: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out, errc := Watch(ctx, f, WatchOpts{Interval: 5 * time.Millisecond, AutoBurn: true})
@@ -62,17 +71,13 @@ func TestWatchAutoBurnsAfterDelivery(t *testing.T) {
 		t.Fatal("timed out waiting for delivery")
 	}
 
-	// Burn happens synchronously in the same select branch as the emit, but
-	// give the goroutine a moment for the assignment to be visible.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		n := len(f.burned)
-		f.mu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Burn runs on the watcher goroutine immediately after the emit; the
+	// fake signals each call, so await the signal directly instead of
+	// busy-polling the slice (which could flake under load).
+	select {
+	case <-f.burnedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery happened but Watch never called Burn")
 	}
 
 	f.mu.Lock()
@@ -86,7 +91,7 @@ func TestWatchAutoBurnsAfterDelivery(t *testing.T) {
 // switch for anyone who wants persistent chain history), Burn must never be
 // called.
 func TestWatchNoAutoBurnLeavesMessage(t *testing.T) {
-	f := &fakeBurnChain{}
+	f := &fakeBurnChain{burnedCh: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out, errc := Watch(ctx, f, WatchOpts{Interval: 5 * time.Millisecond, AutoBurn: false})
@@ -114,7 +119,7 @@ func TestWatchNoAutoBurnLeavesMessage(t *testing.T) {
 // never be treated as a delivery failure — the message was already handed
 // to the caller; a failed compost just means the scrap lingers.
 func TestWatchBurnFailureDoesNotBlockDelivery(t *testing.T) {
-	f := &fakeBurnChain{burnErr: context.DeadlineExceeded}
+	f := &fakeBurnChain{burnErr: context.DeadlineExceeded, burnedCh: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out, errc := Watch(ctx, f, WatchOpts{Interval: 5 * time.Millisecond, AutoBurn: true})

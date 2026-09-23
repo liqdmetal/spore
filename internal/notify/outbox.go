@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,13 @@ import (
 // metadata; provider credentials remain in memory/environment and never enter
 // the queue file. A provider failure leaves the event queued for retry.
 type Outbox struct {
+	// drainCount counts completed worker drain passes. It is the FIRST field
+	// so the 64-bit atomic stays aligned on 32-bit platforms. Test-only
+	// observation point: waiting on the counter distinguishes a starved
+	// scheduler (counter stuck) from a broken retry loop (counter advances
+	// while delivery does not).
+	drainCount atomic.Uint64
+
 	path     string
 	dispatch *Dispatcher
 	retry    time.Duration
@@ -178,13 +186,21 @@ func (o *Outbox) run() {
 	for {
 		select {
 		case <-o.wake:
-			o.drain()
+			o.drainOnce()
 		case <-t.C:
-			o.drain()
+			o.drainOnce()
 		case <-o.done:
 			return
 		}
 	}
+}
+
+// drainOnce runs exactly one drain pass and counts it. The worker calls this
+// so tests can observe the loop is alive at all; tests also drive it
+// synchronously to assert delivery properties without scheduling luck.
+func (o *Outbox) drainOnce() {
+	o.drain()
+	o.drainCount.Add(1)
 }
 
 func (o *Outbox) drain() {

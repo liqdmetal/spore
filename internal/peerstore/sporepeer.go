@@ -105,9 +105,16 @@ type SporePeerStore struct {
 	// observe it to distinguish "the background loop was never scheduled"
 	// (scheduler starvation under parallel load — an environmental flake
 	// source, not a product bug) from "the loop ran and failed to compost"
-	// (a real bug). Atomic so the loop goroutine and a test goroutine can
-	// read it without additional locking.
+	// (a real bug). serve surfaces the same counter as a heartbeat line so
+	// operators see the reaper advancing. Atomic so the loop goroutine and
+	// readers can access it without additional locking.
 	reapTicks atomic.Uint64
+
+	// Operator-facing reaper accounting (all atomic: written by the loop
+	// goroutine inside reapOnce, read by ReapStats from serve/tests).
+	reapRemoved atomic.Uint64 // total bodies composted by the reaper
+	lastReap    atomic.Int64  // unixNano of the last completed pass (0 = never)
+	lastRemoved atomic.Int64  // bodies removed by the last pass
 }
 
 // NewSporePeerStore opens the local hold and, if Listen is set, starts
@@ -146,10 +153,53 @@ func NewSporePeerStore(cfg SporePeerConfig) (*SporePeerStore, error) {
 //
 // Extracted from reapLoop so tests can drive a pass synchronously: the
 // compost PROPERTY is then asserted without any goroutine scheduling in
-// the way, while the counter records each pass for the wiring tests.
+// the way, while the counter records each pass for the wiring tests. The
+// pass accounting here is also what serve's heartbeat prints: passes count
+// even when nothing was removed, so an ALIVE-but-idle reaper is always
+// distinguishable from a DEAD one (frozen counter).
 func (s *SporePeerStore) reapOnce() {
 	s.reapTicks.Add(1)
-	_ = s.hold.Reap(time.Now())
+	n := s.hold.Reap(time.Now())
+	if n > 0 {
+		s.reapRemoved.Add(uint64(n))
+	}
+	s.lastReap.Store(time.Now().UnixNano())
+	s.lastRemoved.Store(int64(n))
+}
+
+// ReapStats is an operator-visible snapshot of the background composter.
+type ReapStats struct {
+	// Passes is the number of completed reap passes. It advances even when
+	// a pass removes nothing — a frozen value means the reaper is not
+	// running.
+	Passes uint64
+	// Removed is the total number of bodies the reaper has composted.
+	Removed uint64
+	// LastPass is when the most recent pass completed (zero = never ran).
+	LastPass time.Time
+	// LastRemoved is how many bodies the most recent pass removed.
+	LastRemoved int64
+	// Every is the configured cadence (0 = on-access reaping only, no
+	// background loop).
+	Every time.Duration
+}
+
+// ReapStats snapshots the reaper's counters. Safe to call at any time from
+// any goroutine.
+func (s *SporePeerStore) ReapStats() ReapStats {
+	st := ReapStats{
+		Passes:      s.reapTicks.Load(),
+		Removed:     s.reapRemoved.Load(),
+		LastRemoved: s.lastRemoved.Load(),
+		Every:       s.reapEvery,
+	}
+	// time.Unix(0, 0) is 1970, not Go's zero Time — only map the stored
+	// nanos when a pass has actually completed, so a never-run reaper
+	// reports a genuinely zero LastPass (the heartbeat keys off IsZero).
+	if nanos := s.lastReap.Load(); nanos != 0 {
+		st.LastPass = time.Unix(0, nanos)
+	}
+	return st
 }
 
 // reapLoop composts expired bodies on a fixed cadence.
