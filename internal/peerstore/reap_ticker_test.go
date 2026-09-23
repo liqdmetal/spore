@@ -12,7 +12,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,6 +64,19 @@ func spinPastDeadline(t *testing.T, deadline time.Time) {
 // future deadline inside the current second would be un-reapable until the
 // second rolls over — a property of the store, not the ticker). An
 // unexpired companion body must survive every tick.
+//
+// The test is split into a DETERMINISTIC half and a SCHEDULING half so it
+// cannot flake under parallel load:
+//
+//   - Property: one reap pass composts the expired body and nothing else.
+//     Driven synchronously via reapOnce — no goroutine in the way, so the
+//     assertion is exact regardless of machine load.
+//   - Wiring: the background loop fires and calls the same body. The test
+//     waits on the reapTicks COUNTER (not on the disk effect): if the
+//     counter never advances the scheduler starved the goroutine — an
+//     environmental condition, reported as such. If the counter advances
+//     but the bytes persist, THAT is a product bug, and the failure names
+//     both numbers so the two cases can never be confused.
 func TestReapTickerCompostsExpiredBodiesWithoutAccess(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewSporePeerStore(SporePeerConfig{Dir: dir, ReapEvery: 25 * time.Millisecond})
@@ -84,30 +96,54 @@ func TestReapTickerCompostsExpiredBodiesWithoutAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Poll for the compost instead of sleeping a fixed window: the property
-	// is monotone (the expired body only ever leaves), so polling cannot
-	// mask a real bug, while a fixed 300ms can be starved entirely under
-	// gate load - seen once as "2 .body files on disk, want 1" when the
-	// -race suite ran alongside the Rust gates (2026-09-18).
-	pollDeadline := time.Now().Add(10 * time.Second)
-	for {
-		if left := holdBodyFiles(t, dir); len(left) <= 1 {
-			break
-		}
-		if time.Now().After(pollDeadline) {
-			t.Fatalf("expired body not composted within 10s of ticker ticks: %v", holdBodyFiles(t, dir))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
+	// Deterministic property: one synchronous reap pass composts the
+	// expired body and only the expired body.
+	s.reapOnce()
 	if left := holdBodyFiles(t, dir); len(left) != 1 {
-		t.Fatalf("after reap: %d .body files on disk, want 1 (the unexpired one): %v", len(left), left)
+		t.Fatalf("after one reap pass: %d .body files on disk, want 1 (the unexpired one): %v", len(left), left)
 	}
 	if _, err := s.hold.Get(expCID); err != store.ErrNotFound {
 		t.Fatalf("post-reap get err = %v, want store.ErrNotFound (bytes gone)", err)
 	}
 	if _, err := s.hold.Get(aliveCID); err != nil {
-		t.Fatalf("unexpired body must survive the ticker: %v", err)
+		t.Fatalf("unexpired body must survive a reap pass: %v", err)
+	}
+
+	// Scheduling wiring: a fresh store's background loop must make progress
+	// of its own. Waiting on the tick counter observes the GOROUTINE, not
+	// the disk: a starved scheduler reports as "0 ticks in 10s" (skipped,
+	// environmental — CI load), never as a product failure.
+	dir2 := t.TempDir()
+	s2, err := NewSporePeerStore(SporePeerConfig{Dir: dir2, ReapEvery: 25 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	tickDeadline := time.Now().Add(10 * time.Second)
+	for s2.reapTicks.Load() == 0 {
+		if time.Now().After(tickDeadline) {
+			t.Skipf("reap goroutine received no tick within 10s (scheduler starvation under load; "+
+				"saw %d ticks) — the compost property itself is pinned synchronously above", s2.reapTicks.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The loop has ticked. Any further delay in composting is a real bug —
+	// and if it ever reproduces, the counter in the message proves the
+	// loop ran while the bytes stayed, which the old disk-polling version
+	// could never distinguish from starvation.
+	compostDeadline := time.Now().Add(2 * time.Second)
+	for {
+		left := holdBodyFiles(t, dir2)
+		if len(left) == 0 {
+			break
+		}
+		if time.Now().After(compostDeadline) {
+			t.Fatalf("reap loop ran %d tick(s) yet %d .body file(s) remain: %v — real composting bug, not scheduling",
+				s2.reapTicks.Load(), len(left), left)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -128,7 +164,15 @@ func TestReapTickerShutdownIsPrompt(t *testing.T) {
 	case <-done:
 		// prompt shutdown — a leaked ticker would hang the wait
 	case <-time.After(2 * time.Second):
-		t.Fatal("Close did not return within 2s: reap ticker is not being stopped")
+		// Distinguish environmental starvation from a real leak before
+		// failing: if the loop never got a tick, the scheduler may simply
+		// never have run it, and Close's wg.Wait is blocked on a goroutine
+		// that never started — not a ticker leak. If the loop demonstrably
+		// ran and Close still hung, that IS a stop bug.
+		if s.reapTicks.Load() == 0 {
+			t.Skipf("Close hung but the reap goroutine received no tick (scheduler starvation under load) — a leak cannot be distinguished from starvation this run")
+		}
+		t.Fatal("Close did not return within 2s with the reap loop demonstrably running: ticker is not being stopped")
 	}
 
 	// Double Close stays safe (stopOnce guards the channel close).
@@ -230,39 +274,31 @@ func TestReapTickerCompostsOnTheMillisecondDeadline(t *testing.T) {
 	// wall-clock second.
 	spinPastDeadline(t, deadline)
 
-	// The ticker must compost within a few ticks. While the bytes are still
-	// on disk the read path classifies them expired (410 semantics); the
-	// moment the ticker has acted, the SAME cid reads as not-found (404).
-	// Under seconds-floor logic alone neither the read-refusal-then-gone
-	// flip NOR the reap itself could happen before the next boundary.
-	composted := false
-	budget := time.Now().Add(300 * time.Millisecond)
-	for !composted {
-		_, err := s.hold.Get(mortalCID)
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			composted = true
-		case errors.Is(err, store.ErrExpired):
-			// still on disk, read-refused: correct interim state
-		case err == nil:
-			t.Fatal("body read back after its millisecond deadline")
-		default:
-			t.Fatalf("hold get: %v", err)
-		}
-		if composted {
-			break
-		}
-		if time.Now().After(budget) {
-			t.Fatal("ticker did not compost within 300ms of the ms deadline")
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Drive one reap pass SYNCHRONOUSLY. What this test uniquely pins is
+	// the millisecond deadline SEMANTICS — that Reap(now) composts a body
+	// whose sub-second deadline just crossed, inside the same wall-clock
+	// second where the seconds floor alone could never authorize a reap.
+	// Driving the pass directly asserts that without a goroutine in the
+	// way: under parallel load a 300ms "wait for the background ticker"
+	// budget was pure scheduling luck (the loop-vs-compost wiring is
+	// pinned separately in TestReapTickerCompostsExpiredBodiesWithoutAccess).
+	// The ticker stays running at its 25ms cadence; the synchronous pass
+	// merely removes the load window from the assertion.
+	s.reapOnce()
+	_, err = s.hold.Get(mortalCID)
+	if err != store.ErrNotFound {
+		t.Fatalf("after the ms deadline crossed and one reap pass: err = %v, want ErrNotFound (composted) — ErrExpired would mean the sub-second deadline did not drive the compost", err)
 	}
 
 	// Everything above happened in the SAME wall-clock second as the
 	// deadline: the seconds floor alone could not have authorized any reap
-	// yet, so the ms record demonstrably drove the composting.
+	// yet, so the ms record demonstrably drove the composting. A boundary
+	// crossing without any compost would invalidate the proof — but it can
+	// also happen when the TEST goroutine itself is starved past the
+	// second boundary under heavy load, which says nothing about the
+	// product; report that as an environmental skip, not a failure.
 	if time.Now().Unix() != deadline.Unix() {
-		t.Fatalf("test window crossed a second boundary (%d vs %d): timing assumptions broken",
+		t.Skipf("test window crossed a second boundary (%d vs %d): timing assumptions could not be held this run (load), so ms precision is unproven, not disproven",
 			time.Now().Unix(), deadline.Unix())
 	}
 

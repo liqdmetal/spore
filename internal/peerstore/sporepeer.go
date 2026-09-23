@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/store"
@@ -99,6 +100,14 @@ type SporePeerStore struct {
 
 	// reapEvery records the effective reap cadence (0 = on-access only).
 	reapEvery time.Duration
+
+	// reapTicks counts completed reap passes (one per ticker fire). Tests
+	// observe it to distinguish "the background loop was never scheduled"
+	// (scheduler starvation under parallel load — an environmental flake
+	// source, not a product bug) from "the loop ran and failed to compost"
+	// (a real bug). Atomic so the loop goroutine and a test goroutine can
+	// read it without additional locking.
+	reapTicks atomic.Uint64
 }
 
 // NewSporePeerStore opens the local hold and, if Listen is set, starts
@@ -128,11 +137,22 @@ func NewSporePeerStore(cfg SporePeerConfig) (*SporePeerStore, error) {
 	return s, nil
 }
 
-// reapLoop composts expired bodies on a fixed cadence. Best-effort by
-// design: a reap error (transient fs trouble) is never worth killing the
-// node over, and the next tick retries. Safe alongside Get/Put — DiskStore
-// reap is glob-read-remove over the .exp files, and expiry enforcement on
-// access is independent of whether the bytes are still on disk.
+// reapOnce is one pass of the ticker's body: a best-effort Reap of the
+// hold at the current wall clock. Best-effort by design — a reap error
+// (transient fs trouble) is never worth killing the node over, and the next
+// tick retries. Safe alongside Get/Put — DiskStore reap is glob-read-remove
+// over the .exp files, and expiry enforcement on access is independent of
+// whether the bytes are still on disk.
+//
+// Extracted from reapLoop so tests can drive a pass synchronously: the
+// compost PROPERTY is then asserted without any goroutine scheduling in
+// the way, while the counter records each pass for the wiring tests.
+func (s *SporePeerStore) reapOnce() {
+	s.reapTicks.Add(1)
+	_ = s.hold.Reap(time.Now())
+}
+
+// reapLoop composts expired bodies on a fixed cadence.
 func (s *SporePeerStore) reapLoop(every time.Duration) {
 	defer s.wg.Done()
 	t := time.NewTicker(every)
@@ -140,7 +160,7 @@ func (s *SporePeerStore) reapLoop(every time.Duration) {
 	for {
 		select {
 		case <-t.C:
-			_ = s.hold.Reap(time.Now())
+			s.reapOnce()
 		case <-s.stop:
 			return
 		}
