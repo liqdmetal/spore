@@ -156,14 +156,22 @@ func HTLCRefund(ctx context.Context, client *dero.Client, hash [32]byte, ringsiz
 	return client.InvokeSC(ctx, scid, args, 0, 0, ringsize, 0)
 }
 
-// DEXSwap performs a constant-product swap on RelayDEX: sends the caller's
-// tokenA (SC-token deposit semantics per the DVM) against the pool and
-// requires at least amountOut of tokenB back. Returns txid. Fails before any
-// wallet RPC if the RelayDEX contract ID is not configured.
-func DEXSwap(ctx context.Context, client *dero.Client, tokenA, tokenB string, amountOut uint64, ringsize uint64) (string, error) {
+// DEXSwap performs a constant-product swap on RelayDEX: deposits amountIn
+// of tokenA with the invoke (SC-token deposit semantics per the DVM) and
+// requires at least amountOut of tokenB back. amountIn MUST be non-zero — a
+// zero-deposit swap moves nothing and would be accepted by no honest pool.
+// Returns txid. Fails before any wallet RPC if the RelayDEX contract ID is
+// not configured.
+func DEXSwap(ctx context.Context, client *dero.Client, tokenA, tokenB string, amountIn, amountOut uint64, ringsize uint64) (string, error) {
 	scid, err := dexContract()
 	if err != nil {
 		return "", err
+	}
+	if amountIn == 0 {
+		return "", fmt.Errorf("sap: swap requires a non-zero amountIn of %s (a zero-deposit swap moves nothing)", tokenA)
+	}
+	if amountOut == 0 {
+		return "", fmt.Errorf("sap: swap requires a non-zero amountOut bound (0 would accept anything the pool gives)")
 	}
 	if ringsize == 0 {
 		ringsize = 16
@@ -173,7 +181,7 @@ func DEXSwap(ctx context.Context, client *dero.Client, tokenA, tokenB string, am
 		{Name: DEXArgTokenB, DataType: anchor.DataString, Value: tokenB},
 		{Name: DEXArgAmountOut, DataType: anchor.DataUint64, Value: amountOut},
 	}
-	return client.InvokeSC(ctx, scid, args, 0, 0, ringsize, 0)
+	return client.InvokeSC(ctx, scid, args, 0, amountIn, ringsize, 0)
 }
 
 // WrapDERO wraps native DERO into wDERO SC token (the DEROVALUE deposit

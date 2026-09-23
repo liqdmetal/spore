@@ -112,6 +112,8 @@ func main() {
 		settlecmd(os.Args[2:])
 	case "contract":
 		contractcmd(os.Args[2:])
+	case "derosim":
+		derosimcmd(os.Args[2:])
 	case "bill":
 		billcmd(os.Args[2:])
 	case "totp":
@@ -204,6 +206,7 @@ func usage() {
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)
   spore prekeybatch status -mailbox URL   (is the mailbox serving prekey material? consumes one bundle)
+  spore derosim serve
   spore contract deploy-mycelium -rpc URL -private-key HEX|-bin FILE [-gas-price WEI] [-wait 2m]
              (deploy contracts/MyceliumMailbox.sol from a funded local key; prints the address for -mailbox)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)

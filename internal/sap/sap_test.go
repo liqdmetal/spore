@@ -75,7 +75,7 @@ func TestUnconfiguredContractRefusesBeforeAnyRPC(t *testing.T) {
 	if _, err := HTLCRefund(context.Background(), client, [32]byte{1}, 16); err == nil {
 		t.Fatal("HTLCRefund with unconfigured contract must refuse")
 	}
-	if _, err := DEXSwap(context.Background(), client, "ta", "tb", 100, 16); err == nil {
+	if _, err := DEXSwap(context.Background(), client, "ta", "tb", 100, 50, 16); err == nil {
 		t.Fatal("DEXSwap with unconfigured contract must refuse")
 	}
 	if _, err := WrapDERO(context.Background(), client, 5, 16); err == nil {
@@ -133,10 +133,10 @@ func TestDEXSwapInvokeShape(t *testing.T) {
 	SetContractIDs("", "dexid", "")
 	t.Cleanup(func() { SetContractIDs("", "", "") })
 
-	if _, err := DEXSwap(context.Background(), client, "tokA", "tokB", 250, 16); err != nil {
+	if _, err := DEXSwap(context.Background(), client, "tokA", "tokB", 750, 250, 16); err != nil {
 		t.Fatalf("DEXSwap: %v", err)
 	}
-	if st.scid != "dexid" || st.depositDero != 0 || st.depositToken != 0 {
+	if st.scid != "dexid" || st.depositDero != 0 || st.depositToken != 750 {
 		t.Fatalf("swap deposit/scid wrong: scid=%q dero=%d token=%d", st.scid, st.depositDero, st.depositToken)
 	}
 	want := map[string]struct {
@@ -167,6 +167,19 @@ func TestDEXSwapInvokeShape(t *testing.T) {
 	for _, n := range []string{"ta", "tb", "mo"} {
 		if !seen[n] {
 			t.Fatalf("swap args missing %q: %+v", n, st.args)
+		}
+	}
+}
+
+// A zero input leg moves nothing; the binding refuses before any wallet RPC
+// (the soak's simulator enforces the same on the contract side).
+func TestDEXSwapRefusesZeroInput(t *testing.T) {
+	client, _ := newStubWallet(t)
+	SetContractIDs("", "dexid", "")
+	t.Cleanup(func() { SetContractIDs("", "", "") })
+	for _, tc := range []struct{ in, out uint64 }{{0, 50}, {100, 0}} {
+		if _, err := DEXSwap(context.Background(), client, "tokA", "tokB", tc.in, tc.out, 16); err == nil {
+			t.Fatalf("DEXSwap(in=%d,out=%d) accepted", tc.in, tc.out)
 		}
 	}
 }

@@ -52,8 +52,8 @@ func TestClassifyWebPlain(t *testing.T) {
 		}
 	})
 
-	t.Run("dex swap has no asserted amount", func(t *testing.T) {
-		raw, err := marshalDexNotice("swap", "tA->tB", 0, "", "dex-tx-1", "")
+	t.Run("dex swap carries its input leg", func(t *testing.T) {
+		raw, err := marshalDexNotice("swap", "tA->tB", 100000, "1", "dex-tx-1", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,8 +64,8 @@ func TestClassifyWebPlain(t *testing.T) {
 		if !strings.Contains(c.Summary, "DEX SWAPPED") {
 			t.Errorf("summary %q lacks DEX SWAPPED", c.Summary)
 		}
-		if c.Amount != "" {
-			t.Errorf("amount = %q, want empty (pool-settled: no asserted amount)", c.Amount)
+		if c.Amount != "1" {
+			t.Errorf("amount = %q, want 1 (the swap input leg)", c.Amount)
 		}
 		if c.Txid != "dex-tx-1" {
 			t.Errorf("txid = %q, want dex-tx-1", c.Txid)

@@ -63,6 +63,7 @@ func msgDEXSwap(args []string) {
 	fs := flag.NewFlagSet("msg dex swap", flag.ExitOnError)
 	tokenA := fs.String("ta", "", "source token (RelayDEX token identifier)")
 	tokenB := fs.String("tb", "", "destination token (RelayDEX token identifier)")
+	amount := fs.String("amount", "", "input amount of -ta, whole units with asset suffix (e.g. 10dero) — a zero-deposit swap moves nothing")
 	minOut := fs.Uint64("min-out", 0, "minimum accepted output of -tb (the SC enforces the bound)")
 	to := fs.String("to", "", "counterparty chain address (receives the in-thread settlement notice)")
 	sessionHex := fs.String("session", "", "16-hex session id of the open conversation")
@@ -80,21 +81,27 @@ func msgDEXSwap(args []string) {
 	if strings.EqualFold(*tokenA, *tokenB) {
 		check(fmt.Errorf("dex swap: -ta and -tb must differ"))
 	}
+	amountIn, assetIn, err := dexAmountWithAsset(*amount)
+	check(err)
+	if assetIn != "" && !strings.EqualFold(assetIn, "dero") && !strings.EqualFold(assetIn, "wdero") &&
+		!strings.EqualFold(assetIn, *tokenA) {
+		check(fmt.Errorf("dex swap: -amount asset %q does not match -ta %q", assetIn, *tokenA))
+	}
 	client, err := dexClient(fs)
 	check(err)
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 
-	txid, err := sap.DEXSwap(context.Background(), client, *tokenA, *tokenB, *minOut, ring)
+	txid, err := sap.DEXSwap(context.Background(), client, *tokenA, *tokenB, amountIn, *minOut, ring)
 	check(err)
-	fmt.Printf("DEX SWAPPED %s -> %s (min-out %d) tx %s\n", *tokenA, *tokenB, *minOut, shortTx(txid))
+	fmt.Printf("DEX SWAPPED %s %s -> %s (min-out %d) tx %s\n", formatAmount("dero", amountIn), *tokenA, *tokenB, *minOut, shortTx(txid))
 
 	if err := receipts.Append(*receiptsFile, receipts.Record{At: time.Now().Unix(), Session: *sessionHex,
-		Peer: *to, Direction: "sent", Kind: "dex-swap", Asset: "dero",
-		Note: *note, TxID: txid}); err != nil {
+		Peer: *to, Direction: "sent", Kind: "dex-swap", Asset: strings.ToLower(assetIn),
+		Atomic: amountIn, Note: *note, TxID: txid}); err != nil {
 		fmt.Fprintf(os.Stderr, "dex: ledger %s: %v\n", *receiptsFile, err)
 	}
-	env, err := marshalDexNotice("swap", fmt.Sprintf("%s->%s", *tokenA, *tokenB), 0, "", txid, *note)
+	env, err := marshalDexNotice("swap", fmt.Sprintf("%s->%s", *tokenA, *tokenB), amountIn, formatAmount("dero", amountIn), txid, *note)
 	check(err)
 	escrowAnnounce(fs, *to, *sessionHex, env)
 }
@@ -200,23 +207,34 @@ func dashOrSet(v string) string {
 // exact big.Int money parser as invoice/pay (float arithmetic on money is
 // forbidden). The asset suffix is optional and decorative here.
 func dexAmountAtomic(s string) (uint64, error) {
+	atomic, _, err := dexAmountWithAsset(s)
+	return atomic, err
+}
+
+// dexAmountWithAsset parses a dex -amount and additionally reports the
+// suffix the user wrote. Every RelayDEX unit mirrors DERO's 5 decimals
+// (wDERO 1:1 by design; pool tokens likewise), so the numeric part always
+// parses as dero — but ANY asset suffix is accepted, because a swap's input
+// names its own RelayDEX token (checked against -ta at the call site). The
+// atomic math is the exact big.Int parser either way; float arithmetic on
+// money is forbidden.
+func dexAmountWithAsset(s string) (uint64, string, error) {
 	if s == "" {
-		return 0, errors.New("dex: -amount is required")
+		return 0, "", errors.New("dex: -amount is required")
 	}
-	// wDERO mirrors DERO 1:1 (same 5 decimals), so a wdero suffix parses
-	// identically — rewrite it to the dero unit the shared parser knows.
-	if t := strings.TrimSpace(s); len(t) >= 5 && strings.EqualFold(t[len(t)-5:], "wdero") {
-		s = t[:len(t)-5] + "dero"
+	t := strings.TrimSpace(s)
+	// Split the trailing alphabetic asset suffix from the numeric prefix.
+	i := len(t)
+	for i > 0 && isASCIILetter(t[i-1]) {
+		i--
 	}
-	asset, atomic, err := parseAmountFlag(s)
+	num, suffix := t[:i], strings.ToLower(t[i:])
+	if suffix == "" || num == "" {
+		return 0, "", fmt.Errorf("dex: malformed -amount %q: want <number><asset>, e.g. 5dero or 10tA", s)
+	}
+	atomic, err := parseAmount("dero", num) // all dex units mirror DERO decimals
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	if asset != "dero" && asset != "wdero" {
-		return 0, fmt.Errorf("dex: -amount asset %q: only dero/wdero wrap here (suffix required, e.g. 5dero)", asset)
-	}
-	if atomic == 0 {
-		return 0, errors.New("dex: -amount must be greater than zero")
-	}
-	return atomic, nil
+	return atomic, suffix, nil
 }

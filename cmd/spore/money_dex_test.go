@@ -10,8 +10,9 @@ import (
 // settlement. These pin the wire shape, the validation rules, and the
 // in-thread rendering — the ingest side renders whatever these produce.
 func TestMarshalDexNotice(t *testing.T) {
-	// Swap: pool-settled, no asserted amount.
-	raw, err := marshalDexNotice("swap", "tA->tB", 0, "", "tx-1", "for the tools")
+	// Swap: carries its INPUT leg (a zero-deposit swap moves nothing, so a
+	// settlement with no amount would claim a zero-value move of money).
+	raw, err := marshalDexNotice("swap", "tA->tB", 100000, "1", "tx-1", "for the tools")
 	if err != nil {
 		t.Fatalf("swap: %v", err)
 	}
@@ -22,8 +23,8 @@ func TestMarshalDexNotice(t *testing.T) {
 	if env["type"] != dexType || env["action"] != "swap" || env["pair"] != "tA->tB" || env["txid"] != "tx-1" {
 		t.Fatalf("swap envelope wrong: %v", env)
 	}
-	if v, ok := env["amount"]; ok && v != "" {
-		t.Fatalf("swap must carry no amount, got %v", v)
+	if env["amount"] != "1" {
+		t.Fatalf("swap must carry its input amount, got %v", env["amount"])
 	}
 
 	// Wrap/unwrap carry the amount in both atomic and display form.
@@ -57,7 +58,7 @@ func TestDexEnvelopeRendersInThread(t *testing.T) {
 		display      string
 		want         string
 	}{
-		{"swap", "tA->tB", 0, "", "DEX SWAPPED tA->tB (pool-settled)"},
+		{"swap", "tA->tB", 100000, "1", "DEX SWAPPED tA->tB (pool-settled)"},
 		{"wrap", "dero->wdero", 500000, "5", "WRAPPED 5 dero -> wdero"},
 		{"unwrap", "wdero->dero", 250000, "2.5", "UNWRAPPED 2.5 wdero -> dero"},
 	}
@@ -99,39 +100,53 @@ func TestDexEnvelopeLedgerRecord(t *testing.T) {
 	}
 }
 
-// dexAmountAtomic shares the exact big.Int money parser with invoice/pay —
-// float arithmetic on money is forbidden — and only accepts the assets that
-// wrap here. The asset suffix is REQUIRED, matching the rest of the money
-// CLI (unit-explicit money, never a bare number).
+// dexAmountWithAsset shares the exact big.Int money parser with invoice/pay —
+// float arithmetic on money is forbidden. The suffix is REQUIRED (unit-
+// explicit money, never a bare number). Every RelayDEX unit mirrors DERO's 5
+// decimals (wDERO 1:1, pool tokens likewise), so the numeric part always
+// parses as dero; the suffix is reported verbatim so a swap can check it
+// names its input token.
 func TestDexAmountAtomic(t *testing.T) {
 	// DERO has 5 decimals: 5dero = 500000 atomic.
-	got, err := dexAmountAtomic("5dero")
-	if err != nil || got != 500000 {
-		t.Fatalf("5dero = %d, %v", got, err)
+	got, asset, err := dexAmountWithAsset("5dero")
+	if err != nil || got != 500000 || asset != "dero" {
+		t.Fatalf("5dero = %d,%q, %v", got, asset, err)
 	}
-	got, err = dexAmountAtomic("2.5dero")
-	if err != nil || got != 250000 {
-		t.Fatalf("2.5dero = %d, %v", got, err)
+	got, asset, err = dexAmountWithAsset("2.5dero")
+	if err != nil || got != 250000 || asset != "dero" {
+		t.Fatalf("2.5dero = %d,%q, %v", got, asset, err)
 	}
-	got, err = dexAmountAtomic("2.5wdero")
-	if err != nil || got != 250000 {
-		t.Fatalf("2.5wdero = %d, %v (suffix is decorative)", got, err)
+	got, asset, err = dexAmountWithAsset("2.5wdero")
+	if err != nil || got != 250000 || asset != "wdero" {
+		t.Fatalf("2.5wdero = %d,%q, %v", got, asset, err)
 	}
 	// Excess precision must refuse, not truncate: 0.000001 is below the
 	// atomic unit.
-	if _, err := dexAmountAtomic("0.000001"); err == nil {
+	if _, _, err := dexAmountWithAsset("0.000001dero"); err == nil {
 		t.Fatal("sub-atomic precision must refuse")
 	}
-	if _, err := dexAmountAtomic(""); err == nil {
+	if _, _, err := dexAmountWithAsset(""); err == nil {
 		t.Fatal("empty amount must refuse")
 	}
-	if _, err := dexAmountAtomic("5"); err == nil {
+	if _, _, err := dexAmountWithAsset("5"); err == nil {
 		t.Fatal("bare number must refuse — the asset suffix is required")
 	}
-	if _, err := dexAmountAtomic("0"); err == nil {
-		t.Fatal("zero amount must refuse")
+	if _, _, err := dexAmountWithAsset("0"); err == nil {
+		t.Fatal("no asset suffix must refuse")
 	}
-	if _, err := dexAmountAtomic("5evm"); err == nil {
-		t.Fatal("non-dero asset must refuse")
+	// A swap's input is an arbitrary RelayDEX token: any asset suffix parses,
+	// with DERO's exact decimal math.
+	got, asset, err = dexAmountWithAsset("10tA")
+	if err != nil || got != 1000000 || asset != "ta" {
+		t.Fatalf("10tA = %d,%q, %v (swap inputs name their own token)", got, asset, err)
+	}
+	got, asset, err = dexAmountWithAsset("7.5TB")
+	if err != nil || got != 750000 || asset != "tb" {
+		t.Fatalf("7.5TB = %d,%q, %v", got, asset, err)
+	}
+	// The suffix is a run of letters; a dash inside it is malformed rather
+	// than silently truncated.
+	if _, _, err := dexAmountWithAsset("7.5T-B"); err == nil {
+		t.Fatal("dashed suffix must refuse, not truncate to \"7.5T-\"")
 	}
 }

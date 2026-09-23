@@ -95,8 +95,11 @@ func marshalDexNotice(action, pair string, atomic uint64, amountDisplay, txid, n
 	if txid == "" {
 		return nil, errors.New("dex: settlement txid required")
 	}
-	if action != "swap" && atomic == 0 {
-		return nil, errors.New("dex: wrap/unwrap require a non-zero amount")
+	if atomic == 0 {
+		// Swaps carry the INPUT amount; wrap/unwrap the wrapped amount. A
+		// zero on either leg would render as a 0-value settlement about
+		// money that moved.
+		return nil, errors.New("dex: a settlement requires a non-zero amount")
 	}
 	return json.Marshal(dexEnvelope{
 		Type: dexType, Action: action, Pair: pair, Atomic: atomic, Amount: amountDisplay,
