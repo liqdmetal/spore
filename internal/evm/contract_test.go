@@ -1,7 +1,9 @@
 package evm
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -301,5 +304,166 @@ func TestDeployContractEIP155RequiresKey(t *testing.T) {
 	b := NewBackend(srv.URL, "evm-test", vecSender)
 	if _, err := b.DeployContractEIP155(context.Background(), "", "6080", nil); !errors.Is(err, ErrNoSigner) {
 		t.Fatalf("want ErrNoSigner, got %v", err)
+	}
+}
+
+// ---- Pinned MyceliumMailbox creation bytecode ----
+//
+// tools/mycelium.bin (the deploy path's default -bin) now holds the REAL
+// solc creation bytecode for contracts/MyceliumMailbox.sol, generated with
+// solc v0.8.26+commit.8a97fa7a via the documented pipeline:
+//
+//	solc --bin contracts/MyceliumMailbox.sol | tail -1 > tools/mycelium.bin
+//
+// solc output is deterministic for a fixed (source, version, settings) triple,
+// so the pins below hold byte-for-byte on any machine with the same solc
+// version. ANY change — a different solc version, a .sol edit, a tampered
+// .bin — breaks these tests. That is the point: the artifact going on chain
+// with real money must never drift silently. Regenerating is a deliberate
+// act: rebuild tools/mycelium.bin AND update the pins together.
+const pinnedMyceliumHash = "4110358c6fe39050fd2231c8e5784958b4572ab555a92368f417b0f15edccbdf" // sha256 of the decoded creation code
+
+// pinnedMyceliumRuntimeWords is the solc 0.8.x creation prologue after the
+// 5-byte constructor prologue: the runtime is embedded as a literal blob that
+// the deploy epilogue CODECOPYs into place and RETURNS.
+const pinnedMyceliumPrologue = "6080604052348015"
+
+// pinnedMyceliumBinPath is tools/mycelium.bin relative to this package dir
+// (go test runs with the CWD at the package source).
+const pinnedMyceliumBinPath = "../../tools/mycelium.bin"
+
+// loadPinnedMycelium loads the committed artifact and returns its decoded
+// creation code. Fail (not skip) when absent: the file is committed, so its
+// absence means an accidental deletion, exactly what the pin is for.
+func loadPinnedMycelium(t *testing.T) (codeHex string, code []byte) {
+	t.Helper()
+	codeHex, err := LoadCreationCode(pinnedMyceliumBinPath)
+	if err != nil {
+		t.Fatalf("committed tools/mycelium.bin missing or unreadable: %v", err)
+	}
+	code, err = hex.DecodeString(codeHex)
+	if err != nil {
+		t.Fatalf("committed tools/mycelium.bin is not hex: %v", err)
+	}
+	return codeHex, code
+}
+
+// TestPinnedMyceliumBytecode pins the committed artifact: its sha256, its
+// size, and its solc creation-program shape (constructor prologue + embedded
+// runtime blob + solc metadata marker), so a truncated, hand-invented, or
+// foreign-contract .bin cannot pass.
+func TestPinnedMyceliumBytecode(t *testing.T) {
+	_, code := loadPinnedMycelium(t)
+
+	if got := sha256.Sum256(code); hex.EncodeToString(got[:]) != pinnedMyceliumHash {
+		t.Fatalf("tools/mycelium.bin drifted from the pin:\n got sha256 %x\nwant sha256 %s\n(legit recompile? regenerate the file AND update the pin together)", got, pinnedMyceliumHash)
+	}
+	// A real contract, not the toy blob used in LoadCreationCode's unit test.
+	if len(code) < 1000 {
+		t.Fatalf("committed bytecode suspiciously small: %d bytes", len(code))
+	}
+	// Shape: 0x6080604052348015... — the universal solc 0.8.x constructor
+	// prologue (PUSH1 0x80 PUSH1 0x40 MSTORE CALLVALUE DUP1 ISZERO).
+	if !strings.HasPrefix(hex.EncodeToString(code), pinnedMyceliumPrologue) {
+		t.Fatalf("missing solc constructor prologue %s — not a solc 0.8.x artifact", pinnedMyceliumPrologue)
+	}
+	// Deploy epilogue: PUSH2 <runtime-size> ... RETURN — decode the runtime
+	// size and require total length consistency, so a truncated file trips
+	// here instead of mid-deployment on chain.
+	if len(code) < 28 {
+		t.Fatalf("too short to contain the deploy epilogue: %d bytes", len(code))
+	}
+	if code[16] != 0x61 { // PUSH2 introducing the runtime size
+		t.Fatalf("byte 16 = %#x, want 0x61 (PUSH2 runtime size)", code[16])
+	}
+	runtimeSize := int(code[17])<<8 | int(code[18])
+	const epilogueLen = 12 // 3 (PUSH2 size) + 9 (... 5f 39 5f f3 fe)
+	if got := len(code) - 16 - epilogueLen; got != runtimeSize {
+		t.Fatalf("embedded runtime size %d != actual %d — truncated or corrupt artifact", runtimeSize, got)
+	}
+	runtime := code[len(code)-runtimeSize:]
+	// The runtime ends with CBOR swarm metadata; ASCII "solc" (64736f6c63)
+	// must appear in it — proves the blob was produced by solc, not forged.
+	if !strings.Contains(hex.EncodeToString(runtime), "64736f6c63") {
+		t.Fatal("embedded runtime lacks the solc metadata marker — not a solc-produced artifact")
+	}
+}
+
+// TestDeployTxCarriesPinnedMyceliumCode closes the loop: the bytes the deploy
+// path actually broadcasts (the data field of the signed creation tx) must be
+// the pinned bytecode, byte for byte — not a re-encoded or truncated copy.
+func TestDeployTxCarriesPinnedMyceliumCode(t *testing.T) {
+	codeHex, code := loadPinnedMycelium(t)
+
+	n := &deployStubNode{}
+	srv := httptest.NewServer(n.handler())
+	defer srv.Close()
+
+	// The exact entry the CLI uses: evm.LoadCreationCode(tools/mycelium.bin)
+	// -> Backend.DeployContractEIP155.
+	b := NewBackend(srv.URL, "evm-test", vecSender)
+	res, err := b.DeployContractEIP155(context.Background(), vecKey, codeHex, nil)
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if !strings.EqualFold(res.Addr, vecCreateAddrN7) {
+		t.Fatalf("addr = %s, want %s", res.Addr, vecCreateAddrN7)
+	}
+	n.mu.Lock()
+	rawTx := n.rawTx
+	n.mu.Unlock()
+	items := rlpItems(t, strings.TrimPrefix(rawTx, "0x"))
+	if len(items) != 9 {
+		t.Fatalf("legacy EIP-155 tx has 9 fields, got %d", len(items))
+	}
+	if got := items[5]; !bytes.Equal(got, code) {
+		t.Fatalf("creation tx data != pinned bytecode (got %d bytes, want %d)", len(got), len(code))
+	}
+}
+
+// TestSolcRecompileMatchesPinned re-runs the documented solc pipeline and
+// requires it to reproduce the committed file byte for byte. Skipped when no
+// solc is installed; if a solc of a DIFFERENT version than the pinned one is
+// found, the test reports the version and skips rather than failing — a new
+// solc legitimately produces different bytes, and regenerating the pin is a
+// deliberate act, not a side effect of someone's local toolchain.
+//
+// The invocation runs from the repo root on purpose: solc's metadata hash is
+// path-sensitive, and the documented pipeline pins the source path as
+// "contracts/MyceliumMailbox.sol" relative to the repo root. Same source +
+// same version + same relative path => byte-identical output anywhere.
+func TestSolcRecompileMatchesPinned(t *testing.T) {
+	solc, err := exec.LookPath("solc")
+	if err != nil {
+		t.Skip("solc not installed; the committed artifact is pinned by hash in TestPinnedMyceliumBytecode")
+	}
+	out, err := exec.Command(solc, "--version").CombinedOutput()
+	if err != nil {
+		t.Skipf("solc --version failed: %v", err)
+	}
+	const pinnedVersion = "0.8.26"
+	if !strings.Contains(string(out), pinnedVersion) {
+		t.Skipf("local solc is not %s (got %s); regenerating tools/mycelium.bin + pins with a new version is a deliberate act", pinnedVersion, strings.TrimSpace(string(out)))
+	}
+	// The documented pipeline, verbatim, from the repo root (this package is
+	// two levels below it): solc --bin contracts/MyceliumMailbox.sol | tail -1.
+	cmd := exec.Command(solc, "--bin", "contracts/MyceliumMailbox.sol")
+	cmd.Dir = "../.."
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("solc --bin failed: %v\n%s", err, out)
+	}
+	// The pipeline's `tail -1`: the last non-empty line is the hex blob.
+	lines := strings.Fields(string(out))
+	if len(lines) == 0 {
+		t.Fatal("solc produced no output")
+	}
+	blob := strings.TrimPrefix(lines[len(lines)-1], "0x")
+	want, err := LoadCreationCode(pinnedMyceliumBinPath)
+	if err != nil {
+		t.Fatalf("committed artifact unreadable: %v", err)
+	}
+	if blob != want {
+		t.Fatalf("fresh solc compile != committed tools/mycelium.bin:\n got %d hex chars\nwant %d hex chars\n(the .sol changed? regenerate the artifact AND update the pins together)", len(blob), len(want))
 	}
 }
