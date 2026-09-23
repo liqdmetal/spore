@@ -13,7 +13,8 @@ remaining; it does not re-state live status.*
 - **DERO** — whisper (no-relay unicast), long bodies, rooms, browser UI.
   Live, mainnet-verified.
 - **EVM / Solana** — mailbox delivery + auto-burn after receipt. Solana program
-  v3 live on mainnet; EVM verified on anvil (deploy pending).
+  v3 live on mainnet; EVM verified on anvil with the in-repo deploy path ready
+  (`spore contract deploy-mycelium`; needs a funded account + solc).
 - **E2 secure layer** (`internal/secure`, `0xE0` envelope) for public chains.
 - **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`, `0xE2`):
   forward-private, post-compromise healing, AAD-bound to the session, ratchet
@@ -98,9 +99,11 @@ remaining; it does not re-state live status.*
   pointer (DERO + EVM-calldata; wire-tested). Other carriers refuse `-amount`
   rather than silently underpay.
 - In-thread **invoice / payment** envelopes (`msg invoice`, `msg pay`).
-- **HTLC escrow funding in chat:** `-escrow htlc` locks `-amount` in the
-  mainnet RelayHTLC contract with preimage-hash, recipient, and expiry
-  (claim/refund and DEX swap surfaces remain — product row #1).
+- **HTLC escrow in chat:** `-escrow htlc` locks `-amount` in the
+  mainnet RelayHTLC contract; `msg escrow claim` (preimage, locally verified
+  first) and `msg escrow refund` close it in-thread with a
+  `spore/escrow/v1` settlement notice riding the session (DEX swap surfaces
+  remain — product row #1).
 
 ### Onboarding + ops
 - `spore init` one-shot identity kit + `config.json` defaults (every E2 command
@@ -136,10 +139,10 @@ upstream gate.
 
 | # | Item | Why it's gated / what it needs |
 |---|---|---|
-| 1 | **Finish escrow + swap UX in chat** | The contract seam is live: `internal/sap` (generated relay-dex bindings: HTLC fund/claim/refund, DEX swap, wrap/unwrap) and `-escrow htlc` funds a RelayHTLC from `msg` (`-escrow-hash/-escrow-recipient/-escrow-expiry`). Remaining: claim/refund flows in-thread, `-escrow dex` (DEXSwap/WrapDERO surfaces), and the operator rake collection (see docs/BUSINESS.md, "Line 2 — settlement rake"). |
-| 2 | **Finish tokenized search execution** | The inverted index exists (`internal/maildb/inverted_index.go`: AND/OR/NOT/phrase) and the query grammar is wired — `SearchQuery{All,AnyOf,Not,Phrase,Peer,Thread,TxID}` and `mail search` with `-phrase/-peer/-thread/-txid` + highlighted snippets. Remaining: execute `Search` *through* the index (it still linear-scans messages and the index is maintained but unconsulted), surface OR/NOT via CLI flags, and make the index survive restart cheaply. |
+| 1 | **Finish escrow + swap UX in chat** | **HTLC claim/refund is now in-thread**: `msg escrow claim -hash -preimage` verifies sha256(preimage)==hash locally, invokes the mainnet RelayHTLC, appends the ledger record, and announces the settlement (preimage revealed) via a `spore/escrow/v1` envelope on the ratcheted session; `msg escrow refund` does the same for expired deals (ingest renders both). Remaining: `-escrow dex` (DEXSwap/WrapDERO surfaces) and the operator rake collection (see docs/BUSINESS.md, "Line 2 — settlement rake"). |
+| 2 | **Tokenized search execution** — **shipped** | `maildb.Search` now prefilters through the inverted index (`PositionsContaining`: one vocabulary scan unions the positions of tokens containing any query term — a provable superset under substring semantics), the index is rebuilt on `Open` so search survives restart, `Purge` rebuilds it so compaction can never misalign positions, and `mail search` gained `-any`/`-not` OR/NOT flags. Exact `matchesQuery` semantics are unchanged and pinned by equivalence tests. |
 | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
-| 4 | **Deploy `MyceliumMailbox.sol`** | Written + backend proven; needs a funded EVM account on a real chain. |
+| 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Still gated on: a funded EVM account on a real chain, and a solc build of the contract (`solc --bin contracts/MyceliumMailbox.sol | tail -1 > tools/mycelium.bin`) — the bytecode is deliberately not embedded in source. |
 | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
 | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
 | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |

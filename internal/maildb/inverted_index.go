@@ -80,6 +80,8 @@ func (idx *InvertedIndex) Add(txid, peerAddr string, atUnix int64, snippet strin
 }
 
 // SearchAnd returns message indices whose snippets contain ALL of the given terms.
+// SearchAnd returns message indices whose snippets contain ALL of the given
+// terms as whole tokens.
 func (idx *InvertedIndex) SearchAnd(terms []string) []int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -240,6 +242,35 @@ func (idx *InvertedIndex) PhraseSearch(phrase string, window int) []int {
 	}
 
 	return hits
+}
+
+// PositionsContaining returns the union of index positions whose token
+// CONTAINS any of the given terms as a substring. This is the search
+// prefilter primitive for substring semantics: a term occurring anywhere in
+// a snippet always occurs inside one whitespace-delimited token (tokens are
+// maximal non-whitespace runs), so any message whose text contains a term
+// has a token containing it. The result is therefore a SUPERSET of the
+// exact matches; the caller applies its exact matcher to filter. One call
+// scans the vocabulary once (O(vocab) string contains) instead of the
+// caller scanning every snippet per term (O(n·terms)).
+func (idx *InvertedIndex) PositionsContaining(terms []string) map[int]struct{} {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	out := make(map[int]struct{})
+	if len(terms) == 0 {
+		return out
+	}
+	for tok, set := range idx.tokens {
+		for _, t := range terms {
+			if strings.Contains(tok, t) {
+				for pos := range set {
+					out[pos] = struct{}{}
+				}
+				break
+			}
+		}
+	}
+	return out
 }
 
 // SegmentByDate builds segment keys ("year.month") to enable prefix-range queries.

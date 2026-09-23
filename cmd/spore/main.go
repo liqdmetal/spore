@@ -87,7 +87,7 @@ func main() {
 	case "donate":
 		donatecmd(os.Args[2:])
 	case "msg":
-		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay") {
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "escrow" || os.Args[2] == "approve" || os.Args[2] == "receipts") {
 			msgE2(os.Args[2:])
 		} else {
 			msgcmd(os.Args[2:])
@@ -110,6 +110,8 @@ func main() {
 		subcmd(os.Args[2:])
 	case "settle":
 		settlecmd(os.Args[2:])
+	case "contract":
+		contractcmd(os.Args[2:])
 	case "bill":
 		billcmd(os.Args[2:])
 	case "totp":
@@ -178,6 +180,8 @@ func usage() {
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
+  spore msg escrow claim -hash HEX -preimage HEX -to ADDR -session HEX ...   (close a funded HTLC with the preimage; announces in-thread)
+  spore msg escrow refund -hash HEX -to ADDR -session HEX ...                (refund an expired HTLC; announces in-thread)
   spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
   spore continuity create|check-in|status|release|verify|observe|quorum|anchor ... (encrypted continuity vault; signed N-of-M release; explicit optional chain commitment)
   spore e2-device id|status|export|import [-state-dir D] [-state-key F]   (multi-device ratchet state sync)
@@ -199,6 +203,8 @@ func usage() {
   spore prekeybatch gen -out F.json [-n 50] [-start-id 1]   (offline: sign N single-use PUBLIC bundles; OPK privates -> your opk pool)
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)
   spore prekeybatch status -mailbox URL   (is the mailbox serving prekey material? consumes one bundle)
+  spore contract deploy-mycelium -rpc URL -private-key HEX|-bin FILE [-gas-price WEI] [-wait 2m]
+             (deploy contracts/MyceliumMailbox.sol from a funded local key; prints the address for -mailbox)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)

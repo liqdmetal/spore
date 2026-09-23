@@ -116,6 +116,13 @@ func Open(path string) (*MailDB, error) {
 			m.threads = data.Threads
 		}
 		m.messages = data.Messages
+		// Rebuild the in-memory inverted index from the loaded messages: the
+		// index is a derived structure and is never persisted, so without this
+		// every restart silently degraded `mail search` to an empty result set
+		// (the old code linear-scanned instead, which masked the gap).
+		for _, mm := range m.messages {
+			m.idx.Add(mm.TxID, mm.Peer, mm.At, mm.Snippet)
+		}
 	} else if os.IsNotExist(err) {
 		// non-existent store is fine — start fresh
 	} else if !os.IsNotExist(err) {
@@ -332,11 +339,33 @@ func matchesQuery(mm MessageMeta, q SearchQuery) bool {
 }
 
 // Search runs a parsed query over the indexed messages, newest first.
+//
+// The inverted index serves as a candidate prefilter with EXACT semantics:
+// each query term must occur inside some whitespace-delimited snippet token,
+// so the union of positions of tokens containing any term is a superset of
+// every possible hit (any message that would match contains the term inside
+// one of its tokens). messages without index positions — snippets longer
+// than the index's 512-byte capture, or entries predating the rebuild-on-
+// open behavior — are always kept as candidates, so the prefilter can only
+// skip messages the exact matcher would reject. When no token term is
+// present (phrase-only or scope-only queries) it degrades to the full
+// linear scan. matchesQuery keeps the final say, so Phrase, Not, and the
+// peer/thread/txid scopes behave exactly as before.
 func (m *MailDB) Search(q SearchQuery) []MessageMeta {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := []MessageMeta{}
-	for _, mm := range m.messages {
+	tokenTerms := append(append([]string{}, q.All...), q.AnyOf...)
+	var candidates map[int]struct{}
+	if len(tokenTerms) > 0 {
+		candidates = m.idx.PositionsContaining(tokenTerms)
+	}
+	for i, mm := range m.messages {
+		if candidates != nil {
+			if _, ok := candidates[i]; !ok {
+				continue // index proves no token term can match this snippet
+			}
+		}
 		if matchesQuery(mm, q) {
 			out = append(out, mm)
 		}
@@ -421,6 +450,16 @@ func (m *MailDB) Purge(before time.Time) (int, error) {
 		}
 		if err := m.saveLocked(); err != nil {
 			return removed, err
+		}
+	}
+	if removed > 0 {
+		// Rebuild the inverted index from the surviving messages. The index
+		// is append-only (positional msgAt/snip arrays), so a compaction
+		// without a rebuild would leave every entry misaligned with
+		// m.messages and silently corrupt later searches.
+		m.idx = NewInvertedIndex(len(m.messages))
+		for _, mm := range m.messages {
+			m.idx.Add(mm.TxID, mm.Peer, mm.At, mm.Snippet)
 		}
 	}
 	return removed, nil

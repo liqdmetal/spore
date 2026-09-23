@@ -47,7 +47,8 @@ func msgMail(args []string) {
 		// defined below that take values.
 		if !expectValue && strings.HasPrefix(a, "-") && !strings.Contains(a, "=") &&
 			(a == "-db" || a == "-addr" || a == "-nick" || a == "-pinned" ||
-				a == "-phrase" || a == "-peer" || a == "-thread" || a == "-older-than") {
+				a == "-phrase" || a == "-peer" || a == "-thread" || a == "-older-than" ||
+				a == "-any" || a == "-not") {
 			expectValue = true
 			continue
 		}
@@ -66,6 +67,8 @@ func msgMail(args []string) {
 	phrase := fs.String("phrase", "", "exact case-insensitive phrase to search for")
 	searchPeer := fs.String("peer", "", "scope search to this sender/peer address (exact)")
 	searchThread := fs.String("thread", "", "scope search to this session id hex (exact)")
+	searchAny := fs.String("any", "", "comma-separated tokens where ANY one may appear (OR group)")
+	searchNot := fs.String("not", "", "comma-separated tokens that must NOT appear")
 	olderThan := fs.Duration("older-than", 0, "purge: delete indexed messages older than this duration (e.g. 30d is not supported by Go durations — use 720h)")
 	_ = fs.Parse(rest)
 	if *dbPath == "" {
@@ -206,6 +209,16 @@ func msgMail(args []string) {
 				continue
 			}
 			q.All = append(q.All, strings.ToLower(tok))
+		}
+		for _, tok := range strings.Split(*searchAny, ",") {
+			if tok = strings.TrimSpace(strings.ToLower(tok)); tok != "" {
+				q.AnyOf = append(q.AnyOf, tok)
+			}
+		}
+		for _, tok := range strings.Split(*searchNot, ",") {
+			if tok = strings.TrimSpace(strings.ToLower(tok)); tok != "" {
+				q.Not = append(q.Not, tok)
+			}
 		}
 		if *phrase != "" {
 			q.Phrase = *phrase

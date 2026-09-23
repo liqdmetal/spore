@@ -26,6 +26,7 @@ import (
 const (
 	invoiceType = "spore/invoice/v1"
 	paymentType = "spore/payment/v1"
+	escrowType  = "spore/escrow/v1"
 )
 
 type invoiceEnvelope struct {
@@ -47,6 +48,45 @@ type paymentEnvelope struct {
 	TxID      string `json:"txid"`   // settlement txid on the carrier chain
 	Note      string `json:"note"`
 	At        int64  `json:"at"`
+}
+
+// escrowEnvelope announces an HTLC settlement IN-THREAD: the money moved via
+// the RelayHTLC contract (sap.HTLCClaim/HTLCRefund), and this envelope is the
+// human-readable receipt that rides the ratcheted session afterwards. A claim
+// reveals the preimage to the counterparty (it is already public on-chain —
+// the envelope just spares them a chain scan); a refund tells the payee the
+// deal expired and the funds went back.
+type escrowEnvelope struct {
+	Type     string `json:"type"`
+	Action   string `json:"action"`             // "claim" | "refund"
+	Hash     string `json:"hash"`               // 64-hex HTLC preimage hash
+	Preimage string `json:"preimage,omitempty"` // 64-hex; set on claim only
+	TxID     string `json:"txid"`               // claim/refund txid on the carrier chain
+	Asset    string `json:"asset"`
+	Atomic   uint64 `json:"atomic"` // escrowed amount (0 = not stated)
+	Note     string `json:"note"`
+	At       int64  `json:"at"`
+}
+
+// marshalEscrowNotice builds the in-thread settlement envelope for an HTLC
+// claim or refund.
+func marshalEscrowNotice(action, hashHex, preimageHex, txid, note string, atomic uint64) ([]byte, error) {
+	if action != "claim" && action != "refund" {
+		return nil, fmt.Errorf("escrow: unknown action %q", action)
+	}
+	if txid == "" {
+		return nil, errors.New("escrow: settlement txid required")
+	}
+	if hashHex == "" {
+		return nil, errors.New("escrow: hash required")
+	}
+	if action == "claim" && preimageHex == "" {
+		return nil, errors.New("escrow: claim requires the preimage")
+	}
+	return json.Marshal(escrowEnvelope{
+		Type: escrowType, Action: action, Hash: hashHex, Preimage: preimageHex,
+		TxID: txid, Asset: "dero", Atomic: atomic, Note: note, At: time.Now().Unix(),
+	})
 }
 
 // assetDecimals maps a chain identifier to the decimal places of its atomic
@@ -243,6 +283,14 @@ func parseMoneyRecord(b []byte) (receipts.Record, bool) {
 		}
 		return receipts.Record{At: env.At, Kind: "payment", InvoiceID: env.InvoiceID,
 			Asset: env.Asset, Atomic: env.Atomic, TxID: env.TxID, Note: env.Note}, true
+	case escrowType:
+		var env escrowEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.TxID == "" || env.Hash == "" {
+			return receipts.Record{}, false
+		}
+		return receipts.Record{At: env.At, Kind: "escrow-" + env.Action,
+			Asset: env.Asset, Atomic: env.Atomic, TxID: env.TxID,
+			Note: "HTLC " + shortOrDash(env.Hash)}, true
 	}
 	return receipts.Record{}, false
 }
@@ -277,6 +325,21 @@ func parseMoneyEnvelope(b []byte) (kind, summary string, ok bool) {
 			ref = "for " + env.InvoiceID
 		}
 		return "payment", fmt.Sprintf("PAID %s %s (%s) tx %s", formatAmount(env.Asset, env.Atomic), env.Asset, ref, shortTx(env.TxID)), true
+	case escrowType:
+		var env escrowEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.TxID == "" || env.Hash == "" {
+			return "", "", false
+		}
+		h := env.Hash
+		if len(h) > 12 {
+			h = h[:12] + "…"
+		}
+		if env.Action == "claim" {
+			return "escrow", fmt.Sprintf("ESCROW CLAIMED %s: preimage revealed, tx %s", h, shortTx(env.TxID)), true
+		}
+		if env.Action == "refund" {
+			return "escrow", fmt.Sprintf("ESCROW REFUNDED %s: expired, funds returned, tx %s", h, shortTx(env.TxID)), true
+		}
 	}
 	return "", "", false
 }

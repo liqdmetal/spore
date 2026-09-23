@@ -62,6 +62,15 @@ func msgE2(args []string) {
 		msgInvoiceE2(args[1:])
 	case "pay":
 		msgPayE2(args[1:])
+	case "escrow":
+		if len(args) >= 2 && args[1] == "claim" {
+			msgEscrowClaimE2(args[2:])
+		} else if len(args) >= 2 && args[1] == "refund" {
+			msgEscrowRefundE2(args[2:])
+		} else {
+			fmt.Fprintln(os.Stderr, "usage: spore msg escrow claim|refund -hash HEX -to ADDR -session HEX [flags]")
+			os.Exit(2)
+		}
 	case "approve":
 		msgApprove(args[1:])
 	case "receipts":
