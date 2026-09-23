@@ -113,6 +113,7 @@ jobs:
     name: Build spore-peer (darwin)
     runs-on: macos-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Extract the audited pin
         id: pin
         run: |
