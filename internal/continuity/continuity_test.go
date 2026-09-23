@@ -97,7 +97,18 @@ func TestLateCheckinCannotResurrectVault(t *testing.T) {
 func TestTamperingAndWrongRecipientFailClosed(t *testing.T) {
 	now := int64(1_800_000_000)
 	v, _, recipient := testVault(t, now)
-	v.Recipients[0].Ciphertext = v.Recipients[0].Ciphertext[:len(v.Recipients[0].Ciphertext)-2] + "00"
+	// Flip the last hex char of the ciphertext to a DIFFERENT value. The
+	// previous "00" tail overwrite was a no-op ~1 in 256 runs (the final
+	// byte is Poly1305 tag output — uniform, so it was sometimes already
+	// "00"), making this tamper silently vanish on exactly the runs it
+	// needed to fail for. Same class as the rotation_test fix.
+	tail := v.Recipients[0].Ciphertext[len(v.Recipients[0].Ciphertext)-1]
+	if tail == '0' {
+		tail = 'f'
+	} else {
+		tail = '0'
+	}
+	v.Recipients[0].Ciphertext = v.Recipients[0].Ciphertext[:len(v.Recipients[0].Ciphertext)-1] + string(tail)
 	if err := v.Verify(); err == nil {
 		t.Fatal("tampered ciphertext verified")
 	}
