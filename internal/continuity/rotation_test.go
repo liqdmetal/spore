@@ -43,7 +43,15 @@ func TestRevocationStateRejectsRollbackAndTamper(t *testing.T) {
 	}
 	copyState := *state
 	copyState.Records = append([]RevocationRecord(nil), state.Records...)
-	copyState.Records[0].Subject = "00" + copyState.Records[0].Subject[2:]
+	// Flip the first hex character of the subject to a DIFFERENT value. The
+	// previous "00" prefix rewrite was a no-op ~1 in 256 runs (when the real
+	// prefix already was "00"), making the tamper — and thus this test —
+	// silently vanish on exactly the keys it needed to fail for.
+	if copyState.Records[0].Subject[0] == 'f' {
+		copyState.Records[0].Subject = "0" + copyState.Records[0].Subject[1:]
+	} else {
+		copyState.Records[0].Subject = "f" + copyState.Records[0].Subject[1:]
+	}
 	if err := copyState.VerifyForVault(v); err == nil {
 		t.Fatal("tampered revocation record verified")
 	}
