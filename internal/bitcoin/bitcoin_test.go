@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/address/v2"
+	"github.com/btcsuite/btcd/chaincfg/v2"
+	"github.com/btcsuite/btcd/txscript/v2"
 	"github.com/liqdmetal/spore/internal/chain"
 )
 
@@ -51,7 +51,7 @@ func TestCanonicalPointerValidation(t *testing.T) {
 
 func TestBitcoinAddressToPkScript(t *testing.T) {
 	addr := "1BitcoinEaterAddressDontSendf59kuE"
-	a, err := btcutil.DecodeAddress(addr, &chaincfg.MainNetParams)
+	a, err := address.DecodeAddress(addr, &chaincfg.MainNetParams)
 	if err != nil {
 		t.Fatal(err)
 	}

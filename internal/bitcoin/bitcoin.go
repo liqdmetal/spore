@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcd/address/v2"
+	"github.com/btcsuite/btcd/chaincfg/v2"
+	"github.com/btcsuite/btcd/chainhash/v2"
+	"github.com/btcsuite/btcd/txscript/v2"
+	"github.com/btcsuite/btcd/wire/v2"
 	"github.com/liqdmetal/spore/internal/chain"
 )
 
@@ -208,7 +208,7 @@ func (b *Backend) PostPayload(ctx context.Context, to string, p chain.Payload, _
 	return chain.PostResult{TxID: id}, e
 }
 func btcAddress(s string, p *chaincfg.Params) ([]byte, error) {
-	addr, err := btcutil.DecodeAddress(s, p)
+	addr, err := address.DecodeAddress(s, p)
 	if err != nil {
 		return nil, fmt.Errorf("bitcoin: invalid destination address: %w", err)
 	}

@@ -1,41 +1,45 @@
 module github.com/liqdmetal/spore
 
-go 1.23.1
-
-toolchain go1.23.3
+go 1.27.1
 
 require (
-	github.com/btcsuite/btcd v0.24.2
-	github.com/btcsuite/btcd/btcutil v1.1.5
-	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
+	github.com/btcsuite/btcd/address/v2 v2.0.0
+	github.com/btcsuite/btcd/btcec/v2 v2.5.0
+	github.com/btcsuite/btcd/chaincfg/v2 v2.0.0
+	github.com/btcsuite/btcd/chainhash/v2 v2.0.0
+	github.com/btcsuite/btcd/txscript/v2 v2.0.0
+	github.com/btcsuite/btcd/wire/v2 v2.0.1
+	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/gagliardetto/solana-go v1.11.0
 	github.com/icholy/digest v1.2.0
 	github.com/nbd-wtf/go-nostr v0.50.4
-	golang.org/x/crypto v0.36.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	golang.org/x/crypto v0.57.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
 )
 
 require (
-	filippo.io/edwards25519 v1.0.0-rc.1 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
 	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/blendle/zapdriver v1.3.1 // indirect
-	github.com/btcsuite/btcd/btcec/v2 v2.3.4 // indirect
-	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f // indirect
-	github.com/bytedance/sonic v1.13.1 // indirect
-	github.com/bytedance/sonic/loader v0.2.4 // indirect
-	github.com/cloudwego/base64x v0.1.5 // indirect
+	github.com/btcsuite/btclog v1.0.0 // indirect
+	github.com/bytedance/gopkg v0.1.3 // indirect
+	github.com/bytedance/sonic v1.15.4 // indirect
+	github.com/bytedance/sonic/loader v0.5.2 // indirect
+	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/fatih/color v1.9.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/gagliardetto/binary v0.8.0 // indirect
 	github.com/gagliardetto/treeout v0.1.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/logrusorgru/aurora v2.0.3+incompatible // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
@@ -48,7 +52,6 @@ require (
 	github.com/mostynb/zstdpool-freelist v0.0.0-20201229113212-927304c0c3b1 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/streamingfast/logging v0.0.0-20230608130331-f22c91403091 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -62,7 +65,5 @@ require (
 	go.uber.org/zap v1.21.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/term v0.30.0 // indirect
-	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
