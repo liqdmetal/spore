@@ -82,7 +82,7 @@ func TestWalletBasicsThroughRealClient(t *testing.T) {
 }
 
 func TestHTLCFullLifecycle(t *testing.T) {
-	s, _, alice, bob := newTestSim(t)
+	s, _, alice, _ := newTestSim(t)
 	ctx := context.Background()
 	preimage := make([]byte, 32)
 	if _, err := rand.Read(preimage); err != nil {
@@ -92,7 +92,6 @@ func TestHTLCFullLifecycle(t *testing.T) {
 	hashHex, preHex := hex.EncodeToString(hash[:]), hex.EncodeToString(preimage)
 
 	balBefore := s.Balance("alice")
-	aliceBalBefore, _, _ := alice.GetBalance(ctx)
 
 	// Fund: value rides the invoke deposit; the funder's balance drops.
 	txid, err := alice.InvokeSC(ctx, "aaa1", anchor.Arguments{
@@ -143,8 +142,6 @@ func TestHTLCFullLifecycle(t *testing.T) {
 	}, 0, 0, 16, 0); err == nil {
 		t.Fatal("double claim accepted")
 	}
-	_ = aliceBalBefore
-	_ = bob
 }
 
 func TestHTLCRefundGatedOnExpiry(t *testing.T) {
@@ -171,13 +168,13 @@ func TestHTLCRefundGatedOnExpiry(t *testing.T) {
 	}
 	// Advance past expiry with plain payload transfers (each bumps the
 	// height), then refund succeeds and returns funds to the funder.
-	balBefore := s.Balance("alice")
 	filler := anchor.Arguments{{Name: "K", DataType: anchor.DataHash, Value: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}}
 	for i := 0; i < 3; i++ {
 		if _, err := funder.PostPayload(ctx, ZeroAddress, filler, 16); err != nil {
 			t.Fatal(err)
 		}
 	}
+	balBefore := s.Balance("alice")
 	if _, err := funder.InvokeSC(ctx, "aaa1", anchor.Arguments{
 		{Name: "h", DataType: anchor.DataHash, Value: hashHex},
 	}, 0, 0, 16, 0); err != nil {
@@ -190,8 +187,6 @@ func TestHTLCRefundGatedOnExpiry(t *testing.T) {
 
 func TestDEXSwapMinOutEnforced(t *testing.T) {
 	s, _, trader, _ := newTestSim(t)
-	ctx := context.Context(nil)
-	_ = ctx
 	c := context.Background()
 	a0, b0 := s.PoolReserves()
 	// A well-bounded swap succeeds and moves the reserves.
@@ -231,7 +226,7 @@ func TestWDEROWrapUnwrap(t *testing.T) {
 	if got := s.WDEROSupply(); got != 0 {
 		t.Fatalf("supply after unwrap = %d, want 0", got)
 	}
-	// Unwrapping more than the supply is refused.
+	// Unwrapping more than the caller's token balance is refused.
 	if _, err := w.InvokeSC(c, "ccc3", anchor.Arguments{}, 0, 5, 16, 0); err == nil {
 		t.Fatal("over-supply unwrap accepted")
 	}

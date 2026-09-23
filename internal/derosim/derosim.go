@@ -27,8 +27,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,7 @@ const ZeroAddress = "dero1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqyq
 const bn256FieldPrime = "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47"
 
 const deroBech32Charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+const maxSimHeight = uint64(^uint64(0) >> 1)
 
 var bech32Generator = [...]uint32{0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3}
 
@@ -178,11 +181,13 @@ type Sim struct {
 type wallet struct {
 	addr    string
 	balance uint64
+	tokens  map[string]uint64
 	entries []Entry
 }
 
 type htlcState struct {
 	amount    uint64
+	funder    string
 	recipient string
 	expiry    uint64
 	claimed   bool
@@ -220,11 +225,21 @@ func New(htlcSCID, dexSCID, wderoSCID string) *Sim {
 }
 
 // AddWallet provisions a simulated wallet at the given route (e.g. "alice")
-// with its own deterministic distinct address (/w/<route>/json_rpc).
+// with its own deterministic address and test liquidity for the seeded tA/tB
+// pool. Re-adding a route leaves its balances and history intact.
 func (s *Sim) AddWallet(route string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.balances[route] = &wallet{addr: DeriveAddress([]byte(route)), balance: 1_000_000 * 100_000}
+	if strings.TrimSpace(route) == "" {
+		return
+	}
+	if _, ok := s.balances[route]; ok {
+		return
+	}
+	s.balances[route] = &wallet{
+		addr: DeriveAddress([]byte(route)), balance: 1_000_000 * 100_000,
+		tokens: map[string]uint64{"ta": 1_000_000 * 100_000, "tb": 1_000_000 * 100_000},
+	}
 }
 
 // Address reports a wallet's simulated address ("" for unknown routes).
@@ -246,12 +261,6 @@ func (s *Sim) Handler() http.Handler {
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/w/"); ok {
 			route = strings.TrimSuffix(rest, "/json_rpc")
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if _, ok := s.balances[route]; !ok {
-			writeRPCError(w, 40, "no such wallet: "+route)
-			return
-		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			writeRPCError(w, -32700, "read: "+err.Error())
@@ -267,16 +276,38 @@ func (s *Sim) Handler() http.Handler {
 			writeRPCError(w, -32700, "bad json")
 			return
 		}
-		result, rpcErr := s.dispatch(route, req.Method, req.Params)
+
+		s.mu.Lock()
+		if _, ok := s.balances[route]; !ok {
+			s.mu.Unlock()
+			writeRPCError(w, 40, "no such wallet: "+route)
+			return
+		}
+		result, rpcErr, events := s.dispatch(route, req.Method, req.Params)
+		poster := s.Poster
+		s.mu.Unlock()
 		if rpcErr != nil {
 			writeRPCError(w, rpcErr.code, rpcErr.message)
 			return
+		}
+		// Hooks are external code: invoke them after committing the state and
+		// releasing the mutex so observers may safely query the simulator.
+		if poster != nil {
+			for _, event := range events {
+				poster(event.route, event.kind, event.entry)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0", "id": req.ID, "result": result,
 		})
 	})
+}
+
+type postEvent struct {
+	route string
+	kind  string
+	entry Entry
 }
 
 type rpcError struct {
@@ -292,18 +323,18 @@ func writeRPCError(w http.ResponseWriter, code int, msg string) {
 	})
 }
 
-func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{}, *rpcError) {
+func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
 	switch method {
 	case "getaddress":
-		return map[string]string{"address": s.balances[route].addr}, nil
+		return map[string]string{"address": s.balances[route].addr}, nil, nil
 	case "getheight":
-		return map[string]uint64{"height": s.height}, nil
+		return map[string]uint64{"height": s.height}, nil, nil
 	case "getbalance":
 		w := s.balances[route]
 		return map[string]interface{}{
 			"balance": w.balance, "unlocked_balance": w.balance,
 			"balance_string": fmt.Sprintf("%d", w.balance),
-		}, nil
+		}, nil, nil
 	case "get_transfers":
 		var p struct {
 			In        bool   `json:"in"`
@@ -314,7 +345,7 @@ func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{
 		_ = json.Unmarshal(params, &p)
 		entries := []Entry{}
 		for _, e := range s.balances[route].entries {
-			if e.Incoming != p.In {
+			if !(e.Incoming && p.In || !e.Incoming && p.Out) {
 				continue
 			}
 			if e.Height < p.MinHeight {
@@ -322,13 +353,13 @@ func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{
 			}
 			entries = append(entries, e)
 		}
-		return map[string]interface{}{"entries": entries}, nil
+		return map[string]interface{}{"entries": entries}, nil, nil
 	case "transfer":
 		return s.doTransfer(route, params)
 	case "sc_invoke":
 		return s.doInvokeSC(route, params)
 	default:
-		return nil, &rpcError{-32601, "method not found: " + method}
+		return nil, &rpcError{-32601, "method not found: " + method}, nil
 	}
 }
 
@@ -341,7 +372,7 @@ func (s *Sim) mintTxID() string {
 // in the RECIPIENT's history (the sender gets a symmetric outgoing record).
 // The simulator's ring members are implicit; every transfer is a single
 // destination, which is all spore posts.
-func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rpcError) {
+func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
 	var p struct {
 		Transfers []struct {
 			Destination string           `json:"destination"`
@@ -351,26 +382,51 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 		Ringsize uint64 `json:"ringsize"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, &rpcError{-32602, "bad transfer params"}
+		return nil, &rpcError{-32602, "bad transfer params"}, nil
 	}
 	if len(p.Transfers) == 0 {
-		return nil, &rpcError{-32602, "no transfers"}
+		return nil, &rpcError{-32602, "no transfers"}, nil
 	}
 	w := s.balances[route]
-	txid := s.mintTxID()
-	s.height++
+	var total uint64
+	credits := make(map[*wallet]uint64)
 	for _, t := range p.Transfers {
-		if t.Amount > w.balance {
-			return nil, &rpcError{-4, "insufficient funds"}
+		if t.Amount > w.balance-total {
+			return nil, &rpcError{-4, "insufficient funds"}, nil
 		}
-		w.balance -= t.Amount
+		total += t.Amount
+		if dst, ok := s.walletByAddr(t.Destination); ok {
+			credits[dst] += t.Amount
+		}
+	}
+	for dst, credit := range credits {
+		balance := dst.balance
+		if dst == w {
+			balance -= total
+		}
+		if math.MaxUint64-balance < credit {
+			return nil, &rpcError{-4, "recipient balance would overflow"}, nil
+		}
+	}
+	if s.height >= maxSimHeight || s.nextSeq == math.MaxUint64 {
+		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}, nil
+	}
+
+	s.height++
+	txid := s.mintTxID()
+	w.balance -= total
+	for dst, credit := range credits {
+		dst.balance += credit
+	}
+	events := make([]postEvent, 0, len(p.Transfers))
+
+	for _, t := range p.Transfers {
 		entry := Entry{
 			Height: s.height, TopoHeight: int64(s.height),
 			TXID: txid, Sender: w.addr, Amount: t.Amount, Incoming: true,
 			PayloadRPC: t.PayloadRPC,
 		}
 		if dst, ok := s.walletByAddr(t.Destination); ok {
-			dst.balance += t.Amount
 			dst.entries = append(dst.entries, entry)
 		}
 		// Sender-side outgoing record (GetTransfers Out:true consumers).
@@ -379,26 +435,15 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 			TXID: txid, Sender: w.addr, Amount: t.Amount, Incoming: false,
 			PayloadRPC: t.PayloadRPC,
 		})
-		if s.Poster != nil {
-			s.Poster(route, "transfer", entry)
-		}
+		events = append(events, postEvent{route: route, kind: "transfer", entry: entry})
 	}
-	return map[string]string{"txid": txid}, nil
+	return map[string]string{"txid": txid}, nil, events
 }
 
 func (s *Sim) walletByAddr(addr string) (*wallet, bool) {
 	for _, w := range s.balances {
 		if w.addr == addr {
 			return w, true
-		}
-	}
-	// Fallback for the shared ZeroAddress (single-wallet setups): route the
-	// funds to the FIRST wallet deterministically.
-	if addr == ZeroAddress {
-		for _, name := range []string{"alice", "bob", "funder", "payee"} {
-			if w, ok := s.balances[name]; ok {
-				return w, true
-			}
 		}
 	}
 	return nil, false
@@ -436,49 +481,65 @@ func argUint64(args anchor.Arguments, name string) uint64 {
 	if !ok {
 		return 0
 	}
-	// json numbers decode as float64 through interface{}; the internal tests
-	// exercise this exact path, and money must never silently truncate.
-	if f, ok := v.(float64); ok {
-		if f != float64(uint64(f)) {
-			return 0 // non-integral: treated as absent, caught by validation
+	switch n := v.(type) {
+	case uint64:
+		return n
+	case json.Number:
+		if value, err := strconv.ParseUint(string(n), 10, 64); err == nil {
+			return value
 		}
-		return uint64(f)
 	}
 	return 0
 }
 
-func (s *Sim) doInvokeSC(route string, params json.RawMessage) (interface{}, *rpcError) {
+func (s *Sim) doInvokeSC(route string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
 	var p scInvokeParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, &rpcError{-32602, "bad sc_invoke params"}
+	dec := json.NewDecoder(strings.NewReader(string(params)))
+	dec.UseNumber()
+	if err := dec.Decode(&p); err != nil {
+		return nil, &rpcError{-32602, "bad sc_invoke params"}, nil
 	}
 	w := s.balances[route]
-	txid := s.mintTxID()
+	if p.SCID != s.HTLCSCID && p.SCID != s.DEXSCID && p.SCID != s.WDEROSCID {
+		return nil, &rpcError{-2, "sc_invoke: unknown contract " + p.SCID}, nil
+	}
+	if p.SCDERODeposit > w.balance {
+		return nil, &rpcError{-4, "insufficient funds"}, nil
+	}
+	if s.height >= maxSimHeight || s.nextSeq == math.MaxUint64 {
+		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}, nil
+	}
+
+	// Contracts evaluate expiry against the block this invoke would enter.
+	// Their methods validate before mutating; rejected calls roll the candidate
+	// height back and do not consume a transaction sequence.
 	s.height++
+	if err := s.invokeContract(route, &p); err != nil {
+		s.height--
+		return nil, &rpcError{-1, err.Error()}, nil
+	}
+	txid := s.mintTxID()
 	entry := Entry{
 		Height: s.height, TopoHeight: int64(s.height),
 		TXID: txid, Sender: w.addr, Incoming: true, PayloadRPC: p.SCRpc,
 	}
+	return map[string]string{"txid": txid}, nil, []postEvent{{route: route, kind: "sc_invoke", entry: entry}}
+}
+
+func (s *Sim) invokeContract(route string, p *scInvokeParams) error {
 	switch p.SCID {
 	case s.HTLCSCID:
-		if err := s.htlcInvoke(route, &p); err != nil {
-			return nil, &rpcError{-1, err.Error()}
+		if p.SCTOKENDeposit != 0 {
+			return fmt.Errorf("HTLC does not accept a token deposit")
 		}
+		return s.htlcInvoke(route, p)
 	case s.DEXSCID:
-		if err := s.dexInvoke(&p); err != nil {
-			return nil, &rpcError{-1, err.Error()}
-		}
+		return s.dexInvoke(route, p)
 	case s.WDEROSCID:
-		if err := s.wderoInvoke(route, &p); err != nil {
-			return nil, &rpcError{-1, err.Error()}
-		}
+		return s.wderoInvoke(route, p)
 	default:
-		return nil, &rpcError{-2, "sc_invoke: unknown contract " + p.SCID}
+		return fmt.Errorf("unknown contract %s", p.SCID)
 	}
-	if s.Poster != nil {
-		s.Poster(route, "sc_invoke", entry)
-	}
-	return map[string]string{"txid": txid}, nil
 }
 
 // htlcInvoke simulates RelayHTLC.dvm: Fund (value rides the invoke deposit),
@@ -505,6 +566,7 @@ func (s *Sim) htlcInvoke(route string, p *scInvokeParams) error {
 		w.balance -= p.SCDERODeposit
 		s.htlcs[hash] = &htlcState{
 			amount:    p.SCDERODeposit,
+			funder:    route,
 			recipient: argString(p.SCRpc, "recipient"),
 			expiry:    argUint64(p.SCRpc, "exp"),
 		}
@@ -532,10 +594,13 @@ func (s *Sim) htlcInvoke(route string, p *scInvokeParams) error {
 		if sha256.Sum256(pre[:]) != hash {
 			return fmt.Errorf("sha256(pre) != h — contract would reject the claim")
 		}
-		st.claimed = true
 		if c, ok := s.walletByAddr(st.recipient); ok {
+			if math.MaxUint64-c.balance < st.amount {
+				return fmt.Errorf("HTLC payout would overflow recipient balance")
+			}
 			c.balance += st.amount
 		}
+		st.claimed = true
 		return nil
 	default:
 		// Refund: only after expiry.
@@ -549,39 +614,85 @@ func (s *Sim) htlcInvoke(route string, p *scInvokeParams) error {
 		if s.height <= st.expiry {
 			return fmt.Errorf("HTLC not yet expired (exp %d, height %d) — refund refuses", st.expiry, s.height)
 		}
+		funder, ok := s.balances[st.funder]
+		if !ok {
+			return fmt.Errorf("HTLC funder wallet is not available")
+		}
+		if math.MaxUint64-funder.balance < st.amount {
+			return fmt.Errorf("HTLC refund would overflow funder balance")
+		}
+		funder.balance += st.amount
 		st.refunded = true
-		w.balance += st.amount // back to the funder
 		return nil
 	}
 }
 
 // dexInvoke simulates RelayDEX.dvm: constant-product swap with min-out ("mo")
 // enforcement and the in-contract fee. Token deposits ride sc_token_deposit.
-func (s *Sim) dexInvoke(p *scInvokeParams) error {
+func (s *Sim) dexInvoke(route string, p *scInvokeParams) error {
+	if p.SCDERODeposit != 0 {
+		return fmt.Errorf("DEX does not accept a DERO deposit")
+	}
 	ta := argString(p.SCRpc, "ta")
 	tb := argString(p.SCRpc, "tb")
 	mo := argUint64(p.SCRpc, "mo")
 	if ta == "" || tb == "" {
 		return fmt.Errorf("swap requires ta and tb")
 	}
-	if ta == tb {
+	if strings.EqualFold(ta, tb) {
 		return fmt.Errorf("ta and tb must differ")
 	}
 	if p.SCTOKENDeposit == 0 {
 		return fmt.Errorf("swap requires a token deposit (sc_token_deposit)")
 	}
-	// Fee mirrors the AMM rake: 0.3% of the input leg stays in the pool.
-	in := p.SCTOKENDeposit
-	fee := in * 3 / 1000
-	inAfterFee := in - fee
-	s.feeDS += fee
-	// x*dx_out / (y + in) constant-product output, y = poolB reserve.
-	out := s.poolB * inAfterFee / (s.poolA + inAfterFee)
+	w := s.balances[route]
+	inputKey, outputKey := strings.ToLower(ta), strings.ToLower(tb)
+	if p.SCTOKENDeposit > w.tokens[inputKey] {
+		return fmt.Errorf("swap input %d %s exceeds simulated wallet balance %d", p.SCTOKENDeposit, ta, w.tokens[inputKey])
+	}
+
+	// The soak models one tA/tB pool. Refuse other pairs rather than report a
+	// successful trade while mutating the wrong reserves.
+	var reserveIn, reserveOut uint64
+	switch {
+	case strings.EqualFold(ta, "tA") && strings.EqualFold(tb, "tB"):
+		reserveIn, reserveOut = s.poolA, s.poolB
+	case strings.EqualFold(ta, "tB") && strings.EqualFold(tb, "tA"):
+		reserveIn, reserveOut = s.poolB, s.poolA
+	default:
+		return fmt.Errorf("unsupported simulated pair %s->%s (only tA/tB is seeded)", ta, tb)
+	}
+	if math.MaxUint64-reserveIn < p.SCTOKENDeposit {
+		return fmt.Errorf("swap input overflows pool reserve")
+	}
+	fee := p.SCTOKENDeposit/1000*3 + p.SCTOKENDeposit%1000*3/1000
+	inAfterFee := p.SCTOKENDeposit - fee
+	denominator := reserveIn + inAfterFee
+	if inAfterFee == 0 || denominator < reserveIn {
+		return fmt.Errorf("swap input is too large")
+	}
+	numerator := new(big.Int).Mul(new(big.Int).SetUint64(reserveOut), new(big.Int).SetUint64(inAfterFee))
+	out := numerator.Quo(numerator, new(big.Int).SetUint64(denominator)).Uint64()
 	if out == 0 || out < mo {
 		return fmt.Errorf("swap would output %d, below min-out %d — contract rejects", out, mo)
 	}
-	s.poolA += p.SCTOKENDeposit
-	s.poolB -= out
+	if math.MaxUint64-w.tokens[outputKey] < out {
+		return fmt.Errorf("swap output would overflow simulated wallet balance")
+	}
+	if math.MaxUint64-s.feeDS < fee {
+		return fmt.Errorf("swap fee total would overflow")
+	}
+
+	w.tokens[inputKey] -= p.SCTOKENDeposit
+	w.tokens[outputKey] += out
+	s.feeDS += fee
+	if strings.EqualFold(ta, "tA") {
+		s.poolA += p.SCTOKENDeposit
+		s.poolB -= out
+	} else {
+		s.poolB += p.SCTOKENDeposit
+		s.poolA -= out
+	}
 	return nil
 }
 
@@ -597,16 +708,25 @@ func (s *Sim) wderoInvoke(route string, p *scInvokeParams) error {
 		if p.SCDERODeposit > w.balance {
 			return fmt.Errorf("insufficient funds for wrap")
 		}
+		if math.MaxUint64-s.wdero < p.SCDERODeposit {
+			return fmt.Errorf("wrap would overflow wDERO supply")
+		}
 		w.balance -= p.SCDERODeposit
+		w.tokens["wdero"] += p.SCDERODeposit
 		s.wdero += p.SCDERODeposit
 		return nil
 	}
 	if p.SCTOKENDeposit > 0 {
-		if p.SCTOKENDeposit > s.wdero {
-			return fmt.Errorf("unwrap %d exceeds wDERO supply %d", p.SCTOKENDeposit, s.wdero)
+		w := s.balances[route]
+		if p.SCTOKENDeposit > w.tokens["wdero"] {
+			return fmt.Errorf("unwrap %d exceeds wallet wDERO balance %d", p.SCTOKENDeposit, w.tokens["wdero"])
 		}
+		if math.MaxUint64-w.balance < p.SCTOKENDeposit {
+			return fmt.Errorf("unwrap would overflow wallet balance")
+		}
+		w.tokens["wdero"] -= p.SCTOKENDeposit
 		s.wdero -= p.SCTOKENDeposit
-		s.balances[route].balance += p.SCTOKENDeposit
+		w.balance += p.SCTOKENDeposit
 		return nil
 	}
 	return fmt.Errorf("wDERO invoke requires a DERO deposit (wrap) or token deposit (unwrap)")
@@ -619,6 +739,15 @@ func (s *Sim) Balance(route string) uint64 {
 	defer s.mu.Unlock()
 	if w, ok := s.balances[route]; ok {
 		return w.balance
+	}
+	return 0
+}
+
+func (s *Sim) TokenBalance(route, token string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w, ok := s.balances[route]; ok {
+		return w.tokens[strings.ToLower(token)]
 	}
 	return 0
 }
@@ -664,14 +793,15 @@ type HTLCInfo struct {
 // State is the full observable simulator state, JSON-shaped for the
 // /debug/state route the soak driver polls.
 type State struct {
-	Addresses map[string]string `json:"addresses"`
-	Balances  map[string]uint64 `json:"balances"`
-	Height    uint64            `json:"height"`
-	PoolA     uint64            `json:"pool_a"`
-	PoolB     uint64            `json:"pool_b"`
-	WDERO     uint64            `json:"wdero_supply"`
-	FeeDS     uint64            `json:"dex_fee_units"`
-	HTLCs     []HTLCInfo        `json:"htlcs"`
+	Addresses     map[string]string            `json:"addresses"`
+	Balances      map[string]uint64            `json:"balances"`
+	TokenBalances map[string]map[string]uint64 `json:"token_balances"`
+	Height        uint64                       `json:"height"`
+	PoolA         uint64                       `json:"pool_a"`
+	PoolB         uint64                       `json:"pool_b"`
+	WDERO         uint64                       `json:"wdero_supply"`
+	FeeDS         uint64                       `json:"dex_fee_units"`
+	HTLCs         []HTLCInfo                   `json:"htlcs"`
 }
 
 // State snapshots everything the soak asserts against.
@@ -680,12 +810,18 @@ func (s *Sim) State() State {
 	defer s.mu.Unlock()
 	st := State{
 		Addresses: map[string]string{}, Balances: map[string]uint64{},
-		PoolA: s.poolA, PoolB: s.poolB, WDERO: s.wdero, FeeDS: s.feeDS,
+		TokenBalances: map[string]map[string]uint64{},
+		PoolA:         s.poolA, PoolB: s.poolB, WDERO: s.wdero, FeeDS: s.feeDS,
 		Height: s.height,
 	}
 	for name, w := range s.balances {
 		st.Addresses[name] = w.addr
 		st.Balances[name] = w.balance
+		tokens := make(map[string]uint64, len(w.tokens))
+		for token, balance := range w.tokens {
+			tokens[token] = balance
+		}
+		st.TokenBalances[name] = tokens
 	}
 	for h, v := range s.htlcs {
 		st.HTLCs = append(st.HTLCs, HTLCInfo{
@@ -702,6 +838,10 @@ func (s *Sim) State() State {
 func (s *Sim) Bump(n uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.height >= maxSimHeight || n > maxSimHeight-s.height {
+		s.height = maxSimHeight
+		return
+	}
 	s.height += n
 }
 
