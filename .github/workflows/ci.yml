@@ -263,3 +263,29 @@ jobs:
             "$(go env GOPATH)/bin/goimports" -d $unformatted
             exit 1
           fi
+
+  govulncheck:
+    name: govulncheck (reachable vulns gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Scan for reachable vulnerabilities
+        # Blocking at the SYMBOL level, which is what govulncheck exists to
+        # answer: "your code is affected" findings fail this job (verified
+        # exit 1 against a probe module calling a vulnerable symbol), while
+        # package/module-level notices for code spore never calls are
+        # printed but exit 0. Baseline at gate creation: 0 affecting.
+        # Pinned to v1.8.0 like every tool pin in this file — @latest would
+        # silently toolchain-switch the analysis binary to whatever Go
+        # x/vuln's go.mod demands, divorcing the scan from the repo's own
+        # toolchain. GOTOOLCHAIN=local enforces that: if a future x/vuln
+        # needs a newer Go than the repo, the install fails loudly and the
+        # pin gets bumped deliberately, exactly like goimports@v0.28.0.
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
