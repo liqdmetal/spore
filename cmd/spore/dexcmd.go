@@ -92,6 +92,9 @@ func msgDEXSwap(args []string) {
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 
+	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
+	check(err)
+	defer notice.close()
 	txid, err := sap.DEXSwap(context.Background(), client, *tokenA, *tokenB, amountIn, *minOut, ring)
 	check(err)
 	fmt.Printf("DEX SWAPPED %s %s -> %s (min-out %d) tx %s\n", formatAmount("dero", amountIn), *tokenA, *tokenB, *minOut, shortTx(txid))
@@ -103,7 +106,7 @@ func msgDEXSwap(args []string) {
 	}
 	env, err := marshalDexNotice("swap", fmt.Sprintf("%s->%s", *tokenA, *tokenB), amountIn, formatAmount("dero", amountIn), txid, *note)
 	check(err)
-	escrowAnnounce(fs, *to, *sessionHex, env)
+	reportSettlementNotice("dex swap", txid, escrowAnnounce(notice, env))
 }
 
 func msgDEXWrap(args []string) {
@@ -126,6 +129,9 @@ func msgDEXWrap(args []string) {
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 
+	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
+	check(err)
+	defer notice.close()
 	txid, err := sap.WrapDERO(context.Background(), client, atomic, ring)
 	check(err)
 	fmt.Printf("WDERO WRAPPED %s tx %s\n", formatAmount("dero", atomic), shortTx(txid))
@@ -137,7 +143,7 @@ func msgDEXWrap(args []string) {
 	}
 	env, err := marshalDexNotice("wrap", "dero->wdero", atomic, formatAmount("dero", atomic), txid, *note)
 	check(err)
-	escrowAnnounce(fs, *to, *sessionHex, env)
+	reportSettlementNotice("dex wrap", txid, escrowAnnounce(notice, env))
 }
 
 func msgDEXUnwrap(args []string) {
@@ -160,6 +166,9 @@ func msgDEXUnwrap(args []string) {
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 
+	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
+	check(err)
+	defer notice.close()
 	txid, err := sap.UnwrapDERO(context.Background(), client, atomic, ring)
 	check(err)
 	fmt.Printf("WDERO UNWRAPPED %s tx %s\n", formatAmount("dero", atomic), shortTx(txid))
@@ -171,7 +180,7 @@ func msgDEXUnwrap(args []string) {
 	}
 	env, err := marshalDexNotice("unwrap", "wdero->dero", atomic, formatAmount("dero", atomic), txid, *note)
 	check(err)
-	escrowAnnounce(fs, *to, *sessionHex, env)
+	reportSettlementNotice("dex unwrap", txid, escrowAnnounce(notice, env))
 }
 
 // msgDEXFees prints the operator fee schedule and the sap contract-ID

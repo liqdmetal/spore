@@ -82,8 +82,13 @@ func TestWalletBasicsThroughRealClient(t *testing.T) {
 }
 
 func TestHTLCFullLifecycle(t *testing.T) {
-	s, _, alice, _ := newTestSim(t)
+	s, _, alice, bob := newTestSim(t)
 	ctx := context.Background()
+	bobAddr, err := bob.GetAddress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobBalance := s.Balance("bob")
 	preimage := make([]byte, 32)
 	if _, err := rand.Read(preimage); err != nil {
 		t.Fatal(err)
@@ -96,7 +101,7 @@ func TestHTLCFullLifecycle(t *testing.T) {
 	// Fund: value rides the invoke deposit; the funder's balance drops.
 	txid, err := alice.InvokeSC(ctx, "aaa1", anchor.Arguments{
 		{Name: "h", DataType: anchor.DataHash, Value: hashHex},
-		{Name: "recipient", DataType: anchor.DataString, Value: ZeroAddress},
+		{Name: "recipient", DataType: anchor.DataString, Value: bobAddr},
 		{Name: "exp", DataType: anchor.DataUint64, Value: uint64(10)},
 	}, 500_000, 0, 16, 0)
 	if err != nil {
@@ -134,6 +139,9 @@ func TestHTLCFullLifecycle(t *testing.T) {
 	}
 	if claimed, refunded, _ := s.HTLCSettled(hashHex); !claimed || refunded {
 		t.Fatal("claim did not settle")
+	}
+	if got := s.Balance("bob"); got != bobBalance+500_000 {
+		t.Fatalf("claim credited recipient balance %d, want %d", got, bobBalance+500_000)
 	}
 	// Double-claim is refused.
 	if _, err := alice.InvokeSC(ctx, "aaa1", anchor.Arguments{

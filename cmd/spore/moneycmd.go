@@ -14,7 +14,6 @@ import (
 	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/receipts"
-	"github.com/liqdmetal/spore/internal/store"
 )
 
 // msgInvoiceE2 sends a typed invoice envelope into an existing session:
@@ -210,30 +209,50 @@ func dueTime(d time.Duration) time.Time {
 	return time.Now().Add(d)
 }
 
-// durableEndpointFromFlags is the shared "restore my state" prologue for the
-// session-continuation commands (invoice/pay; reply-e2 keeps its own copy to
-// avoid churn). Fails via check() like the other CLI helpers.
-func durableEndpointFromFlags(fs *flag.FlagSet) (*ratchetwire.DurableEndpoint, ratchetwire.BodyStore) {
-	var st ratchetwire.BodyStore
-	if storeOpts := e2StoreOptionsFromFlags(fs); storeOpts.URL != "" {
-		s, err := newE2BodyStore(storeOpts)
-		check(err)
-		st = s
-	} else {
-		st = store.NewMemStore()
-	}
-	stateDir := fs.Lookup("state-dir").Value.String()
-	stateKeyFile := fs.Lookup("state-key").Value.String()
+// newDurableEndpointFromFlags restores the session state and body store used
+// by continuation commands. Errors are returned so settlement commands can
+// validate their notice path before submitting an irreversible contract call.
+func newDurableEndpointFromFlags(fs *flag.FlagSet) (*ratchetwire.DurableEndpoint, ratchetwire.BodyStore, error) {
+	stateDir := flagValueOr(fs, "state-dir", "")
+	stateKeyFile := flagValueOr(fs, "state-key", "")
 	if stateDir == "" || stateKeyFile == "" {
-		check(errors.New("E2 requires -state-dir and -state-key"))
+		return nil, nil, errors.New("E2 requires -state-dir and -state-key")
 	}
 	stateKey, err := readHexFile(stateKeyFile, 32)
-	check(err)
-	sessionTTL, err := time.ParseDuration(fs.Lookup("session-ttl").Value.String())
-	check(err)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessionTTL, err := time.ParseDuration(flagValueOr(fs, "session-ttl", "0s"))
+	if err != nil {
+		return nil, nil, err
+	}
 	states, err := ratchetwire.NewFileStateStore(stateDir, stateKey)
-	check(err)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	st, err := newE2BodyStore(e2StoreOptionsFromFlags(fs))
+	if err != nil {
+		return nil, nil, err
+	}
 	ep, err := ratchetwire.NewDurableEndpointWithExpiry(st, states, sessionTTL, time.Now())
+	if err != nil {
+		closeBodyStore(st)
+		return nil, nil, err
+	}
+	return ep, st, nil
+}
+
+func closeBodyStore(st ratchetwire.BodyStore) {
+	if closer, ok := st.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+}
+
+// durableEndpointFromFlags is the fatal-error wrapper used by existing CLI
+// commands that cannot proceed without a restored endpoint.
+func durableEndpointFromFlags(fs *flag.FlagSet) (*ratchetwire.DurableEndpoint, ratchetwire.BodyStore) {
+	ep, st, err := newDurableEndpointFromFlags(fs)
 	check(err)
 	return ep, st
 }

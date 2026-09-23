@@ -172,10 +172,6 @@ type Sim struct {
 	HTLCSCID  string
 	DEXSCID   string
 	WDEROSCID string
-
-	// Poster is called for every accepted transfer/sc_invoke. Non-nil is
-	// useful for harness logging.
-	Poster func(route, kind string, entry Entry)
 }
 
 type wallet struct {
@@ -278,36 +274,21 @@ func (s *Sim) Handler() http.Handler {
 		}
 
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if _, ok := s.balances[route]; !ok {
-			s.mu.Unlock()
 			writeRPCError(w, 40, "no such wallet: "+route)
 			return
 		}
-		result, rpcErr, events := s.dispatch(route, req.Method, req.Params)
-		poster := s.Poster
-		s.mu.Unlock()
+		result, rpcErr := s.dispatch(route, req.Method, req.Params)
 		if rpcErr != nil {
 			writeRPCError(w, rpcErr.code, rpcErr.message)
 			return
-		}
-		// Hooks are external code: invoke them after committing the state and
-		// releasing the mutex so observers may safely query the simulator.
-		if poster != nil {
-			for _, event := range events {
-				poster(event.route, event.kind, event.entry)
-			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0", "id": req.ID, "result": result,
 		})
 	})
-}
-
-type postEvent struct {
-	route string
-	kind  string
-	entry Entry
 }
 
 type rpcError struct {
@@ -323,18 +304,18 @@ func writeRPCError(w http.ResponseWriter, code int, msg string) {
 	})
 }
 
-func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
+func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{}, *rpcError) {
 	switch method {
 	case "getaddress":
-		return map[string]string{"address": s.balances[route].addr}, nil, nil
+		return map[string]string{"address": s.balances[route].addr}, nil
 	case "getheight":
-		return map[string]uint64{"height": s.height}, nil, nil
+		return map[string]uint64{"height": s.height}, nil
 	case "getbalance":
 		w := s.balances[route]
 		return map[string]interface{}{
 			"balance": w.balance, "unlocked_balance": w.balance,
 			"balance_string": fmt.Sprintf("%d", w.balance),
-		}, nil, nil
+		}, nil
 	case "get_transfers":
 		var p struct {
 			In        bool   `json:"in"`
@@ -353,13 +334,13 @@ func (s *Sim) dispatch(route, method string, params json.RawMessage) (interface{
 			}
 			entries = append(entries, e)
 		}
-		return map[string]interface{}{"entries": entries}, nil, nil
+		return map[string]interface{}{"entries": entries}, nil
 	case "transfer":
 		return s.doTransfer(route, params)
 	case "sc_invoke":
 		return s.doInvokeSC(route, params)
 	default:
-		return nil, &rpcError{-32601, "method not found: " + method}, nil
+		return nil, &rpcError{-32601, "method not found: " + method}
 	}
 }
 
@@ -372,7 +353,7 @@ func (s *Sim) mintTxID() string {
 // in the RECIPIENT's history (the sender gets a symmetric outgoing record).
 // The simulator's ring members are implicit; every transfer is a single
 // destination, which is all spore posts.
-func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
+func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rpcError) {
 	var p struct {
 		Transfers []struct {
 			Destination string           `json:"destination"`
@@ -382,17 +363,17 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 		Ringsize uint64 `json:"ringsize"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, &rpcError{-32602, "bad transfer params"}, nil
+		return nil, &rpcError{-32602, "bad transfer params"}
 	}
 	if len(p.Transfers) == 0 {
-		return nil, &rpcError{-32602, "no transfers"}, nil
+		return nil, &rpcError{-32602, "no transfers"}
 	}
 	w := s.balances[route]
 	var total uint64
 	credits := make(map[*wallet]uint64)
 	for _, t := range p.Transfers {
 		if t.Amount > w.balance-total {
-			return nil, &rpcError{-4, "insufficient funds"}, nil
+			return nil, &rpcError{-4, "insufficient funds"}
 		}
 		total += t.Amount
 		if dst, ok := s.walletByAddr(t.Destination); ok {
@@ -405,11 +386,11 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 			balance -= total
 		}
 		if math.MaxUint64-balance < credit {
-			return nil, &rpcError{-4, "recipient balance would overflow"}, nil
+			return nil, &rpcError{-4, "recipient balance would overflow"}
 		}
 	}
 	if s.height >= maxSimHeight || s.nextSeq == math.MaxUint64 {
-		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}, nil
+		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}
 	}
 
 	s.height++
@@ -418,7 +399,6 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 	for dst, credit := range credits {
 		dst.balance += credit
 	}
-	events := make([]postEvent, 0, len(p.Transfers))
 
 	for _, t := range p.Transfers {
 		entry := Entry{
@@ -435,9 +415,8 @@ func (s *Sim) doTransfer(route string, params json.RawMessage) (interface{}, *rp
 			TXID: txid, Sender: w.addr, Amount: t.Amount, Incoming: false,
 			PayloadRPC: t.PayloadRPC,
 		})
-		events = append(events, postEvent{route: route, kind: "transfer", entry: entry})
 	}
-	return map[string]string{"txid": txid}, nil, events
+	return map[string]string{"txid": txid}, nil
 }
 
 func (s *Sim) walletByAddr(addr string) (*wallet, bool) {
@@ -492,22 +471,22 @@ func argUint64(args anchor.Arguments, name string) uint64 {
 	return 0
 }
 
-func (s *Sim) doInvokeSC(route string, params json.RawMessage) (interface{}, *rpcError, []postEvent) {
+func (s *Sim) doInvokeSC(route string, params json.RawMessage) (interface{}, *rpcError) {
 	var p scInvokeParams
 	dec := json.NewDecoder(strings.NewReader(string(params)))
 	dec.UseNumber()
 	if err := dec.Decode(&p); err != nil {
-		return nil, &rpcError{-32602, "bad sc_invoke params"}, nil
+		return nil, &rpcError{-32602, "bad sc_invoke params"}
 	}
 	w := s.balances[route]
 	if p.SCID != s.HTLCSCID && p.SCID != s.DEXSCID && p.SCID != s.WDEROSCID {
-		return nil, &rpcError{-2, "sc_invoke: unknown contract " + p.SCID}, nil
+		return nil, &rpcError{-2, "sc_invoke: unknown contract " + p.SCID}
 	}
 	if p.SCDERODeposit > w.balance {
-		return nil, &rpcError{-4, "insufficient funds"}, nil
+		return nil, &rpcError{-4, "insufficient funds"}
 	}
 	if s.height >= maxSimHeight || s.nextSeq == math.MaxUint64 {
-		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}, nil
+		return nil, &rpcError{-1, "simulated chain height or transaction sequence exhausted"}
 	}
 
 	// Contracts evaluate expiry against the block this invoke would enter.
@@ -516,14 +495,10 @@ func (s *Sim) doInvokeSC(route string, params json.RawMessage) (interface{}, *rp
 	s.height++
 	if err := s.invokeContract(route, &p); err != nil {
 		s.height--
-		return nil, &rpcError{-1, err.Error()}, nil
+		return nil, &rpcError{-1, err.Error()}
 	}
 	txid := s.mintTxID()
-	entry := Entry{
-		Height: s.height, TopoHeight: int64(s.height),
-		TXID: txid, Sender: w.addr, Incoming: true, PayloadRPC: p.SCRpc,
-	}
-	return map[string]string{"txid": txid}, nil, []postEvent{{route: route, kind: "sc_invoke", entry: entry}}
+	return map[string]string{"txid": txid}, nil
 }
 
 func (s *Sim) invokeContract(route string, p *scInvokeParams) error {

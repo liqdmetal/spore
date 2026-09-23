@@ -185,12 +185,6 @@ func TestHTLCClaimPayoutOverflowRefused(t *testing.T) {
 	hashHex, preHex := hex.EncodeToString(hash[:]), hex.EncodeToString(preimage)
 
 	setBalance(s, "bob", math.MaxUint64) // any payout would wrap
-	var events []Entry
-	s.Poster = func(route, kind string, entry Entry) {
-		// The observer may query the simulator; callbacks must run outside mu.
-		_ = s.State()
-		events = append(events, entry)
-	}
 	if _, err := alice.InvokeSC(ctx, "aaa1", anchor.Arguments{
 		{Name: "h", DataType: anchor.DataHash, Value: hashHex},
 		{Name: "recipient", DataType: anchor.DataString, Value: s.Address("bob")},
@@ -209,9 +203,6 @@ func TestHTLCClaimPayoutOverflowRefused(t *testing.T) {
 	}
 	if afterRefused := s.State(); !reflect.DeepEqual(afterRefused, beforeRefused) {
 		t.Fatalf("refused claim mutated simulator state:\nbefore=%+v\nafter=%+v", beforeRefused, afterRefused)
-	}
-	if len(events) != 1 {
-		t.Fatalf("refused claim triggered a poster callback: %d events", len(events)-1)
 	}
 	if claimed, refunded, ok := s.HTLCSettled(hashHex); !ok || claimed || refunded {
 		t.Fatalf("refused claim settled the HTLC: claimed=%v refunded=%v ok=%v", claimed, refunded, ok)
@@ -238,9 +229,6 @@ func TestHTLCClaimPayoutOverflowRefused(t *testing.T) {
 	}
 	if got := heightOf(s); got != h0+1 {
 		t.Fatalf("valid claim after rejected claim did not consume one block: %d -> %d", h0, got)
-	}
-	if len(events) != 2 || events[0].TXID != "sim-tx-00000001" || events[1].TXID != "sim-tx-00000002" {
-		t.Fatalf("poster should observe only the committed fund and claim, got %+v", events)
 	}
 }
 
