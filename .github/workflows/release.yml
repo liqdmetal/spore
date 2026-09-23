@@ -32,6 +32,123 @@ jobs:
     name: spore-peer Rust + wire contract (release gate)
     uses: ./.github/workflows/spore-peer-contract.yml
 
+  # Ship the transport, not just the client. The Rust spore-peer binaries are
+  # built at the SAME audited pin the wire-contract job gates (extracted the
+  # same way pin-freshness.yml extracts it), so the relay a home-node operator
+  # downloads and the one the interop tests ran against are artifacts of one
+  # commit. Without these assets a release cannot bootstrap the serverless
+  # posture the README documents. Testing happened in the wire-contract job at
+  # this same pin; these jobs only cross-build. Linux targets are musl (fully
+  # static — runs on glibc distros, Alpine, and containers alike); Windows is
+  # the gnu toolchain (mingw-w64 cross from Linux; msvc cannot cross from
+  # ubuntu). Artifacts feed the same hash → provenance → release chain as the
+  # Go matrix; names collide nowhere (spore-* vs spore-peer-*).
+  build-rust:
+    name: Build spore-peer (linux + windows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Extract the audited pin
+        id: pin
+        run: |
+          pin="$(grep -o "'[0-9a-f]\{40\}'" .github/workflows/spore-peer-contract.yml | head -1 | tr -d "'")"
+          if [ -z "$pin" ]; then
+            echo "::error::could not extract the audited pin from spore-peer-contract.yml (looking for a 40-hex quoted literal on the SPORE_PEER_PIN default)"
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+      - name: Check out spore-peer at the gated commit
+        run: |
+          echo "building spore-peer@${{ steps.pin.outputs.pin }}"
+          git clone --filter=blob:none --no-checkout https://github.com/liqdmetal/spore-peer.git spore-peer
+          git -C spore-peer checkout "${{ steps.pin.outputs.pin }}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-pc-windows-gnu
+          # aarch64-pc-windows-gnu is deliberately absent: Ubuntu ships no
+          # aarch64 mingw cross-linker, and the lld workarounds are unstable
+          # toolchain surface — not something a release pipeline should bet
+          # on. Windows-on-ARM users get the Go `spore` binary (Go cross-
+          # compiles it trivially); the peer transport for that platform
+          # lands when the toolchain story is dependable.
+      - name: Install cross linkers
+        # musl: static link needs musl-gcc; mingw-w64 is usually preinstalled
+        # on the runner image but installing it makes this job immune to
+        # image drift.
+        run: sudo apt-get update && sudo apt-get install -y musl-tools musl-dev mingw-w64
+      - name: Point aarch64-musl at the bundled rust-lld
+        # musl-tools ships a gcc for the host arch only — there is no
+        # aarch64-linux-musl cross-gcc package to install. rust-lld ships
+        # with the toolchain and links this pure-Rust crate fine.
+        run: |
+          mkdir -p spore-peer/.cargo
+          cat > spore-peer/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-musl]
+          linker = "rust-lld"
+          EOF
+      - name: Build (all targets)
+        working-directory: spore-peer
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu; do
+            echo "=== $t ==="
+            cargo build --release --locked --target "$t"
+          done
+      - name: Stage + checksum
+        run: |
+          mkdir -p stage
+          cp spore-peer/target/x86_64-unknown-linux-musl/release/spore-peer stage/spore-peer-linux-amd64
+          cp spore-peer/target/aarch64-unknown-linux-musl/release/spore-peer stage/spore-peer-linux-arm64
+          cp spore-peer/target/x86_64-pc-windows-gnu/release/spore-peer.exe stage/spore-peer-windows-amd64.exe
+          (cd stage && for f in spore-peer-*; do sha256sum "$f" > "$f.sha256"; done)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: spore-peer-linux-windows
+          path: stage/*
+
+  # The apple targets cannot cross from Linux (no Darwin SDK/linker), but
+  # macOS runners cross-compile between arm64 and x86_64 natively — one
+  # macos-latest (arm64) runner builds both with the same --target pattern.
+  build-rust-darwin:
+    name: Build spore-peer (darwin)
+    runs-on: macos-latest
+    steps:
+      - name: Extract the audited pin
+        id: pin
+        run: |
+          pin="$(grep -o "'[0-9a-f]\{40\}'" .github/workflows/spore-peer-contract.yml | head -1 | tr -d "'")"
+          if [ -z "$pin" ]; then
+            echo "::error::could not extract the audited pin from spore-peer-contract.yml (looking for a 40-hex quoted literal on the SPORE_PEER_PIN default)"
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+      - name: Check out spore-peer at the gated commit
+        run: |
+          echo "building spore-peer@${{ steps.pin.outputs.pin }}"
+          git clone --filter=blob:none --no-checkout https://github.com/liqdmetal/spore-peer.git spore-peer
+          git -C spore-peer checkout "${{ steps.pin.outputs.pin }}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - name: Build (all targets)
+        working-directory: spore-peer
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            echo "=== $t ==="
+            cargo build --release --locked --target "$t"
+          done
+      - name: Stage + checksum
+        run: |
+          mkdir -p stage
+          cp spore-peer/target/aarch64-apple-darwin/release/spore-peer stage/spore-peer-darwin-arm64
+          cp spore-peer/target/x86_64-apple-darwin/release/spore-peer stage/spore-peer-darwin-amd64
+          (cd stage && for f in spore-peer-*; do shasum -a 256 "$f" > "$f.sha256"; done)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: spore-peer-darwin
+          path: stage/*
+
   build:
     name: Build + Release (cross-platform)
     runs-on: ubuntu-latest
@@ -45,8 +162,15 @@ jobs:
         include:
           - goos: windows
             goarch: amd64
+          # Windows-on-ARM (Surface, Snapdragon laptops): pure Go, same CGO_ENABLED=0 build.
+          - goos: windows
+            goarch: arm64
           - goos: linux
             goarch: amd64
+          # Raspberry Pi-class home nodes run 64-bit OSes now — the always-on
+          # mailbox/relay posture is exactly the arm64 box this target serves.
+          - goos: linux
+            goarch: arm64
           - goos: darwin
             goarch: amd64
           - goos: darwin
@@ -75,8 +199,11 @@ jobs:
     # The wire contract gates the publish: a red interop (or red Rust build)
     # skips the Release step entirely. build is still needed on its own so a
     # dry-run's artifact chain (hash → detached provenance signing) remains
-    # complete when the gate skips nothing.
-    needs: [build, wire-contract]
+    # complete when the gate skips nothing. build-rust needs wire-contract so
+    # the shipped relay binaries can never come from a pin the interop
+    # refused (contract is a same-ref reusable call, so its checkout is this
+    # same commit).
+    needs: [build, build-rust, build-rust-darwin, wire-contract]
     # Publishes only on real tag pushes. workflow_dispatch is a dry-run: the
     # gate keys on the trigger event, so a dispatched run cannot publish.
     # Build, subjects hashing, and detached keyless signing still run.
@@ -108,7 +235,7 @@ jobs:
 
   hash:
     name: Hash artifacts for provenance
-    needs: build
+    needs: [build, build-rust, build-rust-darwin]
     runs-on: ubuntu-latest
     outputs:
       subjects: ${{ steps.hash.outputs.subjects }}

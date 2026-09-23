@@ -113,6 +113,11 @@ spore -version
 spore donate --all   # per-chain donation rail
 ```
 
+(Not building? The checksum-verified installer in
+[`docs/ONBOARDING.md`](ONBOARDING.md#get-the-binary) covers the same platforms
+the release matrix ships — including the `spore-peer` transport this document
+describes.)
+
 ## Serverless bodies (`sporepeer://`) — nobody holds your bytes but you two
 
 `-store http://mailbox` needs a mailbox; `-store nostr://` publishes to a

@@ -9,6 +9,21 @@ central server. No VC. No token.
 Two commands: `spore init` then `spore msg send-e2 …`. (`spore demo` runs with
 no chain and no wallet if you just want to see it work.)
 
+**Install (checksum-verified, `spore` + `spore-peer`, all of
+linux/macOS/Windows, amd64 + arm64):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh   # linux/macOS/WSL
+```
+```powershell
+irm https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.ps1 | iex        # Windows
+```
+
+Then `spore demo` — the full send → receive → burn lifecycle, no wallet, no
+setup. Releases also carry SLSA keyless provenance
+(`multiple.intoto.jsonl`) verifiable with
+[slsa-verifier](https://github.com/slsa-framework/slsa-verifier).
+
 ---
 
 ## What makes Spore different
