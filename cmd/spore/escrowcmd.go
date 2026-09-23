@@ -111,6 +111,7 @@ func msgEscrowClaimE2(args []string) {
 	}
 	u, p := parseLogin(fs.Lookup("rpc-login").Value.String())
 	client := dero.NewClient(fsRPC.Value.String(), u, p)
+	sap.LoadContractIDsFromEnv()
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 
@@ -158,6 +159,7 @@ func msgEscrowRefundE2(args []string) {
 	}
 	u, p := parseLogin(fs.Lookup("rpc-login").Value.String())
 	client := dero.NewClient(fsRPC.Value.String(), u, p)
+	sap.LoadContractIDsFromEnv()
 	ring, err := deroRingSizeFromFlags(fs, "dero")
 	check(err)
 

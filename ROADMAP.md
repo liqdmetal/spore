@@ -102,8 +102,14 @@ remaining; it does not re-state live status.*
 - **HTLC escrow in chat:** `-escrow htlc` locks `-amount` in the
   mainnet RelayHTLC contract; `msg escrow claim` (preimage, locally verified
   first) and `msg escrow refund` close it in-thread with a
-  `spore/escrow/v1` settlement notice riding the session (DEX swap surfaces
-  remain — product row #1).
+  `spore/escrow/v1` settlement notice riding the session.
+- **Relay-dex settlements in chat:** `msg dex swap|wrap|unwrap` invoke the
+  RelayDEX/RelayWrappedDero contracts and announce the outcome in-thread via
+  a `spore/dex/v1` envelope (ingest renders it, ledger records it);
+  `msg dex fees` publishes the exact in-contract fee schedule and the
+  SPORE_SAP_* contract-ID configuration state. All sap entry points refuse
+  locally when a contract ID is unconfigured — the empty-SCID invoke the
+  fund path previously allowed is gone.
 
 ### Onboarding + ops
 - `spore init` one-shot identity kit + `config.json` defaults (every E2 command
@@ -139,7 +145,7 @@ upstream gate.
 
 | # | Item | Why it's gated / what it needs |
 |---|---|---|
-| 1 | **Finish escrow + swap UX in chat** | **HTLC claim/refund is now in-thread**: `msg escrow claim -hash -preimage` verifies sha256(preimage)==hash locally, invokes the mainnet RelayHTLC, appends the ledger record, and announces the settlement (preimage revealed) via a `spore/escrow/v1` envelope on the ratcheted session; `msg escrow refund` does the same for expired deals (ingest renders both). Remaining: `-escrow dex` (DEXSwap/WrapDERO surfaces) and the operator rake collection (see docs/BUSINESS.md, "Line 2 — settlement rake"). |
+| 1 | **Finish escrow + swap UX in chat** | **HTLC close and dex settlements are both in-thread.** Escrow: `msg escrow claim/refund` (see shipped notes). Swap: `msg dex swap|wrap|unwrap` invoke RelayDEX/RelayWrappedDero and announce via `spore/dex/v1` envelopes; `msg dex fees` publishes the in-contract rake (90/10 LP/treasury, atomic swaps free) per docs/BUSINESS.md. Contract IDs now have a real config seam (`SPORE_SAP_HTLC_SC/DEX_SC/WDERO_SC` env) with local refusals — previously `sap.HTLCContractID` was never seeded, so the HTLC fund path sent an empty SCID. Remaining: two-party live soak of the full fund→claim/refund and swap flows against configured contracts. |
 | 2 | **Tokenized search execution** — **shipped** | `maildb.Search` now prefilters through the inverted index (`PositionsContaining`: one vocabulary scan unions the positions of tokens containing any query term — a provable superset under substring semantics), the index is rebuilt on `Open` so search survives restart, `Purge` rebuilds it so compaction can never misalign positions, and `mail search` gained `-any`/`-not` OR/NOT flags. Exact `matchesQuery` semantics are unchanged and pinned by equivalence tests. |
 | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
 | 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Still gated on: a funded EVM account on a real chain, and a solc build of the contract (`solc --bin contracts/MyceliumMailbox.sol | tail -1 > tools/mycelium.bin`) — the bytecode is deliberately not embedded in source. |

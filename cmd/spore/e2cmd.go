@@ -71,6 +71,19 @@ func msgE2(args []string) {
 			fmt.Fprintln(os.Stderr, "usage: spore msg escrow claim|refund -hash HEX -to ADDR -session HEX [flags]")
 			os.Exit(2)
 		}
+	case "dex":
+		if len(args) >= 2 && args[1] == "swap" {
+			msgDEXSwap(args[2:])
+		} else if len(args) >= 2 && args[1] == "wrap" {
+			msgDEXWrap(args[2:])
+		} else if len(args) >= 2 && args[1] == "unwrap" {
+			msgDEXUnwrap(args[2:])
+		} else if len(args) >= 2 && args[1] == "fees" {
+			msgDEXFees()
+		} else {
+			fmt.Fprintln(os.Stderr, "usage: spore msg dex swap -ta TOKENA -tb TOKENB -min-out N | wrap|unwrap -amount Ndero | fees | -to ADDR -session HEX [flags]\n\n  contract IDs come from SPORE_SAP_HTLC_SC / SPORE_SAP_DEX_SC / SPORE_SAP_WDERO_SC (see internal/sap)")
+			os.Exit(2)
+		}
 	case "approve":
 		msgApprove(args[1:])
 	case "receipts":
@@ -646,6 +659,7 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 			}
 			client := d.Client()
 			ctx := context.Background()
+			sap.LoadContractIDsFromEnv()
 
 			hashBytes, err := hex.DecodeString(escrowHash)
 			if err != nil {

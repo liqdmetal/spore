@@ -27,6 +27,7 @@ const (
 	invoiceType = "spore/invoice/v1"
 	paymentType = "spore/payment/v1"
 	escrowType  = "spore/escrow/v1"
+	dexType     = "spore/dex/v1"
 )
 
 type invoiceEnvelope struct {
@@ -66,6 +67,41 @@ type escrowEnvelope struct {
 	Atomic   uint64 `json:"atomic"` // escrowed amount (0 = not stated)
 	Note     string `json:"note"`
 	At       int64  `json:"at"`
+}
+
+// dexEnvelope announces a relay-dex settlement IN-THREAD: swap, wrap, or
+// unwrap. A swap settles atomically in the pool (no amount is asserted — the
+// SC's min-out bound was the only promise); wrap/unwrap move a known amount.
+type dexEnvelope struct {
+	Type   string `json:"type"`
+	Action string `json:"action"`           // "swap" | "wrap" | "unwrap"
+	Pair   string `json:"pair"`             // "tokenA->tokenB" | "dero->wdero" | "wdero->dero"
+	Atomic uint64 `json:"atomic"`           // wrap/unwrap amount; 0 for swaps (pool-settled)
+	Amount string `json:"amount,omitempty"` // display form for wrap/unwrap ("5")
+	TxID   string `json:"txid"`
+	Note   string `json:"note"`
+	At     int64  `json:"at"`
+}
+
+// marshalDexNotice builds the in-thread settlement envelope for a relay-dex
+// swap, wrap, or unwrap.
+func marshalDexNotice(action, pair string, atomic uint64, amountDisplay, txid, note string) ([]byte, error) {
+	if action != "swap" && action != "wrap" && action != "unwrap" {
+		return nil, fmt.Errorf("dex: unknown action %q", action)
+	}
+	if pair == "" {
+		return nil, errors.New("dex: pair required")
+	}
+	if txid == "" {
+		return nil, errors.New("dex: settlement txid required")
+	}
+	if action != "swap" && atomic == 0 {
+		return nil, errors.New("dex: wrap/unwrap require a non-zero amount")
+	}
+	return json.Marshal(dexEnvelope{
+		Type: dexType, Action: action, Pair: pair, Atomic: atomic, Amount: amountDisplay,
+		TxID: txid, Note: note, At: time.Now().Unix(),
+	})
 }
 
 // marshalEscrowNotice builds the in-thread settlement envelope for an HTLC
@@ -291,6 +327,14 @@ func parseMoneyRecord(b []byte) (receipts.Record, bool) {
 		return receipts.Record{At: env.At, Kind: "escrow-" + env.Action,
 			Asset: env.Asset, Atomic: env.Atomic, TxID: env.TxID,
 			Note: "HTLC " + shortOrDash(env.Hash)}, true
+	case dexType:
+		var env dexEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.TxID == "" || env.Pair == "" {
+			return receipts.Record{}, false
+		}
+		return receipts.Record{At: env.At, Kind: "dex-" + env.Action,
+			Asset: "dero", Atomic: env.Atomic, TxID: env.TxID,
+			Note: strings.TrimSpace(env.Pair + " " + env.Note)}, true
 	}
 	return receipts.Record{}, false
 }
@@ -339,6 +383,23 @@ func parseMoneyEnvelope(b []byte) (kind, summary string, ok bool) {
 		}
 		if env.Action == "refund" {
 			return "escrow", fmt.Sprintf("ESCROW REFUNDED %s: expired, funds returned, tx %s", h, shortTx(env.TxID)), true
+		}
+	case dexType:
+		var env dexEnvelope
+		if err := json.Unmarshal(b, &env); err != nil || env.TxID == "" || env.Pair == "" {
+			return "", "", false
+		}
+		amt := env.Amount
+		if amt == "" && env.Atomic > 0 {
+			amt = formatAmount("dero", env.Atomic)
+		}
+		switch env.Action {
+		case "swap":
+			return "dex", fmt.Sprintf("DEX SWAPPED %s (pool-settled) tx %s", env.Pair, shortTx(env.TxID)), true
+		case "wrap":
+			return "dex", fmt.Sprintf("WRAPPED %s dero -> wdero tx %s", amt, shortTx(env.TxID)), true
+		case "unwrap":
+			return "dex", fmt.Sprintf("UNWRAPPED %s wdero -> dero tx %s", amt, shortTx(env.TxID)), true
 		}
 	}
 	return "", "", false
