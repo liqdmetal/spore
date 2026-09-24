@@ -58,6 +58,9 @@ func NewBackend(rpcURL, chainName, fromAddr string) *Backend {
 // ListIncoming reads Inbox logs. Empty clears it back to raw calldata.
 func (b *Backend) SetMailbox(addr string) { b.mailbox = addr }
 
+// SetHTTPClient swaps the backend's HTTP client (custom timeouts, proxying).
+func (b *Backend) SetHTTPClient(c *http.Client) { b.http = c }
+
 // Name implements chain.Chain.
 func (b *Backend) Name() string { return b.chain }
 

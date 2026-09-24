@@ -112,6 +112,8 @@ func main() {
 		settlecmd(os.Args[2:])
 	case "contract":
 		contractcmd(os.Args[2:])
+	case "evm-proxy":
+		evmProxyCmd(os.Args[2:])
 	case "derosim":
 		derosimcmd(os.Args[2:])
 	case "bill":
@@ -209,6 +211,8 @@ func usage() {
   spore derosim serve
   spore contract deploy-mycelium -rpc URL -private-key HEX|-bin FILE [-gas-price WEI] [-wait 2m]
              (deploy contracts/MyceliumMailbox.sol from a funded local key; prints the address for -mailbox)
+  spore evm-proxy -rpc URL [-private-key HEX] [-listen 127.0.0.1:8555]
+             (loopback signing proxy: local EIP-155 signing for eth_sendTransaction in front of a read-only public RPC)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)
