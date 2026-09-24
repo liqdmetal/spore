@@ -25,7 +25,10 @@ The script downloads from the
 [releases page](https://github.com/liqdmetal/spore/releases/latest), verifies
 each binary's checksum against the release's `.sha256` files, and only moves
 binaries into place after verification (a failed download never clobbers an
-existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z`.
+existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
+`SPORE_RELEASE=v0.7.0`, the current release (2026-09-23) and the first
+shipping the full stack: `spore` for all six platforms and the `spore-peer`
+transport for five of them.
 
 <details>
 <summary>Manual download / other platforms</summary>
@@ -49,6 +52,8 @@ slsa-verifier verify-artifact spore-linux-amd64 \
   --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/liqdmetal/spore --source-tag vTAG
 ```
+
+For the current release, `vTAG` is `v0.7.0`.
 
 </details>
 

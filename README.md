@@ -24,6 +24,18 @@ setup. Releases also carry SLSA keyless provenance
 (`multiple.intoto.jsonl`) verifiable with
 [slsa-verifier](https://github.com/slsa-framework/slsa-verifier).
 
+## Releases
+
+| Version | Date | Highlights |
+|---|---|---|
+| **[v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0)** | 2026-09-23 | First release shipping the **full stack**: `spore` (Go) for all six targets (linux/macOS/Windows × amd64/arm64) plus the Rust `spore-peer` transport for five of them, per-asset `.sha256` checksums, and SLSA keyless provenance for every binary. Installers verify before they swap anything into place. |
+
+Pin the install with `SPORE_RELEASE=v0.7.0`, and verify a downloaded binary
+the way CI does with `slsa-verifier … --source-tag v0.7.0` — full recipe in
+[`docs/ONBOARDING.md`](docs/ONBOARDING.md#get-the-binary). One honest
+caveat: `spore-peer` for Windows arm64 is not shipped yet (the Rust
+cross-linker for that target isn't trustworthy); Go `spore` for arm64 is.
+
 ---
 
 ## What makes Spore different
