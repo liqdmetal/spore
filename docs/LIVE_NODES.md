@@ -102,6 +102,7 @@ locally. Options:
 | **Local anvil/geth dev node** on the box | anvil auto-funds + unlocks accounts | low, self-contained |
 | **Local geth with our funded key** on Sepolia | geth unlocks a key we import | med (needs a funded key + faucet) |
 | **EVM wallet-RPC the CLI reaches** | wallet holds key | depends on user's wallet |
+| **`spore evm-proxy` in front of a public RPC** (§3) | signs locally, loopback | low — no node, no wallet |
 
 ### Recommended: anvil (foundry) dev node on Hetzner
 `anvil` is a 10-second local EVM node that pre-funds test accounts and accepts
@@ -173,16 +174,21 @@ Why the code fits without changes (checked against `internal/evm`):
 2. Fund it from a Base Sepolia faucet (Alchemy or Chainlink run ones).
    A deploy plus a dozen deliver/burn rounds cost well under
    0.01 testnet ETH.
-3. Deploy:
+3. Deploy (signs locally — a public RPC is enough):
      spore contract deploy-mycelium -rpc https://sepolia.base.org -wait 5m
    It verifies code at the derived creation address before printing the
    contract address. Record address + creation txid.
-4. Two-party proof (mirrors the Anvil proof, now against a real chain):
+4. Two-party proof (mirrors the Anvil proof, now against a real chain).
+   Sends sign node-side, so both endpoints run the loopback signing proxy
+   (`spore evm-proxy` — local EIP-155 signing for eth_sendTransaction,
+   everything else forwarded verbatim) in front of the same public RPC:
+     A: spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8555
+     B: spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8556
      sender:    spore msg send-e2 -to 0xB… -mailbox 0x<addr> \
-                  -rpc https://sepolia.base.org -from 0xA… \
+                  -rpc http://127.0.0.1:8555 -from 0xA… \
                   (bundle/pinned-sig/store flags as ONBOARDING §4)
      recipient: spore msg recv-e2 -auto-burn -mailbox 0x<addr> \
-                  -rpc https://sepolia.base.org -from 0xB…
+                  -rpc http://127.0.0.1:8556 -from 0xB…
    Then assert compost on-chain — `length(to)` unchanged after the burn and
    `read()` returning empty data (the slot is provably empty):
      cast call 0x<addr> "length(address)(uint256)" 0xB… \
@@ -210,23 +216,29 @@ Why the code fits without changes (checked against `internal/evm`):
 - Base Sepolia rehearsal: address `0x…`, creation tx `0x…`, date …
 - Base mainnet: address `0x…`, creation tx `0x…`, deployer `0x…`, date …
 - Two-party E2E → receive → auto-burn → empty-slot proof: txids …
-- Default `-mailbox` shipped in: <release>
+- Default `-mailbox` (config `evm_mailbox`) shipped in: <release>
 
 ### Honest notes (sender-side reality)
 
-- **Deploy signs locally; sends sign node-side.** `PostPayload` posts via
-  `eth_sendTransaction` with `from` (same as the anvil verification above),
-  so the *send/receive* side wants a signing node or signing proxy in front
-  of Base — a plain public RPC cannot sign. The deploy command is unaffected
-  (it signs raw EIP-155 itself). This is the one remaining sender-side gap;
-  a small local `eth_sendTransaction`-signing proxy bridges it.
+- **Sends sign through the loopback proxy; the public RPC never signs.**
+  `spore evm-proxy` (shipped) intercepts `eth_sendTransaction`, signs with
+  the same hand-rolled EIP-155 signer the deploy uses (key zeroed after each
+  signing; a caller-supplied `from` that mismatches the key fails loudly,
+  never silently rewritten), broadcasts raw, and forwards every other method
+  verbatim. Loopback-only by construction — it signs whatever arrives, so it
+  must never be exposed. On the send/receive legs the CLI's `-rpc` points at
+  `http://127.0.0.1:8555`, not at Base; the deploy command never needed the
+  proxy (it signed raw EIP-155 itself).
 - Public RPC etiquette: `eth_getLogs` range/rate limits may apply on
   `mainnet.base.org`; the backend's Inbox query is `fromBlock`-bounded. If
   limits bite, run your own node or a paid RPC — nothing in the backend is
   Base-specific; that is the point of the JSON-RPC seam.
 - Compost is the recipient's gas: `burn(to,seq)` costs a real (small) fee
-  per message on EVM, unlike DERO's native expiry. Say so in the docs when
-  the default `-mailbox` ships.
+  per message on EVM, unlike DERO's native expiry.
+- Default `-mailbox` shipped as the config `evm_mailbox` seam (init
+  `-mailbox-contract` writes it; explicit flags always win; it never leaks
+  into the URL-flavored `-mailbox` of prekeybatch/invite — applied only in
+  the chain-backend funnels).
 
 ---
 
