@@ -185,6 +185,7 @@ func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
 		}
 	}
 	cfg := backend.ChainConfig{Type: value("chain"), RPC: value("rpc"), Login: value("rpc-login"), From: value("from"), KeyFile: value("keyfile"), ProgramID: value("program"), PrivateKey: privateKey, Network: value("network"), BaseURL: value("base-url"), Address: value("address"), Name: value("chain-id"), PostPath: value("post-path"), ListPath: value("list-path"), HeightPath: value("height-path"), MessageField: value("message-field"), RecipientField: value("recipient-field"), DeliveryGuaranteed: value("delivery-guaranteed") == "true", Relays: relays}
+	cfg.Mailbox = mailboxContractOrDefault(fs)
 	c, err := backend.Build(context.Background(), cfg)
 	if err != nil {
 		return ratchetwire.ChainCarrier{}, err
@@ -369,6 +370,10 @@ func e2Common(fs *flag.FlagSet) {
 	fs.String("from", "", "sender chain address")
 	fs.String("keyfile", "", "Solana signer JSON")
 	fs.String("program", "", "Solana program ID")
+	// EVM contract delivery: default resolved from config evm_mailbox in the
+	// chain-backend funnel (mailboxContractOrDefault) — NOT auto-filled here,
+	// because -mailbox means a prekey URL on other commands.
+	fs.String("mailbox", "", "evm: MyceliumMailbox contract address (contract delivery + Inbox-log discovery; default from config evm_mailbox — see docs/LIVE_NODES.md §3)")
 	fs.String("private-key", "", "Nostr private key (prefer -private-key-file)")
 	fs.String("private-key-file", "", "file containing Nostr private key")
 	fs.String("relays", "", "comma-separated Nostr relay URLs")

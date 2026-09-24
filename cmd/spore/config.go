@@ -29,6 +29,13 @@ type Config struct {
 	Maildb     string `json:"maildb,omitempty"`
 	RPC        string `json:"rpc,omitempty"`
 	RPCLogin   string `json:"rpc_login,omitempty"`
+	// EVMMailbox is the per-chain default MyceliumMailbox contract address
+	// (EVM). Named evm_mailbox — NOT mailbox — because `-mailbox` on
+	// prekeybatch/invite means a prekey/base URL, and auto-filling that from
+	// a config value meant for the contract would be a silent
+	// misconfiguration. Applied only in the chain-backend funnels
+	// (e2Carrier/msgBackend), where the contract semantics are certain.
+	EVMMailbox string `json:"evm_mailbox,omitempty"`
 	Network    string `json:"network,omitempty"`
 	Relays     string `json:"relays,omitempty"`
 	BaseURL    string `json:"base_url,omitempty"`
@@ -133,6 +140,28 @@ func applyConfigDefaults(fs *flag.FlagSet, cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// mailboxContractOrDefault resolves the EVM MyceliumMailbox contract
+// address: the explicit -mailbox flag first, then the evm_mailbox default
+// from config.json. Empty when neither is set. Deliberately NOT wired
+// through flagValues()/applyConfigDefaults — see the EVMMailbox field
+// comment for why (the flag name is overloaded with a URL meaning).
+func mailboxContractOrDefault(fs *flag.FlagSet) string {
+	if f := fs.Lookup("mailbox"); f != nil {
+		if v := f.Value.String(); v != "" {
+			return v
+		}
+	}
+	explicit := ""
+	if f := fs.Lookup("config"); f != nil {
+		explicit = f.Value.String()
+	}
+	cfg, err := LoadConfig(configPath(explicit))
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.EVMMailbox
 }
 
 // loadConfigForFlags is the one-liner commands use after fs.Parse: resolve

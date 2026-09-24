@@ -1049,9 +1049,7 @@ func msgBackend(fs *flag.FlagSet) chain.Chain {
 	if f := fs.Lookup("xmr-unverified"); f != nil && f.Value.String() == "true" {
 		cfg.AllowUnverified = true
 	}
-	if f := fs.Lookup("mailbox"); f != nil {
-		cfg.Mailbox = f.Value.String()
-	}
+	cfg.Mailbox = mailboxContractOrDefault(fs)
 	c, err := backend.Build(context.Background(), cfg)
 	check(err)
 	return c

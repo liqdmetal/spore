@@ -30,6 +30,7 @@ func initcmd(args []string) {
 	opks := fs.Int("opks", 50, "how many one-time prekeys to pre-generate")
 	chainName := fs.String("chain", "dero", "default pointer carrier")
 	storeURL := fs.String("store", "", "default off-chain body store URL (your mailbox or a relay you trust; can be set later in config.json)")
+	mailboxContract := fs.String("mailbox-contract", "", "EVM: default MyceliumMailbox contract address for -chain evm (stored as evm_mailbox in config.json; also editable later — see docs/LIVE_NODES.md §3)")
 	force := fs.Bool("force", false, "re-initialize even if the directory already has an identity (DESTRUCTIVE: regenerates keys; old sessions become undecryptable)")
 	_ = fs.Parse(args)
 
@@ -137,6 +138,11 @@ func initcmd(args []string) {
 		Chain:     *chainName,
 		Store:     *storeURL,
 		Maildb:    filepath.Join(home, "mail.json"),
+
+		// Per-chain default MyceliumMailbox contract (EVM): once set, every
+		// -chain evm E2 command uses contract delivery + Inbox-log discovery
+		// without retyping -mailbox. Explicit flags always win.
+		EVMMailbox: *mailboxContract,
 	}
 	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
 		check(err)
