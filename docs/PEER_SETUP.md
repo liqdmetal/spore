@@ -21,6 +21,13 @@ DERO. There is no server, no box, no operator in the middle — but that means
 3. **A public DERO daemon to point at** (you don't run a node):
    - `dero-ch4k1pu.mindmesh.de:10102` (public), or any public daemon.
 
+> On **EVM** instead of DERO? Skip the wallet entirely: `spore evm-proxy -rpc
+> <chain RPC> -listen 127.0.0.1:8555` is a loopback signing proxy in front of
+> any public RPC — it signs your txs locally and forwards everything else,
+> so your `spore` commands point at `http://127.0.0.1:8555` instead of the
+> chain. Contract delivery + per-chain defaults:
+> [`LIVE_NODES.md` §3](LIVE_NODES.md).
+
 ## Step 1 — wallet setup (once)
 
 ```bash

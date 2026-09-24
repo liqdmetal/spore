@@ -338,7 +338,7 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
 |---|---|---|
 | DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
 | Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
-| EVM | 🧪 dev (local anvil) | a local EVM node + account; pay-with-message on calldata path |
+| EVM | 🧪 dev (anvil-verified; mailbox contract deployment pending) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); pay-with-message on calldata path. Contract delivery + per-chain defaults: LIVE_NODES.md §3 |
 | Nostr | 🧪 carrier impl | relay URLs + a Nostr key |
 | Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
 | Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
