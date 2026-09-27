@@ -21,7 +21,8 @@ import (
 func validAuthorizedWorkOrder() AuthorizedWorkOrderCommand {
 	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
 	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, ed25519.SeedSize))
-	actorID, issuerID := "did:relay:worker", "did:relay:issuer"
+	actorID := relayActorID(actorKey.Public().(ed25519.PublicKey))
+	issuerID := relayActorID(issuerKey.Public().(ed25519.PublicKey))
 	work := WorkOrder{
 		ObjectiveID:           "objective:test-1",
 		OwnerPseudonym:        "actor:buyer-pseudonym",
@@ -50,6 +51,11 @@ func validAuthorizedWorkOrder() AuthorizedWorkOrderCommand {
 	}
 	command.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(actorKey, relayCanonicalValue(authorizationPayload)))
 	return command
+}
+
+func relayActorID(public ed25519.PublicKey) string {
+	digest := sha256.Sum256(public)
+	return "did:relay:" + hex.EncodeToString(digest[:])[:40]
 }
 
 // relayCanonicalValue mirrors RelayOS canonical_bytes for these ASCII test
@@ -81,7 +87,9 @@ func verifyEnvelopeSignaturesUsingRelayCanonicalRules(command AuthorizedWorkOrde
 	actorSig, actorSigErr := base64.RawURLEncoding.DecodeString(command.Signature)
 	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, ed25519.SeedSize))
 	grantSig, grantSigErr := base64.RawURLEncoding.DecodeString(command.Grant.Signature)
-	if actorPubErr != nil || actorSigErr != nil || grantSigErr != nil || command.Grant.IssuerID != "did:relay:issuer" {
+	if actorPubErr != nil || actorSigErr != nil || grantSigErr != nil ||
+		command.Actor.ActorID != relayActorID(ed25519.PublicKey(actorPublic)) ||
+		command.Grant.IssuerID != relayActorID(issuerKey.Public().(ed25519.PublicKey)) {
 		return false, false
 	}
 	grantHash := sha256.Sum256(relayCanonicalValue(command.Grant))
@@ -131,6 +139,77 @@ func TestRegisterWorkOrderUsesRelayOSCommandsContract(t *testing.T) {
 	}
 	if !registered.matches(command.Command.Payload) {
 		t.Fatalf("registered record = %+v, doesn't match submitted work order", registered)
+	}
+}
+
+func TestRelayCanonicalJSONMatchesRelayOSUnicodeStringEncoding(t *testing.T) {
+	got, err := relayCanonicalJSON(map[string]any{
+		"é": "\\u2028", "face": "😀", "ascii": "<>&",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"ascii":"<>&","face":"\ud83d\ude00","\u00e9":"\\u2028"}`
+	if string(got) != want {
+		t.Fatalf("Relay canonical JSON = %s, want %s", got, want)
+	}
+}
+
+func TestRelayCanonicalJSONRejectsNumericAuthorizationFields(t *testing.T) {
+	if _, err := relayCanonicalJSON(map[string]any{"amount": 1}); err == nil {
+		t.Fatal("Relay canonical JSON accepted a numeric value in a signed Relay work-order object")
+	}
+}
+
+func TestPrepareAuthorizedWorkOrderBuildsRelayOSCanonicalSignature(t *testing.T) {
+	command := validAuthorizedWorkOrder()
+	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, ed25519.SeedSize))
+	issuer := RelayActorIdentity{ActorID: relayActorID(issuerKey.Public().(ed25519.PublicKey)), PublicKey: base64.RawURLEncoding.EncodeToString(issuerKey.Public().(ed25519.PublicKey))}
+	prepared, err := PrepareAuthorizedWorkOrder(actorKey, issuer, command.Grant, command.Command.Payload)
+	if err != nil {
+		t.Fatalf("PrepareAuthorizedWorkOrder: %v", err)
+	}
+	if err := prepared.Validate(); err != nil {
+		t.Fatalf("prepared envelope validation: %v", err)
+	}
+	if issuerOK, actorOK := verifyEnvelopeSignaturesUsingRelayCanonicalRules(prepared); !issuerOK || !actorOK {
+		t.Fatalf("prepared signatures are not RelayOS-compatible: issuer=%t actor=%t", issuerOK, actorOK)
+	}
+	if !reflect.DeepEqual(prepared.Grant, command.Grant) {
+		t.Fatalf("preparation changed the RelayOS-issued grant: got=%+v want=%+v", prepared.Grant, command.Grant)
+	}
+}
+
+func TestPrepareAuthorizedWorkOrderRejectsUntrustedOrUnusableGrant(t *testing.T) {
+	command := validAuthorizedWorkOrder()
+	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, ed25519.SeedSize))
+	issuer := RelayActorIdentity{ActorID: relayActorID(issuerKey.Public().(ed25519.PublicKey)), PublicKey: base64.RawURLEncoding.EncodeToString(issuerKey.Public().(ed25519.PublicKey))}
+	for _, tc := range []struct {
+		name   string
+		issuer RelayActorIdentity
+		grant  RelayAuthorityGrant
+	}{
+		{"wrong trusted issuer", RelayActorIdentity{ActorID: "did:relay:other", PublicKey: issuer.PublicKey}, command.Grant},
+		{"bad signature", issuer, func() RelayAuthorityGrant {
+			g := command.Grant
+			g.Signature = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, ed25519.SignatureSize))
+			return g
+		}()},
+		{"expired grant", issuer, func() RelayAuthorityGrant {
+			g := command.Grant
+			g.NotBefore = "2020-01-01T00:00:00Z"
+			g.ExpiresAt = "2020-01-02T00:00:00Z"
+			return g
+		}()},
+		{"wrong subject", issuer, func() RelayAuthorityGrant { g := command.Grant; g.SubjectID = "did:relay:other"; return g }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := PrepareAuthorizedWorkOrder(actorKey, tc.issuer, tc.grant, command.Command.Payload); err == nil {
+				t.Fatal("unsafe or unusable RelayOS grant was accepted")
+			}
+		})
 	}
 }
 
@@ -215,6 +294,7 @@ func TestRegisterWorkOrderRejectsIdentityScopeAndResourceMismatchBeforeNetwork(t
 		mutate func(*AuthorizedWorkOrderCommand)
 		want   string
 	}{
+		{"wrong actor ID for public key", func(c *AuthorizedWorkOrderCommand) { c.Actor.ActorID = "did:relay:other" }, "actor_id must be derived from its public_key"},
 		{"wrong subject", func(c *AuthorizedWorkOrderCommand) { c.Grant.SubjectID = "did:relay:other" }, "subject does not match"},
 		{"wrong resource", func(c *AuthorizedWorkOrderCommand) { c.Grant.ResourceID = "objective:other" }, "must be scoped to this work order"},
 		{"broad grant", func(c *AuthorizedWorkOrderCommand) { c.Grant.ResourceID = "*" }, "must be scoped to this work order"},

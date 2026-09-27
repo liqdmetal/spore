@@ -33,6 +33,12 @@ func workordercmd(args []string, stdout, stderr io.Writer) error {
 func workOrderUsage(w io.Writer) {
 	for _, line := range []string{
 		"usage:",
+		"  spore work-order identity -actor-key FILE",
+		"      print a Relay actor identity derived from a local Ed25519 key",
+		"  spore work-order prepare -actor-key FILE -issuer FILE -grant FILE",
+		"      -objective-id ID -owner-pseudonym ID -description-commitment HASH",
+		"      -policy-hash HASH -out NEW_FILE",
+		"      create and actor-sign an objectives.register command locally",
 		"  spore work-order register -command FILE [-relay-url URL]",
 		"      submit an already-authorized RelayOS objectives.register command",
 		"",
@@ -40,6 +46,8 @@ func workOrderUsage(w io.Writer) {
 		"  SPORE_RELAY_URL  RelayOS base URL when -relay-url is omitted",
 		"  SPORE_RELAY_API_TOKEN  Optional reverse-proxy bearer token",
 		"",
+		"Preparation uses the caller's local actor key plus a RelayOS-issued grant",
+		"and trusted issuer identity. Spore never creates or broadens authority.",
 		"The command file must contain RelayOS actor identity, scope, command, signed",
 		"AuthorityGrant, and actor signature. RelayOS verifies signatures, grant time,",
 		"revocation, resource scope, and replay. Registration is not execution,",

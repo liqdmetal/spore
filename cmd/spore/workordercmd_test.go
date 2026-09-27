@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/sporrelay"
 )
@@ -20,9 +23,11 @@ import (
 func workOrderCommandFile(t *testing.T) string {
 	t.Helper()
 	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, ed25519.SeedSize))
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, ed25519.SeedSize))
 	actorPublic := actorKey.Public().(ed25519.PublicKey)
+	actorID := workOrderTestActorID(actorPublic)
 	command := sporrelay.AuthorizedWorkOrderCommand{
-		Actor: sporrelay.RelayActorIdentity{ActorID: "did:relay:buyer", PublicKey: base64.RawURLEncoding.EncodeToString(actorPublic)},
+		Actor: sporrelay.RelayActorIdentity{ActorID: actorID, PublicKey: base64.RawURLEncoding.EncodeToString(actorPublic)},
 		Scope: sporrelay.RegisterObjectiveAction,
 		Command: sporrelay.ObjectiveRegistrationCommand{
 			Action: sporrelay.RegisterObjectiveAction, ResourceID: "objective:cmd-1",
@@ -32,13 +37,23 @@ func workOrderCommandFile(t *testing.T) string {
 			},
 		},
 		Grant: sporrelay.RelayAuthorityGrant{
-			IssuerID: "did:relay:issuer", SubjectID: "did:relay:buyer", ResourceID: "objective:cmd-1",
+			IssuerID: workOrderTestActorID(issuerKey.Public().(ed25519.PublicKey)), SubjectID: actorID, ResourceID: "objective:cmd-1",
 			Scopes: []string{sporrelay.RegisterObjectiveAction}, NotBefore: "2026-01-01T00:00:00Z",
 			ExpiresAt: "2027-01-01T00:00:00Z", Nonce: "nonce",
-			Signature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{4}, ed25519.SignatureSize)),
 		},
-		Signature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{5}, ed25519.SignatureSize)),
 	}
+	unsignedGrant := workOrderTestFields(command.Grant)
+	delete(unsignedGrant, "signature")
+	command.Grant.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, workOrderTestCanonicalJSON(unsignedGrant)))
+	grantHash := sha256.Sum256(workOrderTestCanonicalJSON(command.Grant))
+	actorPayload := map[string]any{
+		"actor_id":     actorID,
+		"scope":        command.Scope,
+		"command_type": "IngressCommand",
+		"command":      command.Command,
+		"grant_hash":   hex.EncodeToString(grantHash[:]),
+	}
+	command.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(actorKey, workOrderTestCanonicalJSON(actorPayload)))
 	data, err := json.Marshal(command)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +63,67 @@ func workOrderCommandFile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func workOrderTestActorID(public ed25519.PublicKey) string {
+	digest := sha256.Sum256(public)
+	return "did:relay:" + hex.EncodeToString(digest[:])[:40]
+}
+
+func workOrderTestFields(value any) map[string]any {
+	data, _ := json.Marshal(value)
+	var fields map[string]any
+	_ = json.Unmarshal(data, &fields)
+	return fields
+}
+
+func workOrderTestCanonicalJSON(value any) []byte {
+	data, _ := json.Marshal(value)
+	var normalized any
+	_ = json.Unmarshal(data, &normalized)
+	canonical, _ := json.Marshal(normalized)
+	return canonical
+}
+
+func workOrderPreparationFiles(t *testing.T, work sporrelay.WorkOrder) (string, string, string, ed25519.PrivateKey, ed25519.PrivateKey) {
+	t.Helper()
+	dir := t.TempDir()
+	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{41}, ed25519.SeedSize))
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{42}, ed25519.SeedSize))
+	actorPublic, issuerPublic := actorKey.Public().(ed25519.PublicKey), issuerKey.Public().(ed25519.PublicKey)
+	actorID, issuerID := workOrderTestActorID(actorPublic), workOrderTestActorID(issuerPublic)
+	keyFile := filepath.Join(dir, "actor.key")
+	issuerFile := filepath.Join(dir, "issuer.json")
+	grantFile := filepath.Join(dir, "grant.json")
+	if err := os.WriteFile(keyFile, []byte(hex.EncodeToString(actorKey[:ed25519.SeedSize])), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	issuerData, err := json.Marshal(sporrelay.RelayActorIdentity{
+		ActorID: issuerID, PublicKey: base64.RawURLEncoding.EncodeToString(issuerPublic),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(issuerFile, issuerData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grant := sporrelay.RelayAuthorityGrant{
+		IssuerID: issuerID, SubjectID: actorID, ResourceID: work.ObjectiveID,
+		Scopes:    []string{sporrelay.RegisterObjectiveAction},
+		NotBefore: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), Nonce: "relayos-issued-nonce",
+	}
+	unsigned := workOrderTestFields(grant)
+	delete(unsigned, "signature")
+	grant.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, workOrderTestCanonicalJSON(unsigned)))
+	grantData, err := json.Marshal(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(grantFile, grantData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return keyFile, issuerFile, grantFile, actorKey, issuerKey
 }
 
 func TestWorkOrderCommandUsesRealAdapterAndOnlyReportsRegistration(t *testing.T) {
@@ -94,6 +170,60 @@ func TestWorkOrderCommandUsesRealAdapterAndOnlyReportsRegistration(t *testing.T)
 			t.Fatalf("registration claimed %q: %q", forbidden, got)
 		}
 	}
+
+	t.Run("local preparation uses provided authority and does not submit", func(t *testing.T) {
+		work := sporrelay.WorkOrder{
+			ObjectiveID: "objective:prepared-binary", OwnerPseudonym: "actor:buyer",
+			DescriptionCommitment: "sha256:private-description", PolicyHash: "sha256:policy",
+		}
+		actorFile, issuerFile, grantFile, actorKey, issuerKey := workOrderPreparationFiles(t, work)
+		outFile := filepath.Join(t.TempDir(), "prepared-command.json")
+		prepare := exec.Command(binary, "work-order", "prepare",
+			"-actor-key", actorFile, "-issuer", issuerFile, "-grant", grantFile,
+			"-objective-id", work.ObjectiveID, "-owner-pseudonym", work.OwnerPseudonym,
+			"-description-commitment", work.DescriptionCommitment, "-policy-hash", work.PolicyHash,
+			"-out", outFile)
+		var prepareOut, prepareErr strings.Builder
+		prepare.Stdout, prepare.Stderr = &prepareOut, &prepareErr
+		if err := prepare.Run(); err != nil {
+			t.Fatalf("real work-order prepare failed: %v\\nstdout=%s\\nstderr=%s", err, prepareOut.String(), prepareErr.String())
+		}
+		if !strings.Contains(prepareOut.String(), "registration: not submitted") {
+			t.Fatalf("prepare output did not state it made no network submission: %q", prepareOut.String())
+		}
+		var command sporrelay.AuthorizedWorkOrderCommand
+		preparedBytes, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(preparedBytes, &command); err != nil {
+			t.Fatalf("decode prepared envelope: %v", err)
+		}
+		if err := command.Validate(); err != nil {
+			t.Fatalf("prepared envelope validation: %v", err)
+		}
+		grantSig, err := base64.RawURLEncoding.DecodeString(command.Grant.Signature)
+		if err != nil || !ed25519.Verify(issuerKey.Public().(ed25519.PublicKey), workOrderTestCanonicalJSON(func() map[string]any {
+			fields := workOrderTestFields(command.Grant)
+			delete(fields, "signature")
+			return fields
+		}()), grantSig) {
+			t.Fatalf("prepared command replaced or invalidated the RelayOS grant: %v", err)
+		}
+		grantHash := sha256.Sum256(workOrderTestCanonicalJSON(command.Grant))
+		actorPayload := map[string]any{
+			"actor_id": command.Actor.ActorID, "scope": command.Scope,
+			"command_type": "IngressCommand", "command": command.Command,
+			"grant_hash": hex.EncodeToString(grantHash[:]),
+		}
+		actorSig, err := base64.RawURLEncoding.DecodeString(command.Signature)
+		if err != nil || !ed25519.Verify(actorKey.Public().(ed25519.PublicKey), workOrderTestCanonicalJSON(actorPayload), actorSig) {
+			t.Fatalf("prepared command was not signed by the caller actor key: %v", err)
+		}
+		if got := command.Grant.Nonce; got != "relayos-issued-nonce" {
+			t.Fatalf("prepared command changed the RelayOS-issued grant nonce: %q", got)
+		}
+	})
 
 	t.Run("retired settle assurance fails honestly", func(t *testing.T) {
 		cmd := exec.Command(binary, "settle", "assurance", "objective:missing")

@@ -1,16 +1,22 @@
 package sporrelay
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/liqdmetal/spore/internal/crypto"
 )
 
 const RegisterObjectiveAction = "objectives.register"
@@ -101,8 +107,12 @@ func (c AuthorizedWorkOrderCommand) Validate() error {
 	if strings.TrimSpace(c.Actor.ActorID) == "" || strings.TrimSpace(c.Actor.PublicKey) == "" {
 		return errors.New("sporrelay: Relay actor identity is incomplete")
 	}
-	if !validRelayBase64(c.Actor.PublicKey, ed25519.PublicKeySize) {
+	actorPublicKey, err := decodeRelayBase64(c.Actor.PublicKey)
+	if err != nil || len(actorPublicKey) != ed25519.PublicKeySize {
 		return errors.New("sporrelay: Relay actor public_key must be base64url-encoded Ed25519 key material")
+	}
+	if c.Actor.ActorID != relayActorIDForPublicKey(actorPublicKey) {
+		return errors.New("sporrelay: Relay actor_id must be derived from its public_key")
 	}
 	if c.Command.Action != RegisterObjectiveAction || c.Scope != RegisterObjectiveAction || c.Scope != c.Command.Action {
 		return fmt.Errorf("sporrelay: only a signed %q command is supported", RegisterObjectiveAction)
@@ -138,11 +148,261 @@ func (c AuthorizedWorkOrderCommand) Validate() error {
 }
 
 func validRelayBase64(value string, wantBytes int) bool {
+	decoded, err := decodeRelayBase64(value)
+	return err == nil && len(decoded) == wantBytes
+}
+
+func decodeRelayBase64(value string) ([]byte, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
-		decoded, err = base64.URLEncoding.DecodeString(value)
+		return base64.URLEncoding.DecodeString(value)
 	}
-	return err == nil && len(decoded) == wantBytes
+	return decoded, nil
+}
+
+func relayActorIDForPublicKey(publicKey []byte) string {
+	digest := sha256.Sum256(publicKey)
+	return "did:relay:" + hex.EncodeToString(digest[:])[:40]
+}
+
+// RelayActorID derives the Relay actor ID from raw Ed25519 public-key bytes.
+func RelayActorID(publicKey ed25519.PublicKey) string {
+	return relayActorIDForPublicKey(publicKey)
+}
+
+// PrepareAuthorizedWorkOrder assembles and actor-signs an objectives.register
+// command using a caller-held Relay actor key, a RelayOS-issued grant, and a
+// caller-supplied trusted issuer identity. It never creates or signs grants,
+// chooses an issuer, checks revocation/replay state, or replaces RelayOS's
+// authoritative authorization check.
+func PrepareAuthorizedWorkOrder(actorPrivateKey ed25519.PrivateKey, trustedIssuer RelayActorIdentity, grant RelayAuthorityGrant, work WorkOrder) (AuthorizedWorkOrderCommand, error) {
+	if len(actorPrivateKey) != ed25519.PrivateKeySize {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: Relay actor private key must be %d bytes", ed25519.PrivateKeySize)
+	}
+	derivedActorKey := ed25519.NewKeyFromSeed(actorPrivateKey[:ed25519.SeedSize])
+	if !bytes.Equal(derivedActorKey, actorPrivateKey) {
+		crypto.Zero(derivedActorKey)
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: Relay actor private key has inconsistent public-key bytes")
+	}
+	crypto.Zero(derivedActorKey)
+	actorPublicKey := actorPrivateKey[ed25519.SeedSize:]
+	actorID := relayActorIDForPublicKey(actorPublicKey)
+
+	if err := work.Validate(); err != nil {
+		return AuthorizedWorkOrderCommand{}, err
+	}
+	if trustedIssuer.ActorID == "" {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: trusted Relay issuer actor_id is required")
+	}
+	issuerPublicKey, err := decodeRelayBase64(trustedIssuer.PublicKey)
+	if err != nil || len(issuerPublicKey) != ed25519.PublicKeySize {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: trusted Relay issuer public_key must be base64url-encoded Ed25519 key material")
+	}
+	if trustedIssuer.ActorID != relayActorIDForPublicKey(issuerPublicKey) {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: trusted Relay issuer actor_id does not match its public_key")
+	}
+	if grant.IssuerID != trustedIssuer.ActorID {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant issuer does not match the supplied trusted Relay issuer")
+	}
+	if grant.SubjectID != actorID {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant subject does not match the local Relay actor key")
+	}
+	if grant.ResourceID != work.ObjectiveID {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant resource must exactly match objective_id")
+	}
+	if len(grant.Scopes) != 1 || grant.Scopes[0] != RegisterObjectiveAction {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: authority grant must contain only scope %q", RegisterObjectiveAction)
+	}
+	if strings.TrimSpace(grant.Nonce) == "" {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant nonce is required")
+	}
+	grantSignature, err := decodeRelayBase64(grant.Signature)
+	if err != nil || len(grantSignature) != ed25519.SignatureSize {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: RelayOS-issued grant must contain a base64url Ed25519 signature")
+	}
+	notBefore, err := time.Parse(time.RFC3339Nano, grant.NotBefore)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: authority grant not_before is not RFC3339: %w", err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, grant.ExpiresAt)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: authority grant expires_at is not RFC3339: %w", err)
+	}
+	now := time.Now()
+	if expiresAt.Before(notBefore) || now.Before(notBefore) || now.After(expiresAt) {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant is not currently valid")
+	}
+	unsignedGrant, err := relayUnsignedGrant(grant)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: canonicalize RelayOS authority grant: %w", err)
+	}
+	grantBytes, err := relayCanonicalJSON(unsignedGrant)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: canonicalize RelayOS authority grant: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(issuerPublicKey), grantBytes, grantSignature) {
+		return AuthorizedWorkOrderCommand{}, errors.New("sporrelay: authority grant signature is invalid for the supplied trusted issuer")
+	}
+
+	command := AuthorizedWorkOrderCommand{
+		Actor: RelayActorIdentity{
+			ActorID:   actorID,
+			PublicKey: base64.RawURLEncoding.EncodeToString(actorPublicKey),
+		},
+		Scope: RegisterObjectiveAction,
+		Command: ObjectiveRegistrationCommand{
+			Action: RegisterObjectiveAction, ResourceID: work.ObjectiveID, Payload: work,
+		},
+		Grant: grant,
+	}
+	grantBytes, err = relayCanonicalJSON(grant)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: canonicalize RelayOS authority grant: %w", err)
+	}
+	grantHash := sha256.Sum256(grantBytes)
+	actorPayload := map[string]any{
+		"actor_id":     actorID,
+		"scope":        command.Scope,
+		"command_type": "IngressCommand",
+		"command":      command.Command,
+		"grant_hash":   hex.EncodeToString(grantHash[:]),
+	}
+	actorBytes, err := relayCanonicalJSON(actorPayload)
+	if err != nil {
+		return AuthorizedWorkOrderCommand{}, fmt.Errorf("sporrelay: canonicalize RelayOS command signature: %w", err)
+	}
+	command.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(actorPrivateKey, actorBytes))
+	if err := command.Validate(); err != nil {
+		return AuthorizedWorkOrderCommand{}, err
+	}
+	return command, nil
+}
+
+func relayUnsignedGrant(grant RelayAuthorityGrant) (map[string]any, error) {
+	data, err := json.Marshal(grant)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "signature")
+	return fields, nil
+}
+
+// relayCanonicalJSON mirrors RelayOS's canonical_bytes for these protocol
+// values: lexically sorted object keys, compact JSON, and Python's default
+// ensure_ascii string escaping. This keeps actor/grant signatures compatible
+// without relying on Go's different U+2028/U+2029 and Unicode escaping rules.
+func relayCanonicalJSON(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var normalized any
+	if err := decoder.Decode(&normalized); err != nil {
+		return nil, err
+	}
+	var canonical bytes.Buffer
+	if err := writeRelayCanonicalJSON(&canonical, normalized); err != nil {
+		return nil, err
+	}
+	return canonical.Bytes(), nil
+}
+
+func writeRelayCanonicalJSON(out *bytes.Buffer, value any) error {
+	switch value := value.(type) {
+	case nil:
+		out.WriteString("null")
+	case bool:
+		if value {
+			out.WriteString("true")
+		} else {
+			out.WriteString("false")
+		}
+	case string:
+		writeRelayJSONString(out, value)
+	case []any:
+		out.WriteByte('[')
+		for i, item := range value {
+			if i > 0 {
+				out.WriteByte(',')
+			}
+			if err := writeRelayCanonicalJSON(out, item); err != nil {
+				return err
+			}
+		}
+		out.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		out.WriteByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				out.WriteByte(',')
+			}
+			writeRelayJSONString(out, key)
+			out.WriteByte(':')
+			if err := writeRelayCanonicalJSON(out, value[key]); err != nil {
+				return err
+			}
+		}
+		out.WriteByte('}')
+	case json.Number:
+		return errors.New("RelayOS signed command values cannot contain JSON numbers")
+	default:
+		return fmt.Errorf("unsupported RelayOS canonical JSON value %T", value)
+	}
+	return nil
+}
+
+func writeRelayJSONString(out *bytes.Buffer, value string) {
+	const digits = "0123456789abcdef"
+	writeEscape := func(codepoint uint16) {
+		out.WriteString("\\u")
+		out.WriteByte(digits[(codepoint>>12)&0xf])
+		out.WriteByte(digits[(codepoint>>8)&0xf])
+		out.WriteByte(digits[(codepoint>>4)&0xf])
+		out.WriteByte(digits[codepoint&0xf])
+	}
+	out.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '"', '\\':
+			out.WriteByte('\\')
+			out.WriteByte(byte(r))
+		case '\b':
+			out.WriteString("\\b")
+		case '\f':
+			out.WriteString("\\f")
+		case '\n':
+			out.WriteString("\\n")
+		case '\r':
+			out.WriteString("\\r")
+		case '\t':
+			out.WriteString("\\t")
+		default:
+			switch {
+			case r < 0x20:
+				writeEscape(uint16(r))
+			case r <= 0x7f:
+				out.WriteByte(byte(r))
+			case r <= 0xffff:
+				writeEscape(uint16(r))
+			default:
+				r -= 0x10000
+				writeEscape(uint16(0xd800 + (r >> 10)))
+				writeEscape(uint16(0xdc00 + (r & 0x3ff)))
+			}
+		}
+	}
+	out.WriteByte('"')
 }
 
 // ObjectiveRegistrationResult is only the RelayOS record returned after
