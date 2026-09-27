@@ -119,7 +119,11 @@ failure remains queued for retry; delivery is at-least-once, not exactly-once.
 watch-reaper rides the same loop: it reads the node daemon's reaper-heartbeat
 lines (both the Go and Rust daemons print them identically), compares the pass
 counter with the last watch's value, and queues a metadata-only alert when the
-counter freezes — a dead background reaper on the node holding the bodies is a
+counter is frozen AND the no-pass window has outlived the reaper's configured
+cadence (the heartbeat's "(cadence …)") — a healthy slow reaper watched
+frequently freezes its counter most of the time and must not cry wolf; -grace
+adds frozen-observation tolerance past that cadence. A dead background reaper
+on the node holding the bodies is a
 continuity failure with no other signal. Run them from the same cron entry.
 Recovery bundles contain encrypted/signed artifacts only; private keys and
 released plaintext must be transferred separately by the operator.

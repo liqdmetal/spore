@@ -391,21 +391,25 @@ if [[ "$(last_passes)" -gt "$FROZEN_BASE" ]]; then
   G1_OUT=$(watchdog -grace 2 || true)
   FROZEN_BASE=$(last_passes)
 fi
-[[ "$G1_OUT" == *"1/2 within grace"* ]] || fail "frozen watch 1 expected within-grace 1/2: $G1_OUT"
-ok "frozen watch 1: within grace (1/2)"
+# The watchdog alerts on TIME, not watch count: a frozen counter INSIDE the
+# reaper's own cadence (1s here) is a healthy slow reaper as far as the gate
+# can tell, so the first dead-watch is expected to stay quiet.
+case "$G1_OUT" in
+  *"within grace"*|*"already queued"*) ok "frozen watch 1: quiet inside the 1s cadence ($G1_OUT)" ;;
+  *"ALERT queued"*)                    ok "frozen watch 1: already stale past cadence — alert owed ($G1_OUT)" ;;
+  *) fail "frozen watch 1 unexpected state: $G1_OUT" ;;
+esac
 
-G2_OUT=$(watchdog -grace 2 || true)
-[[ "$G2_OUT" == *"2/2 within grace"* ]] || fail "frozen watch 2 expected within-grace 2/2: $G2_OUT"
-ok "frozen watch 2: within grace (2/2)"
-
-step "watchdog: freeze past grace — the alert is queued and the watch exits 1"
-# With the webhook down, watch-reaper exits 1 AFTER the alert is durably
-# queued (the non-zero exit is the cron-visible signal; the outbox is the
-# durable one). That is the design being tested: delivery failure must not
-# eat the alert.
+step "watchdog: counter stale past the cadence — the alert is queued and the watch exits 1"
+# Cross the cadence: once the no-pass window outlives the configured 1s
+# cadence, the next watch must owe the alert. With the webhook down,
+# watch-reaper exits 1 AFTER the alert is durably queued (the non-zero exit
+# is the cron-visible signal; the outbox is the durable one). That is the
+# design being tested: delivery failure must not eat the alert.
+sleep 1.3
 ALERT_RC=0
 ALERT_OUT=$(watchdog -grace 2) || ALERT_RC=$?
-[[ "$ALERT_RC" -eq 1 ]] || fail "alert watch should exit 1 when delivery fails (rc=$ALERT_RC): $ALERT_OUT"
+[[ "$ALERT_RC" -eq 1 ]] || fail "stale watch should exit 1 when delivery fails (rc=$ALERT_RC): $ALERT_OUT"
 ok "alert watch exited 1 with the alert durably owed (counter frozen at $FROZEN_BASE)"
 
 step "watchdog: the alert is durable and deduped in the outbox"

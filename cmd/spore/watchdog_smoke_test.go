@@ -7,10 +7,11 @@ package main
 //      release build it) reaps on a 1s cadence and prints reaper-status
 //      heartbeats,
 //   2. the real `continuity watch-reaper` command walks the full state
-//      machine: baseline → ok (alive) → within-grace after the daemon is
-//      killed → durable alert on freeze (exit 1 with the outbox row present,
-//      because the webhook is deliberately unroutable) → TxID dedupe →
-//      recovery re-arm after a restart with a fresh log.
+//      machine: baseline → ok (alive) → quiet frozen watches inside the
+//      reaper's cadence → durable alert once the no-pass window outlives
+//      that cadence (exit 1 with the outbox row present, because the webhook
+//      is deliberately unroutable) → TxID dedupe → recovery re-arm after a
+//      restart with a fresh log.
 //
 // The outbox file is asserted directly (JSONL, Go field names) — no jq, no
 // shell. Runs in the package's default gate set, including -race.
@@ -269,40 +270,39 @@ func TestWatchReaperFreezeRecoverSmoke(t *testing.T) {
 	// --- freeze ------------------------------------------------------------
 	serve.kill(t)
 	// The daemon is dead, so the last heartbeat's counter is frozen forever —
-	// the exact precondition every following watch relies on.
-	deadline = time.Now().Add(5 * time.Second)
+	// the exact precondition every following watch relies on. The watchdog
+	// alerts once the no-pass window outlives the reaper's OWN cadence (1s
+	// here); the first watch may still land inside that window, so poll until
+	// the alert is owed rather than asserting a fixed watch count.
+	deadline = time.Now().Add(15 * time.Second)
 	for {
-		if p := parseLastPasses(readFileOrEmpty(t, logPath)); p >= 0 {
-			t.Logf("counter frozen at %d", p)
-			break
+		out, err = watch("-grace", "1")
+		if err != nil {
+			break // exit 1: the alert is queued, delivery failing on purpose
+		}
+		alive := strings.Contains(out, "ok passes=") // ±1 race: one more pass landed before the kill
+		quiet := strings.Contains(out, "within grace") || strings.Contains(out, "already queued")
+		if !alive && !quiet {
+			t.Fatalf("frozen watch: want ok/within-grace before the alert, got %q", out)
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("no heartbeat ever appeared to freeze")
+			t.Fatalf("frozen watch never alerted past the 1s cadence; last out=%q\nlog:\n%s", out, tailForTest(readFileOrEmpty(t, logPath), 2000))
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
+	}
+	// This is the load-bearing assertion: a fire-and-forget alert with no
+	// durable record would pass a webhook-up test and lose the alert in
+	// production.
+	if n := outboxCount(t, outboxPath, "watchdog/reaper/stale reaper"); n != 1 {
+		t.Fatalf("frozen watch: want exactly 1 durable alert, got %d (out=%q)", n, out)
 	}
 
-	// Grace 1: one frozen watch is tolerated.
-	out, err = watch("-grace", "1")
-	if err != nil || !strings.Contains(out, "within grace") {
-		t.Fatalf("frozen watch 1: want within-grace, got err=%v out=%q", err, out)
-	}
-
-	// Grace exceeded: the alert queues durably and the watch exits non-zero
-	// (delivery fails on purpose). This is the load-bearing assertion: a
-	// fire-and-forget alert with no durable record would pass a webhook-up
-	// test and lose the alert in production.
+	// Still frozen: delivery keeps failing, so every stale watch re-queues
+	// (exit 1), while the outbox TxID-dedupe holds the durable record at
+	// exactly one — no alert storm while the counter holds still.
 	out, err = watch("-grace", "1")
 	if err == nil {
-		t.Fatalf("frozen watch 2: want exit 1 (delivery failing), got success: %q", out)
-	}
-	if n := outboxCount(t, outboxPath, "watchdog/reaper/stale reaper"); n != 1 {
-		t.Fatalf("frozen watch 2: want exactly 1 durable alert, got %d (out=%q)", n, out)
-	}
-
-	// Still frozen: the outbox dedupes by TxID — no alert storm.
-	if _, err := watch("-grace", "1"); err == nil {
-		t.Fatal("still-frozen watch: want exit 1 while delivery keeps failing")
+		t.Fatalf("still-frozen watch: want exit 1 while delivery keeps failing, got success: %q", out)
 	}
 	if n := outboxCount(t, outboxPath, "watchdog/reaper/stale reaper"); n != 1 {
 		t.Fatalf("outbox dedupe: want exactly 1 stale-reaper alert, got %d", n)

@@ -22,7 +22,7 @@ func continuityWatchdog(args []string) {
 	logPath := fs.String("log", "", "node daemon log file to scan for reaper status lines")
 	statePath := fs.String("state", "", "durable watchdog state JSON (remembers the last pass count)")
 	node := fs.String("node", "spore", "which daemon's heartbeat lines to read: spore or spore-peer")
-	grace := fs.Int("grace", 0, "equal-count observations tolerated before alerting (0 = alert on first freeze)")
+	grace := fs.Int("grace", 0, "frozen observations tolerated PAST the reaper's cadence before alerting (the no-pass window must first exceed the heartbeat's configured cadence; 0 = alert as soon as the counter is stale past the cadence)")
 	outboxPath := fs.String("outbox", "", "durable metadata-only notification outbox JSONL path")
 	webhookURL := fs.String("webhook", "", "metadata-only notification webhook URL")
 	_ = fs.Parse(args)

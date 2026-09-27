@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // The stale-reaper watchdog: a dead background reaper on the node holding the
@@ -24,10 +25,14 @@ import (
 //
 // The watchdog reads that log, takes the LAST reaper status line, and
 // compares its pass counter with the value remembered from the previous
-// watch. Equal count => the reaper completed no pass between watches =>
-// alert. Higher count => record it and stay quiet. This is the
-// "counter stuck vs counter advanced" split from the reap-ticker flake,
-// pointed at production.
+// watch. A HIGHER count is alive. An EQUAL count is only suspicious once
+// the no-pass window has also outlived the reaper's own configured cadence
+// (printed on every heartbeat as "(cadence …)"): a healthy slow reaper —
+// serve's default is ten minutes — watched every minute shows a frozen
+// counter most of the time, and the counter alone would cry wolf. This is
+// the "counter stuck vs counter advanced" split from the reap-ticker flake,
+// pointed at production, with the cadence gate so a watch frequency above
+// the heartbeat cadence cannot manufacture a false alarm.
 //
 // Like the rest of the continuity surface, this does one explicit pass and
 // never schedules itself; the cron entry or systemd timer that runs
@@ -94,8 +99,11 @@ func LastReapStatus(path string) (*ReapStatus, error) {
 	return last, nil
 }
 
-// ReapMemory is the durable side of the comparison: the pass counter as seen
-// by the previous watch, plus the alert latch.
+// ReapMemory is the durable side of the comparison: the pass counter as
+// seen by the previous watch, plus the alert latch. Frozen counts
+// CONSECUTIVE equal-count observations for the grace accounting; the
+// staleness clock itself is ObservedAt (the first watch that saw this
+// count), so the freeze window survives back-to-back watches.
 type ReapMemory struct {
 	Passes      uint64 `json:"passes"`
 	Removed     uint64 `json:"removed"`
@@ -133,7 +141,9 @@ const (
 	WatchdogBaseline WatchdogOutcome = iota
 	// WatchdogOK: the pass counter advanced; the reaper is alive.
 	WatchdogOK
-	// WatchdogWithinGrace: frozen, but inside the tolerated observation count.
+	// WatchdogWithinGrace: frozen, but tolerated — inside the -grace
+	// observation budget, and the no-pass window has not yet outlived the
+	// reaper's configured cadence.
 	WatchdogWithinGrace
 	// WatchdogFrozenAlert: frozen past grace — an alert must be raised.
 	WatchdogFrozenAlert
@@ -159,10 +169,14 @@ type WatchdogResult struct {
 	Detail string
 }
 
-// CheckReaper performs one watchdog pass. grace tolerates that many
-// equal-count observations before alerting (0 = alert on the first freeze);
-// it is counted in observations rather than seconds because the watch
-// cadence is the operator's scheduling choice, not this package's.
+// CheckReaper performs one watchdog pass. A frozen pass counter alerts
+// only when BOTH gates open: the no-pass window (now minus the first
+// observation of this count) has outlived the reaper's configured cadence
+// parsed from the heartbeat, and the freeze has persisted past the grace
+// observation budget (0 = no extra tolerance beyond the cadence gate).
+// grace remains an observation count because the watch frequency is the
+// operator's scheduling choice, not this package's — the cadence is the
+// reaper's, and the heartbeat prints it.
 //
 // The returned memory is always the state to persist (the caller writes it
 // atomically through its own private-file helpers); now is injected so tests
@@ -202,23 +216,49 @@ func CheckReaper(status *ReapStatus, mem *ReapMemory, grace int, now int64) Watc
 			Status: status}
 
 	default: // status.Passes == mem.Passes
-		// Frozen: the heartbeat prints on every pass even when idle, so
-		// equality across watches means no pass completed in between.
+		// Frozen across watches: the heartbeat prints on every pass even
+		// when idle, so equality means no pass completed in between. That
+		// is only a fault once the no-pass window outlives the reaper's
+		// own cadence — a healthy slow reaper watched frequently is frozen
+		// most of the time, and alerting on the count alone would fire on
+		// it (the false alarm this gate exists to kill).
 		if mem.Alerted && mem.AlertPasses == status.Passes {
 			return WatchdogResult{Outcome: WatchdogAlreadyQueued, Memory: *mem, Status: status,
 				Detail: fmt.Sprintf("pass counter still frozen at %d; alert already queued", status.Passes)}
 		}
 		next := *mem
 		next.Frozen++
-		next.ObservedAt = now
+		// ObservedAt stays pinned to the FIRST watch that saw this count
+		// — the staleness clock must survive back-to-back watches, or a
+		// frequent watcher would restart the window every pass and never
+		// see a freeze get stale.
+		cadence := cadenceOf(status.Cadence)
+		staleFor := now - mem.ObservedAt
+		if staleFor < int64(cadence/time.Second) {
+			return WatchdogResult{Outcome: WatchdogWithinGrace, Memory: next, Status: status,
+				Detail: fmt.Sprintf("frozen passes=%d for %ds (< cadence %s; %d/%d within grace)",
+					status.Passes, staleFor, status.Cadence, next.Frozen, grace)}
+		}
 		if next.Frozen <= grace {
 			return WatchdogResult{Outcome: WatchdogWithinGrace, Memory: next, Status: status,
-				Detail: fmt.Sprintf("frozen passes=%d (%d/%d within grace)", status.Passes, next.Frozen, grace)}
+				Detail: fmt.Sprintf("frozen passes=%d past cadence %s (%ds; %d/%d within grace)",
+					status.Passes, status.Cadence, staleFor, next.Frozen, grace)}
 		}
 		return WatchdogResult{Outcome: WatchdogFrozenAlert, Memory: next, Status: status,
-			Detail: fmt.Sprintf("pass counter frozen at %d across watches (last pass removed %d, cadence %s)",
-				status.Passes, status.Removed, status.Cadence)}
+			Detail: fmt.Sprintf("pass counter frozen at %d for %ds, past the configured cadence %s (last pass removed %d)",
+				status.Passes, staleFor, status.Cadence, status.Removed)}
 	}
+}
+
+// cadenceOf parses the heartbeat's "(cadence …)" duration. An absent or
+// unparseable cadence falls back to 2m: conservative against false alarms
+// (the counter must freeze two full minutes past the last observed pass)
+// while still alerting a watch that polls at most every couple of minutes.
+func cadenceOf(s string) time.Duration {
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return 2 * time.Minute
 }
 
 // ApplyAlertLatch marks a memory as alerted for the given frozen count; the

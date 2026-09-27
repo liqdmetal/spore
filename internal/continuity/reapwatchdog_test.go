@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,10 +85,10 @@ func TestLastReapStatusTakesNewestAndSurvivesCRLF(t *testing.T) {
 	}
 }
 
-// The core operator contract: a frozen pass counter is the dead-reaper signal
-// (heartbeat prints even when idle, so equality IS the fault), an advancing
-// counter is alive, and the latch makes the alert fire once per freeze with
-// re-arm on recovery.
+// The core operator contract: a frozen pass counter past the reaper's own
+// cadence is the dead-reaper signal (the heartbeat prints even when idle, so
+// equality plus staleness IS the fault), an advancing counter is alive, and
+// the latch makes the alert fire once per freeze with re-arm on recovery.
 func TestCheckReaperFreezeLivenessAndLatch(t *testing.T) {
 	const now = int64(1_000_000)
 
@@ -120,9 +121,10 @@ func TestCheckReaperFreezeLivenessAndLatch(t *testing.T) {
 		t.Fatalf("recovery: %+v", res)
 	}
 
-	// A NEW freeze after recovery alerts again.
+	// A NEW freeze after recovery alerts again (fast cadence, so the
+	// staleness gate is already open).
 	recovered := res.Memory
-	res = CheckReaper(&ReapStatus{Passes: 11, Source: "spore"}, &recovered, 0, now+240)
+	res = CheckReaper(&ReapStatus{Passes: 11, Cadence: "2s", Source: "spore"}, &recovered, 0, now+240)
 	if res.Outcome != WatchdogFrozenAlert {
 		t.Fatalf("second freeze should alert again, got %+v", res)
 	}
@@ -162,10 +164,11 @@ func TestCheckReaperRebaselineOnCounterRegression(t *testing.T) {
 }
 
 // A never-run reaper's "no pass completed yet" line parses to Passes=0, and a
-// baseline of 0 compared against 0 is a FREEZE — a reaper that has never
+// baseline of 0 compared against 0 is a freeze — a reaper that has never
 // completed a pass under a hold that should have bodies is dead in exactly
-// the way worth alerting. (A fresh daemon whose reaper simply has not fired
-// yet is protected by the baseline pass and/or grace.)
+// the way worth alerting. It still respects the cadence gate: one
+// observation inside the configured cadence stays quiet, and the alert
+// opens the moment the no-pass window reaches the cadence.
 func TestCheckReaperNeverRanReaperIsStillADeadReaper(t *testing.T) {
 	const now = int64(4_000_000)
 	res := CheckReaper(&ReapStatus{Passes: 0, Cadence: "10m0s", Source: "spore-peer"}, nil, 0, now)
@@ -173,9 +176,84 @@ func TestCheckReaperNeverRanReaperIsStillADeadReaper(t *testing.T) {
 		t.Fatalf("baseline: %+v", res)
 	}
 	mem := res.Memory
-	res = CheckReaper(&ReapStatus{Passes: 0, Source: "spore-peer"}, &mem, 0, now+60)
+
+	// One frozen observation, 1m into a 10m cadence: tolerated.
+	res = CheckReaper(&ReapStatus{Passes: 0, Cadence: "10m0s", Source: "spore-peer"}, &mem, 0, now+60)
+	if res.Outcome != WatchdogWithinGrace {
+		t.Fatalf("never-ran reaper inside its cadence should stay quiet, got %+v", res)
+	}
+	mem = res.Memory
+
+	// At exactly one full cadence with no pass ever, the gate opens.
+	res = CheckReaper(&ReapStatus{Passes: 0, Cadence: "10m0s", Source: "spore-peer"}, &mem, 0, now+600)
 	if res.Outcome != WatchdogFrozenAlert {
-		t.Fatalf("never-ran reaper observed twice should alert, got %+v", res)
+		t.Fatalf("never-ran reaper past its cadence should alert, got %+v", res)
+	}
+	if !strings.Contains(res.Detail, "10m0s") {
+		t.Fatalf("alert detail should carry the configured cadence: %q", res.Detail)
+	}
+}
+
+// The false alarm this gate exists to kill: a HEALTHY reaper on serve's
+// default 10-minute cadence, watched every minute, shows a frozen pass
+// counter on nine of ten watches. The counter alone must never alert —
+// every watch inside one cadence stays quiet — and the reaper's next real
+// pass resets the freeze bookkeeping entirely.
+func TestCheckReaperHealthySlowReaperNeverAlerts(t *testing.T) {
+	const now = int64(5_000_000)
+	res := CheckReaper(&ReapStatus{Passes: 7, Cadence: "10m0s", Source: "spore"}, nil, 0, now)
+	if res.Outcome != WatchdogBaseline {
+		t.Fatalf("baseline: %+v", res)
+	}
+	mem := res.Memory
+	for i := int64(1); i <= 9; i++ {
+		res = CheckReaper(&ReapStatus{Passes: 7, Cadence: "10m0s", Source: "spore"}, &mem, 0, now+i*60)
+		if res.Outcome != WatchdogWithinGrace {
+			t.Fatalf("watch +%dm past a healthy slow reaper must stay quiet: %+v", i, res)
+		}
+		mem = res.Memory
+	}
+	// The reaper's next pass completes on schedule: alive, freeze reset.
+	res = CheckReaper(&ReapStatus{Passes: 8, Cadence: "10m0s", Source: "spore"}, &mem, 0, now+600)
+	if res.Outcome != WatchdogOK || res.Memory.Frozen != 0 {
+		t.Fatalf("the reaper's own pass must reset the freeze: %+v", res)
+	}
+}
+
+// A dead fast-cadence reaper must still alert promptly: staleness is
+// measured against the reaper's OWN cadence, so a frozen counter on a 2s
+// reaper alerts as soon as the no-pass window reaches 2s — the next watch —
+// regardless of how few observations grace would have tolerated.
+func TestCheckReaperDeadFastReaperAlertsOnCadence(t *testing.T) {
+	const now = int64(6_000_000)
+	res := CheckReaper(&ReapStatus{Passes: 3, Cadence: "2s", Source: "spore"}, nil, 0, now)
+	if res.Outcome != WatchdogBaseline {
+		t.Fatalf("baseline: %+v", res)
+	}
+	mem := res.Memory
+	res = CheckReaper(&ReapStatus{Passes: 3, Cadence: "2s", Source: "spore"}, &mem, 0, now+3)
+	if res.Outcome != WatchdogFrozenAlert {
+		t.Fatalf("dead 2s reaper must alert on the first stale watch, got %+v", res)
+	}
+}
+
+// A heartbeat without a parseable cadence falls back to a conservative 2m
+// staleness window: quieter than instant alerting, still prompt.
+func TestCheckReaperMissingCadenceFallsBack(t *testing.T) {
+	const now = int64(7_000_000)
+	res := CheckReaper(&ReapStatus{Passes: 4, Source: "spore"}, nil, 0, now)
+	if res.Outcome != WatchdogBaseline {
+		t.Fatalf("baseline: %+v", res)
+	}
+	mem := res.Memory
+	res = CheckReaper(&ReapStatus{Passes: 4, Source: "spore"}, &mem, 0, now+90)
+	if res.Outcome != WatchdogWithinGrace {
+		t.Fatalf("90s < fallback 2m must stay quiet, got %+v", res)
+	}
+	mem = res.Memory
+	res = CheckReaper(&ReapStatus{Passes: 4, Source: "spore"}, &mem, 0, now+130)
+	if res.Outcome != WatchdogFrozenAlert {
+		t.Fatalf("past fallback 2m must alert, got %+v", res)
 	}
 }
 
