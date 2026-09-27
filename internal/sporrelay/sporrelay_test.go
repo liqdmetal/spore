@@ -119,21 +119,16 @@ func TestGenerateObjIDRandomBitsDiffer(t *testing.T) {
 	}
 }
 
-func TestNewObjectiveUsesGeneratedID(t *testing.T) {
-	obj := NewObjective(Source{}, Destination{}, 0.002)
-	if obj.ID == "" {
-		t.Fatal("NewObjective produced empty objective ID")
+func TestNewWorkOrderUsesGeneratedIDAndCallerOwnedCommitments(t *testing.T) {
+	order := NewWorkOrder("relay-pseudonym", "description-hash", "policy-hash")
+	if err := order.Validate(); err != nil {
+		t.Fatalf("NewWorkOrder is invalid: %v", err)
 	}
-	if len(obj.ID) != 36 {
-		t.Fatalf("objective ID %q is not a canonical UUID", obj.ID)
+	if len(order.ObjectiveID) != 36 || order.ObjectiveID[14] != '7' {
+		t.Fatalf("objective ID %q is not canonical UUIDv7", order.ObjectiveID)
 	}
-	for _, pos := range []int{8, 13, 18, 23} {
-		if obj.ID[pos] != '-' {
-			t.Fatalf("objective ID %q: byte %d = %q, want '-'", obj.ID, pos, obj.ID[pos])
-		}
-	}
-	if obj.ID[14] != '7' {
-		t.Fatalf("objective ID %q: version nibble = %q, want '7'", obj.ID, obj.ID[14])
+	if order.OwnerPseudonym != "relay-pseudonym" || order.DescriptionCommitment != "description-hash" || order.PolicyHash != "policy-hash" {
+		t.Fatalf("NewWorkOrder changed caller-owned commitments: %+v", order)
 	}
 }
 

@@ -1,140 +1,177 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/liqdmetal/spore/internal/sporrelay"
 )
 
-// mkLeg builds a single identifiable route leg.
-func mkLeg(tag string) sporrelay.RouteLeg {
-	return sporrelay.RouteLeg{FromChain: tag + "-in", ToChain: tag + "-out", Index: 0}
-}
-
-// mkResp builds a discovery response shaped like the relayer's: one best
-// route (2 legs) plus three ranked candidates whose [0] duplicates the best.
-func mkResp() *sporrelay.RouteDiscoveryResponse {
-	best := []sporrelay.RouteLeg{mkLeg("best1"), mkLeg("best2")}
-	alt1 := []sporrelay.RouteLeg{mkLeg("alt1a"), mkLeg("alt1b")}
-	alt2 := []sporrelay.RouteLeg{mkLeg("alt2a")}
-	alt3 := []sporrelay.RouteLeg{mkLeg("alt3a"), mkLeg("alt3b"), mkLeg("alt3c")}
-	return &sporrelay.RouteDiscoveryResponse{
-		ObjectiveID: "obj-123",
-		BestRoute:   best,
-		Candidates: []sporrelay.Candidate{
-			{Route: best, TotalFeesPct: 0.001, TrustScore: 0.99},
-			{Route: alt1, TotalFeesPct: 0.002, TrustScore: 0.95},
-			{Route: alt2, TotalFeesPct: 0.003, TrustScore: 0.90},
-			{Route: alt3, TotalFeesPct: 0.004, TrustScore: 0.80},
+func signedCommandJSON(t *testing.T) []byte {
+	t.Helper()
+	actorKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, ed25519.SeedSize))
+	command := sporrelay.AuthorizedWorkOrderCommand{
+		Actor: sporrelay.RelayActorIdentity{ActorID: "did:relay:buyer", PublicKey: base64.RawURLEncoding.EncodeToString(actorKey.Public().(ed25519.PublicKey))},
+		Scope: sporrelay.RegisterObjectiveAction,
+		Command: sporrelay.ObjectiveRegistrationCommand{
+			Action: sporrelay.RegisterObjectiveAction, ResourceID: "objective:cli-1",
+			Payload: sporrelay.WorkOrder{
+				ObjectiveID: "objective:cli-1", OwnerPseudonym: "actor:buyer",
+				DescriptionCommitment: "sha256:description", PolicyHash: "sha256:policy",
+			},
 		},
+		Grant: sporrelay.RelayAuthorityGrant{
+			IssuerID: "did:relay:issuer", SubjectID: "did:relay:buyer", ResourceID: "objective:cli-1",
+			Scopes: []string{sporrelay.RegisterObjectiveAction}, NotBefore: "2026-01-01T00:00:00Z",
+			ExpiresAt: "2027-01-01T00:00:00Z", Nonce: "nonce",
+			Signature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, ed25519.SignatureSize)),
+		},
+		Signature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{8}, ed25519.SignatureSize)),
+	}
+	data, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func writeCommand(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "authorized-command.json")
+	if err := os.WriteFile(path, signedCommandJSON(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRegisterCLIUsesActualAdapterAndReportsOnlyRegistration(t *testing.T) {
+	path := writeCommand(t)
+	t.Setenv("SPORE_RELAY_API_TOKEN", "proxy-token")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/commands" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer proxy-token" {
+			t.Errorf("proxy Authorization = %q", got)
+		}
+		var command sporrelay.AuthorizedWorkOrderCommand
+		if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+			t.Errorf("decode command: %v", err)
+		}
+		result, _ := json.Marshal(command.Command.Payload)
+		_, _ = w.Write([]byte(`{"ok":true,"result":` + string(result) + `}`))
+	}))
+	defer server.Close()
+
+	var stdout strings.Builder
+	err := Run(context.Background(), []string{"register", "-command", path, "-relay-url", server.URL}, &stdout)
+	if err != nil {
+		t.Fatalf("Run(register): %v", err)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "work order registered: objective:cli-1") {
+		t.Fatalf("missing registration confirmation: %q", got)
+	}
+	if !strings.Contains(got, "execution: unsupported") || !strings.Contains(got, "settlement: not performed") {
+		t.Fatalf("CLI implied execution or settlement: %q", got)
+	}
+	if strings.Contains(got, "complete") || strings.Contains(got, "assured") || strings.Contains(got, "paid") {
+		t.Fatalf("registration output falsely claimed completion: %q", got)
 	}
 }
 
-func TestParseRouteIdx(t *testing.T) {
+func TestUnsupportedOrUnverifiedOperationsCannotReportSuccess(t *testing.T) {
 	tests := []struct {
-		in      string
-		want    int
-		wantErr string
+		operation string
+		want      error
 	}{
-		{"0", 0, ""},
-		{"1", 1, ""},
-		{"42", 42, ""},
-		{"007", 7, ""},               // leading zeros are still integers
-		{" 2 ", 0, "not an integer"}, // Atoi is strict: no whitespace tolerance
-		{"", 0, "not an integer"},
-		{"abc", 0, "not an integer"},
-		{"1.5", 0, "not an integer"},
-		{"-1", 0, "negative"},
-		{"-99", 0, "negative"},
-		{"0x10", 0, "not an integer"},
+		{"execute", sporrelay.ErrWorkExecutionUnsupported},
+		{"verify", sporrelay.ErrCompletionVerificationUnavailable},
+		{"assurance", sporrelay.ErrCompletionVerificationUnavailable},
+		{"complete", sporrelay.ErrCompletionVerificationUnavailable},
 	}
-	for _, tt := range tests {
-		idx, err := parseRouteIdx(tt.in)
-		if tt.wantErr != "" {
-			if err == nil {
-				t.Errorf("parseRouteIdx(%q) = %d, nil; want error containing %q", tt.in, idx, tt.wantErr)
-				continue
+	for _, tc := range tests {
+		t.Run(tc.operation, func(t *testing.T) {
+			var stdout strings.Builder
+			err := Run(context.Background(), []string{tc.operation, "objective:cli-1"}, &stdout)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Run(%s) error = %v, want %v", tc.operation, err, tc.want)
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("parseRouteIdx(%q) error = %q; want containing %q", tt.in, err, tt.wantErr)
+			if stdout.Len() != 0 {
+				t.Fatalf("unsupported operation wrote success output: %q", stdout.String())
 			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("parseRouteIdx(%q) unexpected error: %v", tt.in, err)
-			continue
-		}
-		if idx != tt.want {
-			t.Errorf("parseRouteIdx(%q) = %d; want %d", tt.in, idx, tt.want)
-		}
+		})
 	}
 }
 
-func TestSelectRouteIndexZeroIsBestRoute(t *testing.T) {
-	resp := mkResp()
-	route, err := selectRoute(resp, 0)
+func TestRegisterCLIRejectsMissingOrMalformedCommand(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	for _, args := range [][]string{
+		{"register", "-relay-url", server.URL},
+	} {
+		if err := Run(context.Background(), args, io.Discard); err == nil {
+			t.Error("register with no command file should fail")
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte(`{"scope":"settlements.release"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), []string{"register", "-command", path, "-relay-url", server.URL}, io.Discard); err == nil {
+		t.Error("register with malformed/unauthorized command should fail")
+	}
+}
+
+func TestRegisterCLIRejectsUnverifiableSignedEnvelopeWithoutSuccessOutput(t *testing.T) {
+	path := writeCommand(t)
+	var command sporrelay.AuthorizedWorkOrderCommand
+	if err := json.Unmarshal(signedCommandJSON(t), &command); err != nil {
+		t.Fatal(err)
+	}
+	command.Signature = "tampered-signature"
+	tampered, err := json.Marshal(command)
 	if err != nil {
-		t.Fatalf("selectRoute(0): %v", err)
+		t.Fatal(err)
 	}
-	// Must be the best route's legs themselves, not a candidate copy.
-	if len(route) != 2 || route[0].FromChain != "best1-in" || route[1].ToChain != "best2-out" {
-		t.Errorf("index 0 returned wrong route: %+v", route)
+	if err := os.WriteFile(path, tampered, 0o600); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestSelectRouteAlternativesFollowPrintedNumbering(t *testing.T) {
-	resp := mkResp()
-	// printRouteResponse labels Candidates[1:] as "Route 1..N", so execute
-	// route 2 must pick Candidates[2] (alt2a…), NOT Candidates[1].
-	for idx, wantTag := range map[int]string{1: "alt1a", 2: "alt2a", 3: "alt3a"} {
-		route, err := selectRoute(resp, idx)
-		if err != nil {
-			t.Fatalf("selectRoute(%d): %v", idx, err)
-		}
-		if route[0].FromChain != wantTag+"-in" {
-			t.Errorf("selectRoute(%d) picked %q; want %q", idx, route[0].FromChain, wantTag+"-in")
-		}
+	var stdout strings.Builder
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	if err := Run(context.Background(), []string{"register", "-command", path, "-relay-url", server.URL}, &stdout); err == nil {
+		t.Fatal("malformed RelayOS signature was accepted")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("invalid signature printed registration success: %q", stdout.String())
 	}
 }
 
-func TestSelectRouteOutOfRange(t *testing.T) {
-	resp := mkResp() // candidates 0..3 => valid indices 0..3
-	for _, idx := range []int{4, 5, 100} {
-		_, err := selectRoute(resp, idx)
+func TestRegisterCLIFailsOnMissingOrFalseRegistrationResponse(t *testing.T) {
+	path := writeCommand(t)
+	for _, body := range []string{`{"ok":true}`, `{"ok":false,"error":"expired grant"}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+		var stdout strings.Builder
+		err := Run(context.Background(), []string{"register", "-command", path, "-relay-url", server.URL}, &stdout)
+		server.Close()
 		if err == nil {
-			t.Errorf("selectRoute(%d) should fail", idx)
-			continue
+			t.Fatalf("response %s unexpectedly produced success", body)
 		}
-		if !strings.Contains(err.Error(), "out of range") {
-			t.Errorf("selectRoute(%d) error %q; want out-of-range note", idx, err)
+		if stdout.Len() != 0 {
+			t.Fatalf("failed registration printed success: %q", stdout.String())
 		}
-	}
-}
-
-func TestSelectRouteNilAndEmpty(t *testing.T) {
-	if _, err := selectRoute(nil, 0); err == nil {
-		t.Error("nil response should fail")
-	}
-	empty := &sporrelay.RouteDiscoveryResponse{}
-	if _, err := selectRoute(empty, 0); err == nil {
-		t.Error("index 0 with no best route should fail")
-	}
-	// An alternative index on a response without candidates says how many exist.
-	_, err := selectRoute(empty, 2)
-	if err == nil || !strings.Contains(err.Error(), "only 0 route(s)") {
-		t.Errorf("alternative index on empty candidates should explain range; got %v", err)
-	}
-}
-
-func TestSelectRouteZeroWorksWithoutCandidates(t *testing.T) {
-	// A relayer that omits Candidates must still allow executing the best route.
-	resp := &sporrelay.RouteDiscoveryResponse{BestRoute: []sporrelay.RouteLeg{mkLeg("solo")}}
-	route, err := selectRoute(resp, 0)
-	if err != nil {
-		t.Fatalf("selectRoute(0) without candidates: %v", err)
-	}
-	if len(route) != 1 || route[0].FromChain != "solo-in" {
-		t.Errorf("wrong route returned: %+v", route)
 	}
 }
