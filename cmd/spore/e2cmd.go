@@ -817,11 +817,27 @@ func msgRecvE2(args []string) {
 	check(err)
 	defer cleanup()
 	ep := ing.ep
-	c := ing.carrier
 	st := ing.st
+	// The ingestor is shared with `spore fabric subscribe`, whose drain never
+	// posts on-chain, so openE2Receiver returns a deliberately zero carrier.
+	// The chain watcher needs a REAL one (WatchE2 validates the carrier and
+	// would otherwise fail closed and spin on its error channel), built here
+	// from the same flag surface every E2 command builds its carrier from.
+	c, cerr := e2Carrier(fs)
+	check(cerr)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Settlement-notice outbox: this state-dir's queued settlement notices
+	// (from failed escrow/dex announcements) retry here at RECEIVE cadence —
+	// once now, and again on every gap/poll tick — not only when the sender
+	// next runs a settlement command. The receiver restores the same durable
+	// sessions from the same state-dir, so SendNext from this side advances
+	// exactly the ratchet the notice rides. Entries whose session this
+	// endpoint does not own are skipped, never dropped. Failures are loud,
+	// never fatal: receiving must not depend on retrying someone's notices.
+	flushPendingSettlementNoticesForEndpoint(fs, ep, c)
 
 	// Retry queue. "The body is not retrievable yet" is a NORMAL state on a
 	// chain — the sender may push it moments after the pointer lands, or the
@@ -930,6 +946,11 @@ func msgRecvE2(args []string) {
 		case <-gapTick.C:
 			retryDue()
 			reportGaps()
+			// Receive-cadence retry of the durable settlement-notice outbox:
+			// same tick that re-drives body retries and gap reporting. Money
+			// notices must reach the counterparty even if the sender never
+			// settles again, so the receiver re-drives them too.
+			flushPendingSettlementNoticesForEndpoint(fs, ep, c)
 		case e := <-errs:
 			if e != nil {
 				fmt.Fprintln(os.Stderr, "e2 watch:", e)

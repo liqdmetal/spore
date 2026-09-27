@@ -69,6 +69,7 @@ func msgDEXSwap(args []string) {
 	sessionHex := fs.String("session", "", "16-hex session id of the open conversation")
 	note := fs.String("note", "", "optional note for the counterparty")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this settlement to")
+	noticeOutboxFlag(fs)
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -95,6 +96,10 @@ func msgDEXSwap(args []string) {
 	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
 	check(err)
 	defer notice.close()
+
+	// Retry notices queued by earlier failed runs BEFORE this run's own
+	// settlement moves money again (same endpoint, so ratchet order holds).
+	flushPendingSettlementNotices(fs, notice)
 	txid, err := sap.DEXSwap(context.Background(), client, *tokenA, *tokenB, amountIn, *minOut, ring)
 	check(err)
 	fmt.Printf("DEX SWAPPED %s %s -> %s (min-out %d) tx %s\n", formatAmount("dero", amountIn), *tokenA, *tokenB, *minOut, shortTx(txid))
@@ -106,7 +111,8 @@ func msgDEXSwap(args []string) {
 	}
 	env, err := marshalDexNotice("swap", fmt.Sprintf("%s->%s", *tokenA, *tokenB), amountIn, formatAmount("dero", amountIn), txid, *note)
 	check(err)
-	reportSettlementNotice("dex swap", txid, escrowAnnounce(notice, env))
+	reportSettlementNoticeWithQueue("dex swap", txid, notice.to, *sessionHex, noticeOutboxPath(fs),
+		escrowAnnounce(notice, env), env)
 }
 
 func msgDEXWrap(args []string) {
@@ -116,6 +122,7 @@ func msgDEXWrap(args []string) {
 	sessionHex := fs.String("session", "", "16-hex session id of the open conversation")
 	note := fs.String("note", "", "optional note for the counterparty")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this settlement to")
+	noticeOutboxFlag(fs)
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -132,6 +139,10 @@ func msgDEXWrap(args []string) {
 	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
 	check(err)
 	defer notice.close()
+
+	// Retry notices queued by earlier failed runs BEFORE this run's own
+	// settlement moves money again (same endpoint, so ratchet order holds).
+	flushPendingSettlementNotices(fs, notice)
 	txid, err := sap.WrapDERO(context.Background(), client, atomic, ring)
 	check(err)
 	fmt.Printf("WDERO WRAPPED %s tx %s\n", formatAmount("dero", atomic), shortTx(txid))
@@ -143,7 +154,8 @@ func msgDEXWrap(args []string) {
 	}
 	env, err := marshalDexNotice("wrap", "dero->wdero", atomic, formatAmount("dero", atomic), txid, *note)
 	check(err)
-	reportSettlementNotice("dex wrap", txid, escrowAnnounce(notice, env))
+	reportSettlementNoticeWithQueue("dex wrap", txid, notice.to, *sessionHex, noticeOutboxPath(fs),
+		escrowAnnounce(notice, env), env)
 }
 
 func msgDEXUnwrap(args []string) {
@@ -153,6 +165,7 @@ func msgDEXUnwrap(args []string) {
 	sessionHex := fs.String("session", "", "16-hex session id of the open conversation")
 	note := fs.String("note", "", "optional note for the counterparty")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this settlement to")
+	noticeOutboxFlag(fs)
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -169,6 +182,10 @@ func msgDEXUnwrap(args []string) {
 	notice, err := prepareEscrowNotice(fs, *to, *sessionHex)
 	check(err)
 	defer notice.close()
+
+	// Retry notices queued by earlier failed runs BEFORE this run's own
+	// settlement moves money again (same endpoint, so ratchet order holds).
+	flushPendingSettlementNotices(fs, notice)
 	txid, err := sap.UnwrapDERO(context.Background(), client, atomic, ring)
 	check(err)
 	fmt.Printf("WDERO UNWRAPPED %s tx %s\n", formatAmount("dero", atomic), shortTx(txid))
@@ -180,7 +197,8 @@ func msgDEXUnwrap(args []string) {
 	}
 	env, err := marshalDexNotice("unwrap", "wdero->dero", atomic, formatAmount("dero", atomic), txid, *note)
 	check(err)
-	reportSettlementNotice("dex unwrap", txid, escrowAnnounce(notice, env))
+	reportSettlementNoticeWithQueue("dex unwrap", txid, notice.to, *sessionHex, noticeOutboxPath(fs),
+		escrowAnnounce(notice, env), env)
 }
 
 // msgDEXFees prints the operator fee schedule and the sap contract-ID
@@ -191,6 +209,11 @@ func msgDEXUnwrap(args []string) {
 // doubles as the config doctor for the SPORE_SAP_* seam: a deployment with
 // unset contract IDs sees exactly which env vars are missing.
 func msgDEXFees() {
+	// Config-doctor duty: report the seam AS the settlement commands see it,
+	// which includes the SPORE_SAP_* environment. Without this load the fees
+	// command printed (unset) even on a correctly configured deployment —
+	// the exact confusion it exists to dispel.
+	sap.LoadContractIDsFromEnv()
 	htlc, dex, wdero := sap.ContractIDs()
 	fmt.Println("relay-dex fee schedule (taken in-contract, never by this CLI):")
 	fmt.Println("  AMM swap      bps fee on the traded leg — 90% to LPs, 10% to treasury")

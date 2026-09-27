@@ -128,6 +128,7 @@ func msgEscrowClaimE2(args []string) {
 	note := fs.String("note", "", "optional note for the counterparty")
 	atomic := fs.Uint64("amount-atomic", 0, "escrowed amount in atomic units (display only)")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this settlement to")
+	noticeOutboxFlag(fs)
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -162,6 +163,10 @@ func runEscrowClaim(fs *flag.FlagSet, hashHex, preimageHex, to, sessionHex, note
 	}
 	defer notice.close()
 
+	// Retry notices queued by earlier failed runs BEFORE this run's own
+	// settlement moves money again (same endpoint, so ratchet order holds).
+	flushPendingSettlementNotices(fs, notice)
+
 	txid, err := sap.HTLCClaim(context.Background(), client, hash, preimage, notice.to, ringSize)
 	if err != nil {
 		return fmt.Errorf("HTLC claim: %w", err)
@@ -181,7 +186,8 @@ func runEscrowClaim(fs *flag.FlagSet, hashHex, preimageHex, to, sessionHex, note
 		reportSettlementNotice("escrow claim", txid, err)
 		return nil
 	}
-	reportSettlementNotice("escrow claim", txid, escrowAnnounce(notice, body))
+	reportSettlementNoticeWithQueue("escrow claim", txid, notice.to, sessionHex, noticeOutboxPath(fs),
+		escrowAnnounce(notice, body), body)
 	return nil
 }
 
@@ -194,6 +200,7 @@ func msgEscrowRefundE2(args []string) {
 	note := fs.String("note", "", "optional note for the counterparty")
 	atomic := fs.Uint64("amount-atomic", 0, "escrowed amount in atomic units (display only)")
 	receiptsFile := fs.String("receipts", "receipts.json", "ledger file to append this settlement to")
+	noticeOutboxFlag(fs)
 	e2Common(fs)
 	_ = fs.Parse(args)
 	if err := loadConfigForFlags(fs); err != nil {
@@ -221,6 +228,10 @@ func runEscrowRefund(fs *flag.FlagSet, hashHex, to, sessionHex, note string, ato
 	}
 	defer notice.close()
 
+	// Retry notices queued by earlier failed runs BEFORE this run's own
+	// settlement moves money again (same endpoint, so ratchet order holds).
+	flushPendingSettlementNotices(fs, notice)
+
 	txid, err := sap.HTLCRefund(context.Background(), client, hash, ringSize)
 	if err != nil {
 		return fmt.Errorf("HTLC refund: %w", err)
@@ -240,6 +251,7 @@ func runEscrowRefund(fs *flag.FlagSet, hashHex, to, sessionHex, note string, ato
 		reportSettlementNotice("escrow refund", txid, err)
 		return nil
 	}
-	reportSettlementNotice("escrow refund", txid, escrowAnnounce(notice, body))
+	reportSettlementNoticeWithQueue("escrow refund", txid, notice.to, sessionHex, noticeOutboxPath(fs),
+		escrowAnnounce(notice, body), body)
 	return nil
 }
