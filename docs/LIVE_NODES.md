@@ -168,9 +168,19 @@ Why the code fits without changes (checked against `internal/evm`):
 
 ### Runbook — Phase A: rehearsal on Base Sepolia (free, do first)
 
+One-command path: `scripts/sepolia_rehearsal.sh` drives every step below
+(estimate → deploy → two-party proof through a pair of loopback proxies →
+empty-slot assertion) and prints the STATUS lines for the block at the end
+of this section. It needs `SPORE_EVM_PRIVATE_KEY` **and**
+`SPORE_EVM_PRIVATE_KEY_B` — TWO funded keys, because the recipient's proxy
+signs the burn (`burn(to,seq)` requires `msg.sender == to`). The manual
+equivalent:
+
 ```
-1. Throwaway key: export SPORE_EVM_PRIVATE_KEY=0x<32-byte hex>
-   (env var, not argv — same rule as every other secret in this repo).
+1. Throwaway keys (TWO — the recipient's proxy signs the burn, so the
+   RECIPIENT key needs gas too): export SPORE_EVM_PRIVATE_KEY=0x<32-byte
+   hex> and SPORE_EVM_PRIVATE_KEY_B=0x<different 32-byte hex>
+   (env vars, not argv — same rule as every other secret in this repo).
 2. Fund it from a Base Sepolia faucet (Alchemy or Chainlink run ones).
    A deploy plus a dozen deliver/burn rounds cost well under
    0.01 testnet ETH.
@@ -181,19 +191,27 @@ Why the code fits without changes (checked against `internal/evm`):
 4. Two-party proof (mirrors the Anvil proof, now against a real chain).
    Sends sign node-side, so both endpoints run the loopback signing proxy
    (`spore evm-proxy` — local EIP-155 signing for eth_sendTransaction,
-   everything else forwarded verbatim) in front of the same public RPC:
-     A: spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8555
-     B: spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8556
+   everything else forwarded verbatim) in front of the same public RPC —
+   A with key A, B with key B (the burn is signed by B's proxy):
+     A: SPORE_EVM_PRIVATE_KEY=0x…A spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8555
+     B: SPORE_EVM_PRIVATE_KEY=0x…B spore evm-proxy -rpc https://sepolia.base.org -listen 127.0.0.1:8556
      sender:    spore msg send-e2 -to 0xB… -mailbox 0x<addr> \
                   -rpc http://127.0.0.1:8555 -from 0xA… \
                   (bundle/pinned-sig/store flags as ONBOARDING §4)
-     recipient: spore msg recv-e2 -auto-burn -mailbox 0x<addr> \
-                  -rpc http://127.0.0.1:8556 -from 0xB…
+     recipient: spore msg recv-e2 -mailbox 0x<addr> \
+                  -rpc http://127.0.0.1:8556 -from 0xB… \
+                  -min-height <current eth_blockNumber> \
+                  (auto-burn is the default; -min-height keeps the log
+                   scan bounded — the deliver tx lands in a LATER block)
    Then assert compost on-chain — `length(to)` unchanged after the burn and
    `read()` returning empty data (the slot is provably empty):
      cast call 0x<addr> "length(address)(uint256)" 0xB… \
        --rpc-url https://sepolia.base.org
 5. Record txids (creation, one deliver, one burn) in the STATUS block below.
+   The burn txid is unlogged by design (chain.Watch treats the burn as
+   best-effort and the proxy logs nothing), so read it from the explorer's
+   tx history for the contract — or cite the empty-slot read() as the proof,
+   which is what the script does.
 ```
 
 ### Runbook — Phase B: Base mainnet (chain 8453)
