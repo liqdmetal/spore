@@ -67,9 +67,10 @@ type RelayActorIdentity struct {
 }
 
 // RelayAuthorityGrant mirrors the resource- and scope-bounded grant validated
-// by RelayOS AuthorityCode. Spore checks its binding fields but deliberately
-// leaves cryptographic verification, revocation, expiry, and replay protection
-// to the authoritative RelayOS service.
+// by RelayOS AuthorityCode. PrepareAuthorizedWorkOrder verifies the signature
+// using a caller-supplied issuer key and checks the validity window, but cannot
+// establish issuer trust, check revocation, or prevent replay. RelayOS remains
+// authoritative when a command is submitted.
 type RelayAuthorityGrant struct {
 	IssuerID   string   `json:"issuer_id"`
 	SubjectID  string   `json:"subject_id"`
@@ -89,9 +90,9 @@ type ObjectiveRegistrationCommand struct {
 	Payload    WorkOrder `json:"payload"`
 }
 
-// AuthorizedWorkOrderCommand is an already-authorized RelayOS envelope. The
-// caller obtains/signs it using RelayOS's trusted issuer and actor identities;
-// Spore forwards it unchanged and never substitutes its own key material.
+// AuthorizedWorkOrderCommand is the RelayOS envelope shape for registering an
+// objective. It carries a RelayOS-issued grant and an actor signature; merely
+// preparing it does not mean RelayOS has accepted it.
 type AuthorizedWorkOrderCommand struct {
 	Actor     RelayActorIdentity           `json:"actor"`
 	Scope     string                       `json:"scope"`
@@ -389,7 +390,7 @@ func writeRelayJSONString(out *bytes.Buffer, value string) {
 			out.WriteString("\\t")
 		default:
 			switch {
-			case r < 0x20:
+			case r < 0x20 || r == 0x7f:
 				writeEscape(uint16(r))
 			case r <= 0x7f:
 				out.WriteByte(byte(r))

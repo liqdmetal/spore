@@ -144,12 +144,12 @@ func TestRegisterWorkOrderUsesRelayOSCommandsContract(t *testing.T) {
 
 func TestRelayCanonicalJSONMatchesRelayOSUnicodeStringEncoding(t *testing.T) {
 	got, err := relayCanonicalJSON(map[string]any{
-		"é": "\\u2028", "face": "😀", "ascii": "<>&",
+		"é": "\\u2028", "face": "😀", "ascii": "<>&", "del": "\x7f",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"ascii":"<>&","face":"\ud83d\ude00","\u00e9":"\\u2028"}`
+	want := `{"ascii":"<>&","del":"\u007f","face":"\ud83d\ude00","\u00e9":"\\u2028"}`
 	if string(got) != want {
 		t.Fatalf("Relay canonical JSON = %s, want %s", got, want)
 	}

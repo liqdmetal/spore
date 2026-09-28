@@ -1,8 +1,9 @@
 // Package sporrelay is Spore's narrow adapter boundary to RelayOS.
 //
-// Spore can submit an already-authorized objective-registration command. It
-// does not mint Relay identities or grants, execute work, verify outcomes, or
-// settle funds. See docs/RELAY_WORK_ORDER.md for the wire contract and gaps.
+// Spore can prepare an actor-signed, objectives.register envelope from a
+// caller-held actor key and a RelayOS-issued grant, then optionally submit it.
+// It does not mint Relay identities or grants, execute work, verify outcomes,
+// or settle funds. See docs/RELAY_WORK_ORDER.md for the wire contract and gaps.
 package sporrelay
 
 import "errors"

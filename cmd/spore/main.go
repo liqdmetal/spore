@@ -220,11 +220,12 @@ func usage() {
   spore evm-proxy -rpc URL [-private-key HEX] [-listen 127.0.0.1:8555]
              (loopback signing proxy: local EIP-155 signing for eth_sendTransaction in front of a read-only public RPC)
   spore work-order identity -actor-key FILE
+             (print only the public Relay actor identity derived from a local key)
   spore work-order prepare -actor-key FILE -issuer FILE -grant FILE -objective-id ID
              -owner-pseudonym ID -description-commitment HASH -policy-hash HASH -out FILE
-             (locally actor-sign an objectives.register command with RelayOS authority already granted)
+             (locally actor-sign with a RelayOS-issued grant; does not submit)
   spore work-order register -command FILE [-relay-url URL]
-             (submit a prepared RelayOS objectives.register command; registration only)
+             (submit the prepared RelayOS objectives.register command; registration only)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)

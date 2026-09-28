@@ -96,25 +96,74 @@ spore work-order register -command authorized-registration.json \
   [-relay-url http://127.0.0.1:8720]
 ```
 
+`-issuer` expects the `actor_id` and base64url `public_key` JSON shape printed
+by `work-order identity`; `-grant` expects the RelayOS-issued AuthorityGrant
+shape shown above. The operator must independently establish that the issuer
+key is trusted.
+
 `work-order identity` only prints the public actor identity derived from a
 local key file; it does not generate or register the key. `work-order prepare`
 does not create an actor identity or issuer grant: the actor key is supplied
-from a private local 0600 file, and the trusted issuer
-identity plus signed, unexpired RelayOS grant must be supplied by the operator.
-The tool verifies that issuer signature locally, then signs only the
-`objectives.register` actor command with the local actor key. It rejects
-mismatched actor/resource/scope, expired or incorrectly signed grants, unsafe
-key permissions, duplicate JSON fields, and output paths that already exist.
-It creates a new file exclusively with mode 0600, prints only public
-identity/output metadata, and never submits the command;
-`work-order register` remains a separate explicit action. Local checks cannot
-check issuer trust configuration, revocation, or replay state, so RelayOS
-revalidates authority at submission. The prepared file should still be treated
-as sensitive signed metadata. `SPORE_RELAY_URL` supplies the service base
-URL when `-relay-url` is omitted, and `SPORE_RELAY_API_TOKEN` can
-supply an optional reverse-proxy token. The preparation output says **not submitted**; after explicit registration,
-the CLI says **registered** and explicitly says execution is unsupported and
-settlement was not performed.
+from a private local file, and the trusted issuer identity plus signed,
+unexpired RelayOS grant must be supplied by the operator. The tool verifies the
+issuer signature locally, then signs only the `objectives.register` actor
+command with the local actor key. It rejects mismatched actor/resource/scope,
+expired or incorrectly signed grants, unsafe key permissions, duplicate JSON
+fields, and output paths that already exist. It exclusively creates a new file
+with mode 0600, prints only public identity/output metadata, and never submits
+the command; `work-order register` remains a separate explicit action. Local
+checks cannot establish issuer trust configuration, revocation, or replay
+state, so RelayOS revalidates authority at submission. Treat the prepared file
+as sensitive signed metadata. `SPORE_RELAY_URL` supplies the service base URL
+when `-relay-url` is omitted, and `SPORE_RELAY_API_TOKEN` can supply an optional
+reverse-proxy token. Preparation reports **registration: not submitted**;
+after explicit successful registration, the CLI reports **registered** and
+states that execution is unsupported and settlement was not performed.
+
+## Opt-in live RelayOS smoke test
+
+`TestLiveRelayOSRegistrationSmoke` is skipped unless
+`SPORE_RELAY_LIVE_SMOKE=register` is set and the confirmation variable below
+matches the target objective ID. When enabled, it locally prepares and submits
+exactly one `objectives.register` command to the configured live service, then
+checks the successful registration response. Registration is a persistent
+remote mutation: the smoke test does not delete the objective or attempt
+execution/settlement. Run it only against a service where you are authorized
+to register test objectives, using HTTPS, a disposable actor key, a fresh grant
+with a validity window of at most one hour, scoped to that actor and exact
+objective ID, and only `objectives.register`. The test requires a second URL
+confirmation variable matching the reviewed RelayOS URL.
+
+The issuer ID must be pinned independently in `SPORE_RELAY_LIVE_TRUSTED_ISSUER_ID`;
+the test compares it to the issuer identity file, and local preparation checks
+the issuer signature with that file's public key. The test cannot establish
+that the configured issuer is genuinely trusted: selecting and protecting this
+pin remains the operator's responsibility. Do not point it at a production
+actor or use a grant with broader authority. The objective ID must begin with
+`objective:spore-live-smoke:` followed by a fresh 32-character lowercase hex
+token. `SPORE_RELAY_LIVE_SMOKE_CONFIRM` must be set to the exact same
+objective ID as an explicit confirmation of the persistent write. This confirms
+intent, not that the RelayOS URL is safe; review the target URL before running.
+
+Example (use a unique disposable objective ID and obtain the matching grant
+from the trusted RelayOS authority before running):
+
+```sh
+SMOKE_ID="objective:spore-live-smoke:$(openssl rand -hex 16)"
+SPORE_RELAY_LIVE_SMOKE=register \
+SPORE_RELAY_LIVE_URL=https://relayos.example \
+SPORE_RELAY_LIVE_URL_CONFIRM=https://relayos.example \
+SPORE_RELAY_LIVE_ACTOR_KEY_FILE=/secure/test-actor.key \
+SPORE_RELAY_LIVE_ISSUER_FILE=/secure/trusted-issuer.json \
+SPORE_RELAY_LIVE_TRUSTED_ISSUER_ID=did:relay:... \
+SPORE_RELAY_LIVE_GRANT_FILE=/secure/one-use-grant.json \
+SPORE_RELAY_LIVE_OBJECTIVE_ID="$SMOKE_ID" \
+SPORE_RELAY_LIVE_SMOKE_CONFIRM="$SMOKE_ID" \
+go test ./internal/sporrelay/cli -run '^TestLiveRelayOSRegistrationSmoke$' -count=1 -v
+```
+
+The optional reverse-proxy token can be supplied with `SPORE_RELAY_API_TOKEN`.
+The normal test suite does not enable the smoke test or need RelayOS credentials.
 
 ## Boundaries and state ownership
 
@@ -128,16 +177,16 @@ settlement was not performed.
   request/response decoding, and registration result validation. RelayOS owns
   grants, revocation/replay state, objective state, execution, and settlement.
 - `internal/sporrelay/cli/cli.go` owns command/file parsing; `prepare` makes
-  an actor signature from a supplied local key and an already-issued grant,  while only `register` reaches the HTTP adapter. `execute` fails as
+  an actor signature from a supplied local key and an already-issued grant,
+  while only `register` reaches the HTTP adapter. `execute` fails as
   unsupported; `verify`, `assurance`, and `complete` fail as unverified. The
-  process wrapper injects
-
-  stdout/stderr rather than mutating global process streams. Rendering never
-  upgrades a registration into completion.
+  process wrapper injects stdout/stderr rather than mutating global process
+  streams. Rendering never upgrades a registration into completion.
 - `cmd/spore/workordercmd.go` is the thin process/usage boundary. Data flows
-  command file → local shape checks → `POST /v1/commands` → exact registration
-  record check → registration-only output. No task result or payment state is
-  synthesized locally.
+  local actor key + supplied grant → local envelope preparation → (after a
+  separate explicit `register`) command file → shape checks → RelayOS's
+  `/v1/commands` route → exact registration record check → registration-only
+  output. No task result or payment state is synthesized locally.
 
 The old `spore settle discover|execute|assurance` surface used
 `/api/v1/objectives/...`, which does not match the inspected RelayOS service;

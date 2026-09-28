@@ -1,6 +1,6 @@
 // work-order — narrow RelayOS objective registration boundary.
 //
-// This command registers a caller-authorized work-order commitment only. It
+// It prepares a local envelope or submits a caller-authorized registration. It
 // does not discover providers, execute tasks, verify outcomes, or settle funds.
 package main
 
@@ -39,6 +39,7 @@ func workOrderUsage(w io.Writer) {
 		"      -objective-id ID -owner-pseudonym ID -description-commitment HASH",
 		"      -policy-hash HASH -out NEW_FILE",
 		"      create and actor-sign an objectives.register command locally",
+		"      (no network submission; only register sends the prepared command)",
 		"  spore work-order register -command FILE [-relay-url URL]",
 		"      submit an already-authorized RelayOS objectives.register command",
 		"",
@@ -48,10 +49,14 @@ func workOrderUsage(w io.Writer) {
 		"",
 		"Preparation uses the caller's local actor key plus a RelayOS-issued grant",
 		"and trusted issuer identity. Spore never creates or broadens authority.",
+		"Trust in the supplied issuer identity must be established outside Spore;",
+		"checking its signature locally does not establish issuer trust.",
 		"The command file must contain RelayOS actor identity, scope, command, signed",
 		"AuthorityGrant, and actor signature. RelayOS verifies signatures, grant time,",
 		"revocation, resource scope, and replay. Registration is not execution,",
 		"independent outcome verification, escrow, or on-chain settlement.",
+		"A live registration smoke test is opt-in and leaves persistent state.",
+		"See docs/RELAY_WORK_ORDER.md before enabling it.",
 	} {
 		fmt.Fprintln(w, line)
 	}
