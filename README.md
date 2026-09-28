@@ -28,10 +28,11 @@ setup. Releases also carry SLSA keyless provenance
 
 | Version | Date | Highlights |
 |---|---|---|
+| **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. Pointing the carrier at a real chain moves to v0.9.0. |
 | **[v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0)** | 2026-09-23 | First release shipping the **full stack**: `spore` (Go) for all six targets (linux/macOS/Windows × amd64/arm64) plus the Rust `spore-peer` transport for five of them, per-asset `.sha256` checksums, and SLSA keyless provenance for every binary. Installers verify before they swap anything into place. |
 
-Pin the install with `SPORE_RELEASE=v0.7.0`, and verify a downloaded binary
-the way CI does with `slsa-verifier … --source-tag v0.7.0` — full recipe in
+Pin the install with `SPORE_RELEASE=v0.8.0`, and verify a downloaded binary
+the way CI does with `slsa-verifier … --source-tag v0.8.0` — full recipe in
 [`docs/ONBOARDING.md`](docs/ONBOARDING.md#get-the-binary). One honest
 caveat: `spore-peer` for Windows arm64 is not shipped yet (the Rust
 cross-linker for that target isn't trustworthy); Go `spore` for arm64 is.

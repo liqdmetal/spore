@@ -26,9 +26,11 @@ The script downloads from the
 each binary's checksum against the release's `.sha256` files, and only moves
 binaries into place after verification (a failed download never clobbers an
 existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
-`SPORE_RELEASE=v0.7.0`, the current release (2026-09-23) and the first
+`SPORE_RELEASE=v0.8.0`, the current release (2026-09-27), which readies the
+EVM carrier for the wire: local EIP-155 signing, the loopback `evm-proxy`,
+and a durable settlement notice outbox. (v0.7.0 remains the first release
 shipping the full stack: `spore` for all six platforms and the `spore-peer`
-transport for five of them.
+transport for five of them.)
 
 <details>
 <summary>Manual download / other platforms</summary>
@@ -53,7 +55,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
   --source-uri github.com/liqdmetal/spore --source-tag vTAG
 ```
 
-For the current release, `vTAG` is `v0.7.0`.
+For the current release, `vTAG` is `v0.8.0`.
 
 </details>
 
