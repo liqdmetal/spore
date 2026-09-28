@@ -199,9 +199,17 @@ Why the code fits without changes (checked against `internal/evm`):
 ### Runbook — Phase B: Base mainnet (chain 8453)
 
 ```
-1. Fund a dedicated spore key with a small ETH amount. Measure first:
-   eth_gasPrice × (deploy gas + N×(deliver + burn) gas) — cents per
-   message at 2026 fee levels, but measure, don't assume.
+1. Fund a dedicated spore key with a small ETH amount. Measure first —
+   the whole eth_gasPrice × gas computation is one command:
+     spore contract estimate -rpc https://mainnet.base.org -from 0x<deployer>
+   Run it before deploying (deploy row only), then again after Phase B
+   step 2 with `-mailbox 0x<addr>` added — deliver/burn rows and the
+   N-round funding total appear. The burn row is a labeled conservative
+   constant when the node refuses to estimate a burn against an empty
+   slot (real burns are typically cheaper); the command ends with the
+   standing rule: re-run at deploy time, never fund from a stale number.
+   At 2026 fee levels this is cents per message, but measure, don't
+   assume.
 2. spore contract deploy-mycelium -rpc https://mainnet.base.org -wait 5m
 3. Two-party proof again, against mainnet, with tiny real amounts.
 4. Publish:

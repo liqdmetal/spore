@@ -215,6 +215,8 @@ func usage() {
   spore prekeybatch push -in F.json -mailbox URL [-token SECRET]   (upload batch so GET /prekey can serve single-use bundles)
   spore prekeybatch status -mailbox URL   (is the mailbox serving prekey material? consumes one bundle)
   spore derosim serve
+  spore contract estimate -rpc URL [-from ADDR] [-mailbox ADDR] [-payload-bytes N] [-rounds N] [-gas-price WEI]
+             (answer "what does this deployment cost": live gas price × live estimates for deploy + deliver, labeled conservative fallback for burn — docs/LIVE_NODES.md §3)
   spore contract deploy-mycelium -rpc URL -private-key HEX|-bin FILE [-gas-price WEI] [-wait 2m]
              (deploy contracts/MyceliumMailbox.sol from a funded local key; prints the address for -mailbox)
   spore evm-proxy -rpc URL [-private-key HEX] [-listen 127.0.0.1:8555]

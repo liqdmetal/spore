@@ -199,6 +199,12 @@ pointing it at a funded account on a real chain and publishing the evidence.
   `TestPinnedMyceliumBytecode`, `TestDeployTxCarriesPinnedMyceliumCode`, and
   `TestSolcRecompileMatchesPinned` — no supply-chain gap between "what was
   audited" and "what gets deployed".
+- **The fee measure:** `spore contract estimate` answers "what does this
+  deployment cost" in one command — live `eth_gasPrice` × live
+  `eth_estimateGas` for the deploy (and deliver, once `-mailbox` points at
+  a deployment), with a clearly-labeled conservative constant for burn
+  (empty-slot burns revert the estimate; real burns are typically cheaper).
+  This is must-do #4's "measure, don't assume" made mechanical.
 
 **v0.9.0 must do:**
 
