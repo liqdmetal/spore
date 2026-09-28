@@ -5,7 +5,7 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
 (YOUR-NODE-HOST) where the DERO node already lives.
 
 ## Goals / status at a glance
-1. **EVM** — ✅ **live-verified** on a local anvil node (below); **v0.8.0 target:
+1. **EVM** — ✅ **live-verified** on a local anvil node (below); **v0.9.0 target:
    `MyceliumMailbox` on Base** (comparison + runbook in §3).
 2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
 3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
@@ -125,9 +125,9 @@ The backend logic is identical; only the RPC endpoint + funded key change.
 
 ---
 
-## 3. EVM mailbox deployment — Base (v0.8.0 runbook)
+## 3. EVM mailbox deployment — Base (v0.9.0 runbook)
 
-Executes the "deploy for real" step of the v0.8.0 roadmap item
+Executes the "deploy for real" step of the v0.9.0 roadmap item
 (ROADMAP.md, product roadmap): put the already-built-and-pinned
 `MyceliumMailbox` on a real chain and publish the receipt.
 

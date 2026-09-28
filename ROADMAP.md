@@ -147,7 +147,27 @@ upstream gate.
 
 ### Product roadmap after the evidence gates
 
-#### v0.8.0 — E2 pointer deployment on the EVM mailbox contract
+#### v0.8.0 — shipped: the EVM carrier readied for the wire
+
+The real-chain deployment below slipped to v0.9.0; v0.8.0 ships everything
+that turns the deployment into a funded-key exercise instead of an
+engineering project, plus the settlement and relay hardening that landed
+alongside it:
+
+- **EVM:** local EIP-155 tx signing, the `spore evm-proxy` loopback signing
+  proxy in front of read-only public RPCs, and the per-chain default
+  MyceliumMailbox config seam (`evm_mailbox`) — addresses to fill in at
+  v0.9.0 deployment time.
+- **Settlement:** the durable notice outbox — money-first settlement
+  commands queue failed counterparty notices and re-announce them, pinned
+  by kill -9 crash windows and nine derosim E2E tests.
+- **Relay:** the work-order prepare/identity boundary (only `register`
+  reaches the network), DEL-escaping canonical JSON, and the opt-in
+  live-registration smoke contract.
+- **Continuity:** the reaper watchdog alerts on stale time past the
+  reaper's cadence, not watch-count deltas — no more false frozen alerts.
+
+#### v0.9.0 — E2 pointer deployment on the EVM mailbox contract
 
 **Goal:** `spore msg send-e2 -to 0x…` works end-to-end on a real EVM chain
 through a deployed `MyceliumMailbox`, with compost-on-delivery proven on that
@@ -180,7 +200,7 @@ pointing it at a funded account on a real chain and publishing the evidence.
   `TestSolcRecompileMatchesPinned` — no supply-chain gap between "what was
   audited" and "what gets deployed".
 
-**v0.8.0 must do:**
+**v0.9.0 must do:**
 
 1. **Deploy for real.** Choose the chain (a cheap L2 is the honest first
    target — pointer txs are small and frequent), fund a key, run
@@ -211,7 +231,7 @@ pointing it at a funded account on a real chain and publishing the evidence.
 - [ ] CARRIER_MATRIX + README EVM rows updated to "live" with the same
       honesty standard as the DERO/Solana rows.
 
-Deliberately **not** in v0.8.0: cross-chain identity proof (item #10 below).
+Deliberately **not** in v0.9.0: cross-chain identity proof (item #10 below).
 EVM delivery here is DERO-independent — the recipient is an EVM address and
 the ratchet is X3DH as today; cross-chain rendezvous is its own later gate.
 
@@ -220,7 +240,7 @@ the ratchet is X3DH as today; cross-chain rendezvous is its own later gate.
 | 1 | **Finish escrow + swap UX in chat** | **HTLC close and dex settlements are both in-thread.** Escrow: `msg escrow claim/refund` (see shipped notes). Swap: `msg dex swap|wrap|unwrap` invoke RelayDEX/RelayWrappedDero and announce via `spore/dex/v1` envelopes; `msg dex fees` publishes the in-contract rake (90/10 LP/treasury, atomic swaps free) per docs/BUSINESS.md. Contract IDs now have a real config seam (`SPORE_SAP_HTLC_SC/DEX_SC/WDERO_SC` env) with local refusals — previously `sap.HTLCContractID` was never seeded, so the HTLC fund path sent an empty SCID. **Two-party soak shipped:** `spore derosim serve` (wallet-RPC simulator with honest RelayHTLC/RelayDEX/RelayWrappedDero semantics — hash-verified claims, expiry refunds, constant-product min-out, 1:1 wrap mint/burn) + `scripts/escrow_dex_soak.sh` drive real CLI processes both sides through bootstrap → fund→claim → fund→refund → swap → wrap/unwrap → receipts-ledger + web-card checks (31 green). The soak forced the swap input leg into existence: `msg dex swap -amount <n><ta-token>` (was a zero-deposit invoke that moved nothing). |
 | 2 | **Tokenized search execution** — **shipped** | `maildb.Search` now prefilters through the inverted index (`PositionsContaining`: one vocabulary scan unions the positions of tokens containing any query term — a provable superset under substring semantics), the index is rebuilt on `Open` so search survives restart, `Purge` rebuilds it so compaction can never misalign positions, and `mail search` gained `-any`/`-not` OR/NOT flags. Exact `matchesQuery` semantics are unchanged and pinned by equivalence tests. |
 | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
-| 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Still gated on: a funded EVM account on a real chain. The solc creation bytecode is now **committed and pinned**: `tools/mycelium.bin` is the real solc v0.8.26 output of the documented pipeline, held in place by `TestPinnedMyceliumBytecode` (sha256 + solc-shape checks: constructor prologue, embedded-runtime size consistency, solc metadata marker), `TestDeployTxCarriesPinnedMyceliumCode` (the signed creation tx the deploy path broadcasts must embed the pinned bytes exactly), and `TestSolcRecompileMatchesPinned` (re-runs the pipeline from the repo root — solc metadata is path-sensitive — and byte-diffs; skips where solc 0.8.26 isn't installed). Regenerating artifact + pins is a deliberate paired act. **v0.8.0 target — detailed plan in the subsection above.** |
+| 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Still gated on: a funded EVM account on a real chain. The solc creation bytecode is now **committed and pinned**: `tools/mycelium.bin` is the real solc v0.8.26 output of the documented pipeline, held in place by `TestPinnedMyceliumBytecode` (sha256 + solc-shape checks: constructor prologue, embedded-runtime size consistency, solc metadata marker), `TestDeployTxCarriesPinnedMyceliumCode` (the signed creation tx the deploy path broadcasts must embed the pinned bytes exactly), and `TestSolcRecompileMatchesPinned` (re-runs the pipeline from the repo root — solc metadata is path-sensitive — and byte-diffs; skips where solc 0.8.26 isn't installed). Regenerating artifact + pins is a deliberate paired act. **v0.9.0 target — detailed plan in the subsection above.** |
 | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
 | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
 | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
