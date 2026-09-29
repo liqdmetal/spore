@@ -237,6 +237,66 @@ equivalent:
      as the DERO/Solana rows.
 ```
 
+### Deployment day: from funded key to signed tag (the one-commit flip)
+
+Phase B ends with a deployed contract and a proven two-party round. What
+follows is the publication sequence, in order — each step names the check
+that keeps it honest. The exact flipped wording for step 5 is pinned by
+`internal/evm/mailboxdefaults_test.go` (the receipt gate), which is the
+in-repo source of truth for every string involved; this runbook stays valid
+even when out-of-repo design notes are gone.
+
+1. **Capture the receipt.** From the Phase B outputs (and Phase A if it
+   ran): contract address, creation tx, deployer, date, one deliver txid.
+   The burn tx is unlogged by design — cite the on-chain empty-slot
+   `read()` as the proof. The rehearsal script's `receipt` step prints
+   these lines ready to paste into the STATUS block below.
+2. **Keep the measured numbers.** Phase B step 1 already ran
+   `spore contract estimate` twice (pre-deploy with `-from` only;
+   post-deploy with `-mailbox`). Save both outputs — the fee + limit
+   notes are filled from them in the release-prep pass, never from a doc
+   number, and the funding decision already used the post-deploy total.
+3. **Paste the receipt into the STATUS block below** — address, creation
+   tx, deployer, date, deliver txid — and flip the STATUS block's
+   "shipped in" line from `<release>` to the shipping release.
+4. **Add the registry entry** to `internal/evm/mailboxdefaults.go`:
+
+   ```go
+   "8453": {
+       ChainID:    8453,
+       Address:    "<address from step 1>", // lowercase, 0x + 40 hex
+       Default:    "v0.9.0",
+       ReceiptRef: "docs/LIVE_NODES.md §3 STATUS / Base mainnet",
+   },
+   ```
+
+   From this commit on, `spore init -chain evm` writes that address as the
+   shipped default mailbox (opt out with `-mailbox-contract=`).
+5. **Flip the four operator-facing rows in the SAME commit** — README
+   chain table, CARRIER_MATRIX EVM row, the LIVE_NODES header + goals
+   item 1, ONBOARDING readiness row — to the exact claims pinned by
+   `deploymentDayDocClaims` in the gate test. All four flip together or
+   not at all: the gate fails if any doc claims the deployment is live
+   while the registry is empty, if any keeps the pre-deployment wording
+   after it ships, and if the shipped address is not cited in §3.
+6. **Referee:** `go test ./internal/evm ./cmd/spore` must be green —
+   `TestShippedMailboxDefaultsCarryReceipts` and
+   `TestDocClaimsMatchRegistryState` pass only when receipt, registry,
+   and docs agree.
+7. **Full gates, then push:** `go test ./...` + lefthook green, push
+   main, wait for CI (check by head SHA via `gh api
+   repos/liqdmetal/spore/actions/runs?head_sha=<sha>` — the run list
+   lags).
+8. **Signed tag LAST**, after CI is green on the flip commit: fill the
+   tag draft's placeholders from the receipt (search for the FILL
+   markers), then `git tag -s v0.9.0 -F <file>` and push the tag — the
+   release workflow fires on `v*` tags, which is exactly why the tag is
+   always the last action.
+
+After the tag: the fee + limit notes and the remaining pre-deployment
+prose drain (VISION/design/ROADMAP — grep for the two stale phrases the
+gate forbids) happen in the release-prep pass per ROADMAP must-do #4.
+
 ### STATUS: MyceliumMailbox on Base — PENDING
 
 - Base Sepolia rehearsal: address `0x…`, creation tx `0x…`, date …
