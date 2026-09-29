@@ -6,11 +6,36 @@ package evm
 // hold: a default address and its published receipt can never drift apart.
 // Until the Phase B deployment lands, the registry is empty and this test
 // vacuously passes; deployment day flips both sides in one commit.
+//
+// The same gate covers the public doc CLAIMS (README chain table, the
+// CARRIER_MATRIX EVM row, the LIVE_NODES header): none may flip to "live"
+// before the registry does, and all must flip together with it. The
+// ready-to-apply flip wording lives in release-designs/ (outside this
+// repo); deployment day copies it verbatim.
 import (
 	"os"
 	"strings"
 	"testing"
 )
+
+// deploymentDayDocClaims are the exact substrings the docs must carry once
+// the EVM row flips to live — the same strings the ready-to-apply patch in
+// release-designs/ applies. Each is checked both ways: forbidden while the
+// registry is empty, required once it is not.
+var deploymentDayDocClaims = map[string]string{
+	"README.md":              "live on Base; deployment receipt published",
+	"docs/CARRIER_MATRIX.md": "live; Base deployment receipt published",
+	"docs/LIVE_NODES.md":     "live on Base (chain 8453); deployment receipt published",
+	"docs/ONBOARDING.md":     "✅ live on Base (deployment receipt: LIVE_NODES.md §3)",
+}
+
+// oldEVMRowClaims are the pre-deployment placeholder claims that must be
+// GONE once the registry ships — guards against a partial flip that edits
+// one doc and leaves another claiming "deployment pending".
+var oldEVMRowClaims = []string{
+	"deployment pending",
+	"anvil-verified",
+}
 
 func TestShippedMailboxDefaultsCarryReceipts(t *testing.T) {
 	raw, err := os.ReadFile("../../docs/LIVE_NODES.md")
@@ -56,6 +81,37 @@ func TestShippedMailboxDefaultsCarryReceipts(t *testing.T) {
 	}
 	if len(KnownMailboxDeployments) == 0 && rest != "<release>" && rest != "" {
 		t.Errorf("§3 STATUS claims a shipped default (%q) but the registry is empty — wire the entry or fix the doc", rest)
+	}
+}
+
+// TestDocClaimsMatchRegistryState extends the receipt gate to the public
+// docs: the EVM rows must stay honest in BOTH directions. While the
+// registry is empty, no doc may claim the deployment is live; once it
+// ships, every doc must carry the flipped claim and none may keep the
+// "deployment pending" placeholder. Run after reading each doc; a missing
+// doc file fails (docs are load-bearing, not optional).
+func TestDocClaimsMatchRegistryState(t *testing.T) {
+	registryShipped := len(KnownMailboxDeployments) > 0
+	read := func(rel string) string {
+		raw, err := os.ReadFile("../../" + rel)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", rel, err)
+		}
+		return string(raw)
+	}
+	for rel, flippedClaim := range deploymentDayDocClaims {
+		doc := read(rel)
+		if registryShipped && !strings.Contains(doc, flippedClaim) {
+			t.Errorf("%s: registry ships a deployment but the doc never claims %q — apply the ready-to-apply flip (release-designs/) or update the wording there and here together", rel, flippedClaim)
+		}
+		if !registryShipped && strings.Contains(doc, flippedClaim) {
+			t.Errorf("%s: claims %q but the registry is empty — a doc must never flip before the receipt-backed entry exists", rel, flippedClaim)
+		}
+		for _, stale := range oldEVMRowClaims {
+			if registryShipped && strings.Contains(doc, stale) {
+				t.Errorf("%s: still carries the pre-deployment claim %q after the registry shipped — finish the flip", rel, stale)
+			}
+		}
 	}
 }
 
