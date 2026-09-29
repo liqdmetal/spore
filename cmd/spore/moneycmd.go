@@ -114,6 +114,11 @@ func msgPayE2(args []string) {
 	if !carrierCarriesValue(fs.Lookup("chain").Value.String()) {
 		check(fmt.Errorf("pay requires a value-carrying carrier (dero|evm); %s cannot attach money — refusing to send a payment note for value that never moved", fs.Lookup("chain").Value.String()))
 	}
+	// Same contract-path refusal as send-e2: deliver() is not payable, so the
+	// backend would drop the payment while this command printed PAID.
+	if err := refuseValueOnMailboxPath(fs, "msg pay"); err != nil {
+		check(err)
+	}
 
 	ep, _ := durableEndpointFromFlags(fs)
 

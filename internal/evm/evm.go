@@ -134,8 +134,10 @@ func (b *Backend) PostPayload(ctx context.Context, recipientAddr string, p chain
 	}
 	if b.mailbox != "" {
 		// Robust path: call deliver(recipient, payload) on the mailbox contract.
-		// deliver() is not payable, so never attach a value here (unlike the
-		// raw-calldata path, which can carry amountHint to an EOA).
+		// deliver() is not payable: amountHint is deliberately DROPPED here and
+		// the CLI refuses -amount on this path (refuseValueOnMailboxPath), so a
+		// "paid" send can never silently ride this branch. The raw-calldata
+		// path below is the payable one.
 		calldata, err := encodeDeliver(recipientAddr, []byte(p))
 		if err != nil {
 			return chain.PostResult{}, err

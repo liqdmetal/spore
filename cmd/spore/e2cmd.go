@@ -106,6 +106,36 @@ func flagValueOr(fs *flag.FlagSet, name, def string) string {
 	return f.Value.String()
 }
 
+// refuseValueOnMailboxPath rejects -amount on the EVM MyceliumMailbox
+// contract path — whether given as -mailbox or arriving via the config
+// evm_mailbox default (mailboxContractOrDefault, incl. the v0.9.0 shipped
+// default for `spore init -chain evm`). deliver() is not payable: the EVM
+// backend drops the amountHint on that path by design, so a -amount there
+// would print PAID while the tx carries zero value — the silent underpay
+// the value-carriage rule forbids. The calldata path (no mailbox) carries
+// value normally; to pay with the money through a different tx, run
+// `spore msg pay` against a calldata-path config (no mailbox default).
+func refuseValueOnMailboxPath(fs *flag.FlagSet, cmdName string) error {
+	if flagValueOr(fs, "chain", "") != "evm" {
+		return nil
+	}
+	explicit := flagValueOr(fs, "mailbox", "")
+	defaulted := mailboxContractOrDefault(fs)
+	if explicit == "" && defaulted == "" {
+		return nil
+	}
+	return fmt.Errorf("%s: -amount is refused on the EVM mailbox-contract path (deliver() is not payable, the value would be silently dropped)%s; pay-with-message rides the calldata path (no -mailbox and no evm_mailbox default), or settle separately with `spore msg pay`", cmdName, mailboxValueSourceNote(explicit))
+}
+
+// mailboxValueSourceNote says which flag/config produced the mailbox address,
+// so the refusal tells the operator exactly what to clear.
+func mailboxValueSourceNote(explicit string) string {
+	if explicit != "" {
+		return " (-mailbox given)"
+	}
+	return " (mailbox default from config evm_mailbox)"
+}
+
 // e2Store builds the off-chain body store from a -store URL. Three schemes:
 //
 //		http(s)://host        -> HTTPStore (your mailbox, or a paid Model-B operator)
@@ -695,6 +725,14 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		}
 		if !carrierCarriesValue(flagValueOr(fs, "chain", "")) {
 			return fmt.Errorf("-amount %s%s is not supported on the %s carrier (value-carrying: dero|evm); refusing to send an unpaid message as if paid", formatAmount(asset, atomic), asset, flagValueOr(fs, "chain", ""))
+		}
+		// EVM contract path: deliver() is not payable, so the backend would
+		// drop the value. Refuse rather than let the carrierCarriesValue(evm)
+		// pass stand in for a value the tx cannot carry (must-do #4: never
+		// silently underpay). PAID must only ever print for a tx that carries
+		// the money — see internal/evm PostPayload's contract-path branch.
+		if err := refuseValueOnMailboxPath(fs, "send-e2"); err != nil {
+			return err
 		}
 		if atomic < hint {
 			return fmt.Errorf("-amount rounds to %d atomic units, below the 1-unit postage floor", atomic)

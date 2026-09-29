@@ -261,6 +261,13 @@ equivalent:
   Base-specific; that is the point of the JSON-RPC seam.
 - Compost is the recipient's gas: `burn(to,seq)` costs a real (small) fee
   per message on EVM, unlike DERO's native expiry.
+- Value carriage on EVM: the calldata path (no mailbox configured) is
+  payable — `-amount` rides the same tx as the pointer. The mailbox-contract
+  path is NOT payable: `deliver()` is not a payable function, so `msg
+  send-e2` and `msg pay` REFUSE `-amount` when a mailbox is set (explicit
+  `-mailbox` or the config `evm_mailbox` default) instead of silently
+  dropping the money. Settle separately with `msg pay` against a
+  calldata-path config, or use the direct calldata path.
 - Default `-mailbox` shipped as the config `evm_mailbox` seam (init
   `-mailbox-contract` writes it; explicit flags always win; it never leaks
   into the URL-flavored `-mailbox` of prekeybatch/invite — applied only in

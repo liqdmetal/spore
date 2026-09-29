@@ -84,7 +84,7 @@ Hostile-relay defenses, all tested: served bytes must hash to the requested CID 
 | Carrier | `-amount` | Mechanism |
 |---|---|---|
 | DERO | ✅ supported | `PostPayloadAmount` (atomic units; 1 DERO = 100000). Wire-tested. |
-| EVM | ✅ supported (calldata path) | tx `value` in wei. The mailbox-contract path is NOT payable; the E2 carrier uses the calldata path. |
+| EVM | ✅ supported (calldata path) | tx `value` in wei. The mailbox-contract path is NOT payable: `(msg send-e2|msg pay) -amount` is refused there rather than silently dropping the value; the E2 carrier uses the calldata path. |
 | Bitcoin | ❌ refused | backend discards the hint (dust-output value wiring not done) — the CLI refuses `-amount` rather than silently underpaying |
 | TON | ❌ refused | backend discards the hint (value-bearing message not wired) |
 | Nostr / Cosmos / Solana / XMR | ❌ refused | relays hold no value / memo seam / program mailbox / no E2 |
