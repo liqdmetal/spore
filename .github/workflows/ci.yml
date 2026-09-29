@@ -98,6 +98,65 @@ jobs:
     name: spore-peer Rust + wire contract
     uses: ./.github/workflows/spore-peer-contract.yml
 
+  # The Phase A runbook can bit-rot silently: it drives spore's real CLI
+  # (evm-proxy, contract deploy/estimate, msg send-e2/recv-e2) against an
+  # RPC surface no unit test pretends to be. This smoke runs the ENTIRE
+  # scripts/sepolia_rehearsal.sh against tools/sepoliastub (a stateful
+  # MyceliumMailbox simulator whose selectors and ABI shapes are computed
+  # from the same signatures internal/evm encodes) plus a local derosim
+  # store — no faucet, no relays, fully offline. The script's own ~17
+  # assertions are the gate: a CLI flag rename, a log-line rewording, or an
+  # ABI drift fails here instead of at the next real rehearsal.
+  rehearsal-smoke:
+    name: sepolia rehearsal smoke (stub chain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build spore + stub
+        run: |
+          go build -o /tmp/smoke/spore ./cmd/spore
+          go build -o /tmp/smoke/sepoliastub ./tools/sepoliastub
+      - name: Start stub chain + derosim + mailbox host
+        run: |
+          set -e
+          /tmp/smoke/sepoliastub 127.0.0.1:8532 > /tmp/smoke/stub.log 2>&1 &
+          /tmp/smoke/spore derosim serve -listen 127.0.0.1:8612 > /tmp/smoke/derosim.log 2>&1 &
+          mkdir -p /tmp/smoke/users/me
+          echo '{"me":"rehearsal-secret"}' > /tmp/smoke/tokens.json
+          /tmp/smoke/spore mailbox host \
+            -users /tmp/smoke/users -tokens /tmp/smoke/tokens.json \
+            -listen 127.0.0.1:8611 -chain dero -rpc http://127.0.0.1:8612/w/alice \
+            > /tmp/smoke/mailbox.log 2>&1 &
+          for port in 8532 8611 8612; do
+            for i in $(seq 1 30); do
+              curl -s -o /dev/null --connect-timeout 2 "http://127.0.0.1:$port/" && break
+              sleep 1
+            done
+            curl -s -o /dev/null --connect-timeout 2 "http://127.0.0.1:$port/" || {
+              echo "service on $port never came up"; exit 1; }
+          done
+      - name: Run the rehearsal script against the stub
+        env:
+          SPORE_EVM_PRIVATE_KEY:   "0x1111111111111111111111111111111111111111111111111111111111111111"
+          SPORE_EVM_PRIVATE_KEY_B: "0x2222222222222222222222222222222222222222222222222222222222222222"
+          SPORE_REHEARSAL_STORE: "http://127.0.0.1:8611/u/me"
+          SPORE_REHEARSAL_STORE_TOKEN: "rehearsal-secret"
+        run: |
+          set -o pipefail
+          bash scripts/sepolia_rehearsal.sh -r http://127.0.0.1:8532 -b /tmp/smoke/spore \
+            | tee /tmp/smoke/rehearsal.log
+          grep -q 'rehearsal complete' /tmp/smoke/rehearsal.log
+      - name: Upload rehearsal logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: rehearsal-smoke-logs
+          path: /tmp/smoke/*.log
+          retention-days: 7
+
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
