@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/evm"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
@@ -30,7 +32,7 @@ func initcmd(args []string) {
 	opks := fs.Int("opks", 50, "how many one-time prekeys to pre-generate")
 	chainName := fs.String("chain", "dero", "default pointer carrier")
 	storeURL := fs.String("store", "", "default off-chain body store URL (your mailbox or a relay you trust; can be set later in config.json)")
-	mailboxContract := fs.String("mailbox-contract", "", "EVM: default MyceliumMailbox contract address for -chain evm (stored as evm_mailbox in config.json; also editable later — see docs/LIVE_NODES.md §3)")
+	mailboxContract := fs.String("mailbox-contract", "", "EVM: default MyceliumMailbox contract address for -chain evm (stored as evm_mailbox in config.json; default: the shipped per-chain address when one exists for this chain; -mailbox-contract= opts out — also editable later, see docs/LIVE_NODES.md §3)")
 	force := fs.Bool("force", false, "re-initialize even if the directory already has an identity (DESTRUCTIVE: regenerates keys; old sessions become undecryptable)")
 	_ = fs.Parse(args)
 
@@ -126,6 +128,31 @@ func initcmd(args []string) {
 		check(err)
 	}
 
+	// Per-chain default MyceliumMailbox contract (EVM): once set, every
+	// -chain evm E2 command uses contract delivery + Inbox-log discovery
+	// without retyping -mailbox. Resolution order (v0.9.0 must-do #3):
+	//	//  1. the user's explicit -mailbox-contract value — honored on ANY
+	//     chain (the default carrier may be dero while evm commands are
+	//     still used later), INCLUDING the explicit-empty opt-out
+	//     (-mailbox-contract= ships NO address, so an operator on their
+	//     own deployment is never silently pointed at the project's);
+	//  2. otherwise — and only when the kit's default carrier is EVM — the
+	//     shipped per-chain default from internal/evm's registry,
+	//     populated only for chains whose LIVE_NODES §3 deployment
+	//     receipt exists (the registry gate test blocks a default without
+	//     its receipt);
+	//  3. otherwise empty. Non-EVM chains never get a SHIPPED default.
+	evmmSetExplicitly := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "mailbox-contract" {
+			evmmSetExplicitly = true
+		}
+	})
+	evmMailboxDefault := *mailboxContract
+	if evmMailboxDefault == "" && !evmmSetExplicitly && strings.EqualFold(*chainName, "evm") {
+		evmMailboxDefault = evm.DefaultMailboxContract(chainIDForDefault(*chainName))
+	}
+
 	cfg := Config{
 		Dir:       home,
 		Identity:  identityFile,
@@ -139,10 +166,7 @@ func initcmd(args []string) {
 		Store:     *storeURL,
 		Maildb:    filepath.Join(home, "mail.json"),
 
-		// Per-chain default MyceliumMailbox contract (EVM): once set, every
-		// -chain evm E2 command uses contract delivery + Inbox-log discovery
-		// without retyping -mailbox. Explicit flags always win.
-		EVMMailbox: *mailboxContract,
+		EVMMailbox: evmMailboxDefault,
 	}
 	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
 		check(err)
@@ -180,6 +204,17 @@ func initcmd(args []string) {
 	fmt.Println("no mailbox? use the serverless body store instead:")
 	fmt.Printf("       spore msg send-e2 -to alice -bundle FILE -store nostr://relay.damus.io,nos.lol\n")
 	fmt.Printf("       (uses the dedicated store key at %s)\n", storeKeyFile)
+}
+
+// chainIDForDefault resolves the chain selector for the shipped
+// default-mailbox registry. Today "evm" means Base mainnet (LIVE_NODES §3's
+// documented first target); a future per-chain network selector can replace
+// this mapping without touching callers.
+func chainIDForDefault(chainName string) uint64 {
+	if strings.EqualFold(chainName, "evm") {
+		return 8453 // Base mainnet
+	}
+	return 0
 }
 
 func writePrivate(path string, secret []byte) {
