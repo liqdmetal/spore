@@ -115,6 +115,52 @@ func TestDocClaimsMatchRegistryState(t *testing.T) {
 	}
 }
 
+// releasePrepDrain is the post-flip prose drain for the three narrative
+// docs. The four operator-facing surfaces are gated above; these files
+// carry the same honesty bar but are allowed to keep release HISTORY:
+// ROADMAP's titlecase "Anvil" mentions describe the local-node arc that was
+// actually proven, so they stay — history stays, current-state claims go.
+// VISION and design lose every mention; ROADMAP only the exact current-state
+// phrases the v0.9.0 release-prep pass rewrites.
+var releasePrepDrain = []struct {
+	rel         string
+	tokens      []string // case-sensitive tokens forbidden once the registry ships
+	lowerTokens []string // case-insensitive tokens forbidden once the registry ships
+}{
+	{"VISION.md", []string{"deployment pending"}, []string{"anvil"}},
+	{"design.md", []string{"deployment pending"}, []string{"anvil"}},
+	{"ROADMAP.md", []string{"deployment pending", "verified on anvil"}, nil},
+}
+
+// TestReleasePrepProseDrainedAfterFlip extends the doc gate to the narrative
+// files — in ONE direction only: it stays vacuous until the registry ships,
+// then fails while any anvil-era current-state wording survives. This is the
+// release-prep prose drain made mechanical, the same bar as the DERO and
+// Solana rows: the narrative must match the published chain status.
+func TestReleasePrepProseDrainedAfterFlip(t *testing.T) {
+	if len(KnownMailboxDeployments) == 0 {
+		return // pre-flip: the narrative may still describe the local-node era
+	}
+	for _, d := range releasePrepDrain {
+		raw, err := os.ReadFile("../../" + d.rel)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", d.rel, err)
+		}
+		doc := string(raw)
+		for _, tok := range d.tokens {
+			if strings.Contains(doc, tok) {
+				t.Errorf("%s: still carries anvil-era current-state wording %q after the registry shipped — apply the release-prep prose drain (ready-to-apply Patch 6 in release-designs/)", d.rel, tok)
+			}
+		}
+		lower := strings.ToLower(doc)
+		for _, tok := range d.lowerTokens {
+			if strings.Contains(lower, tok) {
+				t.Errorf("%s: still carries anvil-era current-state wording %q (case-insensitive) after the registry shipped — apply the release-prep prose drain (ready-to-apply Patch 6 in release-designs/)", d.rel, tok)
+			}
+		}
+	}
+}
+
 func TestDefaultMailboxContractLookupGuards(t *testing.T) {
 	// Empty registry: every lookup is empty, never an error or a placeholder.
 	if got := DefaultMailboxContract(8453); got != "" {

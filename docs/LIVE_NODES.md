@@ -293,9 +293,11 @@ even when out-of-repo design notes are gone.
    release workflow fires on `v*` tags, which is exactly why the tag is
    always the last action.
 
-After the tag: the fee + limit notes and the remaining pre-deployment
-prose drain (VISION/design/ROADMAP — grep for the two stale phrases the
-gate forbids) happen in the release-prep pass per ROADMAP must-do #4.
+Before the signed tag, the release-prep pass finishes the release's honest
+claims: the fee + limit notes are filled from the step-2 estimate outputs,
+and the anvil-era current-state prose in VISION/design/ROADMAP is drained to
+match the published chain status — `TestReleasePrepProseDrainedAfterFlip`
+enforces that drain once the registry entry from step 4 exists.
 
 ### STATUS: MyceliumMailbox on Base — PENDING
 
