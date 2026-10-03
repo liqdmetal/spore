@@ -1,79 +1,326 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"flag"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/liqdmetal/spore/internal/dero"
+	"github.com/liqdmetal/spore/internal/derosim"
+	"github.com/liqdmetal/spore/internal/mailbox"
+	"github.com/liqdmetal/spore/internal/ratchetwire"
+	"github.com/liqdmetal/spore/internal/secure"
 )
 
-// TestPaymentIntentDeterminismAndBinding: the same inputs must produce the
-// same intent; changing any field must change it.
-func TestPaymentIntentDeterminismAndBinding(t *testing.T) {
-	raw := []byte("pointer-payload-with-body-cid")
-	a := paymentIntent("dero", "dero1to", "25dero", raw, 1234567890)
-	b := paymentIntent("dero", "dero1to", "25dero", raw, 1234567890)
-	if a != b {
-		t.Fatal("intent not deterministic")
-	}
-	changed := []struct {
-		name string
-		mut  func() [32]byte
-	}{
-		{"chain", func() [32]byte { return paymentIntent("evm", "dero1to", "25dero", raw, 1234567890) }},
-		{"to", func() [32]byte { return paymentIntent("dero", "dero1to2", "25dero", raw, 1234567890) }},
-		{"amount", func() [32]byte { return paymentIntent("dero", "dero1to", "26dero", raw, 1234567890) }},
-		{"pointer", func() [32]byte { return paymentIntent("dero", "dero1to", "25dero", []byte("other"), 1234567890) }},
-		{"expiry", func() [32]byte { return paymentIntent("dero", "dero1to", "25dero", raw, 1234567891) }},
-	}
-	for _, c := range changed {
-		if c.mut() == a {
-			t.Fatalf("intent did not bind %s", c.name)
-		}
-	}
-}
-
-// TestApprovalRoundTrip: a signature made with spore msg approve's primitives
-// verifies against the approver pub, and a tampered intent is rejected.
-func TestApprovalRoundTrip(t *testing.T) {
-	_, approverPriv, err := ed25519.GenerateKey(rand.Reader)
+func approvalFixture(t *testing.T) (CapabilityEnvelope, ed25519.PrivateKey, ed25519.PublicKey) {
+	t.Helper()
+	requesterIdentity := bytes.Repeat([]byte{0x31}, 32)
+	requesterPrivate, err := secure.SigKeypairOf(requesterIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	approverPub := approverPriv.Public().(ed25519.PublicKey)
-	fs := flag.NewFlagSet("send", flag.ContinueOnError)
-	fs.String("require-approval", hex.EncodeToString(approverPub), "")
-	fs.String("approval-sig", "", "")
-	fs.String("approval-file", "", "")
+	approverIdentity := bytes.Repeat([]byte{0x52}, 32)
+	approverPrivate, err := secure.SigKeypairOf(approverIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("session1"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	envelope, err := newCapabilityEnvelope(derosim.ZeroAddress, derosim.ZeroAddress, 25_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(approverPrivate, transcript))
+	return envelope, approverPrivate, approverPublic
+}
 
-	raw := []byte("pointer-raw")
-	// gate without a signature must fail loudly and print the intent
-	if err := requireApproval(fs, "dero", "dero1to", "25dero", raw); err == nil {
-		t.Fatal("missing approval accepted")
-	}
-	// compute the same intent the gate will use (same inputs + the TTL clock)
-	intent := paymentIntent("dero", "dero1to", "25dero", raw, time.Now().Add(ApprovalTTL).Unix())
-	sig := ed25519.Sign(approverPriv, intent[:])
-	if err := fs.Set("approval-sig", hex.EncodeToString(sig)); err != nil {
+func writeApprovalTestFile(t *testing.T, path string, envelope CapabilityEnvelope) {
+	t.Helper()
+	data, err := json.Marshal(envelope)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := requireApproval(fs, "dero", "dero1to", "25dero", raw); err != nil {
-		t.Fatalf("valid approval rejected: %v", err)
-	}
-	// tamper the intent (different amount) -> the gate must reject
-	intent2 := paymentIntent("dero", "dero1to", "26dero", raw, time.Now().Add(ApprovalTTL).Unix())
-	if err := fs.Set("approval-sig", hex.EncodeToString(ed25519.Sign(approverPriv, intent2[:]))); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := requireApproval(fs, "dero", "dero1to", "25dero", raw); err == nil {
-		t.Fatal("approval for a different amount accepted")
+}
+
+func TestCapabilityApprovalRoundTripAndRejections(t *testing.T) {
+	envelope, _, approver := approvalFixture(t)
+	wantApprover := hex.EncodeToString(approver)
+	if err := verifyCapabilityApproval(envelope, wantApprover, time.Now()); err != nil {
+		t.Fatalf("valid explicit approval rejected: %v", err)
 	}
-	// no gate configured -> always passes
-	fs2 := flag.NewFlagSet("send2", flag.ContinueOnError)
-	fs2.String("require-approval", "", "")
-	if err := requireApproval(fs2, "dero", "dero1to", "25dero", raw); err != nil {
-		t.Fatalf("unconfigured gate must pass: %v", err)
+
+	tests := []struct {
+		name   string
+		mutate func(*CapabilityEnvelope)
+	}{
+		{"tampered amount", func(e *CapabilityEnvelope) { e.AmountAtomic++ }},
+		{"tampered pointer", func(e *CapabilityEnvelope) { e.Pointer = strings.Repeat("00", 74) }},
+		{"wrong action", func(e *CapabilityEnvelope) { e.Action = "dero.transfer-anything" }},
+		{"wrong protocol version", func(e *CapabilityEnvelope) { e.Version++ }},
+		{"wrong approver", func(e *CapabilityEnvelope) { e.Approver = strings.Repeat("00", ed25519.PublicKeySize) }},
+		{"wrong sender", func(e *CapabilityEnvelope) { e.SenderAddress = "invalid" }},
+		{"bad requester signature", func(e *CapabilityEnvelope) { e.RequesterSignature = strings.Repeat("00", ed25519.SignatureSize*2) }},
+		{"reused requester approver", func(e *CapabilityEnvelope) { e.Requester = e.Approver }},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := envelope
+			tc.mutate(&changed)
+			if err := verifyCapabilityApproval(changed, wantApprover, time.Now()); err == nil {
+				t.Fatalf("%s accepted", tc.name)
+			}
+		})
+	}
+	if err := verifyCapabilityApproval(envelope, hex.EncodeToString(make([]byte, ed25519.PublicKeySize)), time.Now()); err == nil {
+		t.Fatal("approval signed by another device accepted")
+	}
+	expired := envelope
+	expired.ExpiresAt = time.Now().Add(-time.Second).Unix()
+	if err := verifyCapabilityApproval(expired, wantApprover, time.Now()); err == nil {
+		t.Fatal("expired approval accepted")
+	}
+	tooLong := envelope
+	tooLong.ExpiresAt = tooLong.CreatedAt + int64(ApprovalTTL.Seconds()) + 1
+	if err := validateCapabilityEnvelope(tooLong, time.Now(), true); err == nil {
+		t.Fatal("overlong capability accepted")
+	}
+	if err := verifyCapabilityApproval(envelope, wantApprover, time.Now().Add(ApprovalTTL)); err == nil {
+		t.Fatal("approval accepted after expiry")
+	}
+}
+
+func TestCapabilityApprovalExplicitHumanConfirmation(t *testing.T) {
+	envelope, approverPrivate, approverPublic := approvalFixture(t)
+	dir := t.TempDir()
+	requestPath := filepath.Join(dir, "request.json")
+	approvedPath := filepath.Join(dir, "approved.json")
+	identityPath := filepath.Join(dir, "approver.key")
+	envelope.Signature = ""
+	writeApprovalTestFile(t, requestPath, envelope)
+	identitySeed := bytes.Repeat([]byte{0x52}, 32)
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := approveCapabilityFile(requestPath, identityPath, approvedPath, false); err == nil || !strings.Contains(err.Error(), "explicit human approval required") {
+		t.Fatalf("approval without explicit confirmation error = %v", err)
+	}
+	if _, err := os.Stat(approvedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("approval without confirmation created a signature: stat error=%v", err)
+	}
+	if err := approveCapabilityFile(requestPath, identityPath, approvedPath, true); err != nil {
+		t.Fatalf("confirmed approval failed: %v", err)
+	}
+	approved, err := decodeCapabilityFile(approvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCapabilityApproval(approved, hex.EncodeToString(approverPublic), time.Now()); err != nil {
+		t.Fatalf("CLI-generated approval signature did not verify: %v", err)
+	}
+	if !bytes.Equal(approverPrivate.Public().(ed25519.PublicKey), approverPublic) {
+		t.Fatal("test approver keys inconsistent")
+	}
+}
+
+func TestCapabilityNonceIsOneShotAcrossRestart(t *testing.T) {
+	envelope, _, _ := approvalFixture(t)
+	stateDir := t.TempDir()
+	if err := consumeCapabilityNonce(stateDir, envelope); err != nil {
+		t.Fatal(err)
+	}
+	// A repeated CLI invocation sharing the same state dir must refuse before
+	// broadcasting; the exclusive-create ledger is the replay boundary.
+	if err := consumeCapabilityNonce(stateDir, envelope); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("replayed capability error = %v", err)
+	}
+	if err := consumeCapabilityNonce("", envelope); err == nil {
+		t.Fatal("approval without durable replay state accepted")
+	}
+}
+
+func TestApprovedCapabilityPostsExactPointerOnceOnRealDeroSurface(t *testing.T) {
+	envelope, _, approver := approvalFixture(t)
+	sim := derosim.New("htlc", "dex", "wdero")
+	sim.AddWallet("sender")
+	sim.AddWallet("recipient")
+	server := httptest.NewServer(sim.Handler())
+	defer server.Close()
+	senderRPC := server.URL + "/w/sender"
+	recipientRPC := server.URL + "/w/recipient"
+	senderAddress, err := dero.NewClient(senderRPC, "", "").GetAddress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientAddress, err := dero.NewClient(recipientRPC, "", "").GetAddress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.SenderAddress = senderAddress
+	envelope.Recipient = recipientAddress
+	signRequesterForTest(t, &envelope)
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private := approvalFixtureKeys(t)
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(private, transcript))
+
+	identitySeed := bytes.Repeat([]byte{0x31}, 32)
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approvalPath := filepath.Join(t.TempDir(), "approved.json")
+	writeApprovalTestFile(t, approvalPath, envelope)
+	stateDir := t.TempDir()
+	stateKey := make([]byte, 32)
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(stateKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := newSendApprovalFlags(t, senderRPC, identityPath, stateDir, stateKeyPath, approvalPath, hex.EncodeToString(approver))
+	bodyStore, err := mailbox.Open(filepath.Join(t.TempDir(), "body-store"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyServer := httptest.NewServer(bodyStore.Handler())
+	defer bodyServer.Close()
+	if err := fs.Set("store", bodyServer.URL); err != nil {
+		t.Fatal(err)
+	}
+	balanceBefore := sim.Balance("sender")
+	if err := postApprovedCapability(fs, recipientAddress, "0.25dero", approvalPath); err != nil {
+		t.Fatalf("real DERO approval post failed: %v", err)
+	}
+	if got := sim.Balance("sender"); got != balanceBefore-25_000 {
+		t.Fatalf("sender balance=%d want=%d", got, balanceBefore-25_000)
+	}
+	entries, err := dero.NewClient(recipientRPC, "", "").GetTransfers(context.Background(), dero.GetTransfersParams{In: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("recipient got %d transfer entries, want exactly one", len(entries))
+	}
+	posted, err := dero.EntryPayload(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPointer, _ := hex.DecodeString(envelope.Pointer)
+	gotPointer, ok := (ratchetwire.DeroChainCodec{}).DecodePointer(posted)
+	if !ok || !bytes.Equal(gotPointer.MarshalBinary(), wantPointer) {
+		t.Fatalf("posted pointer=%x, want exact approved pointer %x", gotPointer.MarshalBinary(), wantPointer)
+	}
+	if err := postApprovedCapability(fs, recipientAddress, "0.25dero", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("same approved capability replay error = %v", err)
+	}
+	if got := sim.Balance("sender"); got != balanceBefore-25_000 {
+		t.Fatalf("replay moved funds: sender balance=%d want=%d", got, balanceBefore-25_000)
+	}
+}
+
+func TestApprovedCapabilityRejectsAmountRecipientAndWalletMismatchBeforePost(t *testing.T) {
+	envelope, _, approver := approvalFixture(t)
+	sim := derosim.New("htlc", "dex", "wdero")
+	sim.AddWallet("sender")
+	sim.AddWallet("recipient")
+	server := httptest.NewServer(sim.Handler())
+	defer server.Close()
+	identitySeed := bytes.Repeat([]byte{0x31}, 32)
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recipient := sim.Address("recipient")
+	otherRecipient := derosim.ZeroAddress
+	if otherRecipient == recipient {
+		t.Fatal("sim test addresses unexpectedly match")
+	}
+	envelope.SenderAddress = sim.Address("sender")
+	envelope.Recipient = recipient
+	signRequesterForTest(t, &envelope)
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private := approvalFixtureKeys(t)
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(private, transcript))
+	approvalPath := filepath.Join(t.TempDir(), "approved.json")
+	writeApprovalTestFile(t, approvalPath, envelope)
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := newSendApprovalFlags(t, server.URL+"/w/sender", identityPath, t.TempDir(), stateKeyPath, approvalPath, hex.EncodeToString(approver))
+	balance := sim.Balance("sender")
+	for _, tc := range []struct{ to, amount string }{{recipient, "0.26dero"}, {otherRecipient, "0.25dero"}} {
+		if err := postApprovedCapability(fs, tc.to, tc.amount, approvalPath); err == nil {
+			t.Fatalf("mismatched action to=%s amount=%s accepted", tc.to, tc.amount)
+		}
+	}
+	if got := sim.Balance("sender"); got != balance {
+		t.Fatalf("rejected mismatched capability moved funds: %d -> %d", balance, got)
+	}
+}
+
+func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, approvalPath, approver string) *flag.FlagSet {
+	t.Helper()
+	fs := flag.NewFlagSet("approved-send", flag.ContinueOnError)
+	fs.SetOutput(new(bytes.Buffer))
+	e2Common(fs)
+	fs.String("identity", "", "")
+	fs.String("require-approval", "", "")
+	fs.String("approval-request", "", "")
+	fs.String("approval-file", "", "")
+	for name, value := range map[string]string{
+		"chain": "dero", "rpc": rpc, "identity": identity, "from": "", "store": "http://127.0.0.1:1", "state-dir": stateDir,
+		"state-key": stateKey, "require-approval": approver, "approval-file": approvalPath,
+		"config": filepath.Join(t.TempDir(), "missing-config.json"), "session-ttl": "0s",
+	} {
+		if err := fs.Set(name, value); err != nil {
+			t.Fatalf("set -%s: %v", name, err)
+		}
+	}
+	return fs
+}
+
+func signRequesterForTest(t *testing.T, envelope *CapabilityEnvelope) {
+	t.Helper()
+	private, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := capabilityTranscript(*envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.RequesterSignature = hex.EncodeToString(ed25519.Sign(private, transcript))
+}
+
+func approvalFixtureKeys(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	private, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x52}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return private.Public().(ed25519.PublicKey), private
 }

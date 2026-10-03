@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/sap"
+	"github.com/liqdmetal/spore/internal/secure"
 	"github.com/liqdmetal/spore/internal/store"
 )
 
@@ -520,9 +522,9 @@ func newSendE2Flagset() (*flag.FlagSet, *sendE2Opts) {
 	// the ratchet's own authentication") and made the default send path
 	// undecryptable by default receivers. The ratchet's X3DH binding is the
 	// authentication; do not re-add per-frame envelope wrapping here.
-	fs.String("require-approval", "", "64-hex ed25519 public key of a second device that must approve this send (money 2FA); requires -approval-sig or -approval-file")
-	fs.String("approval-sig", "", "hex ed25519 signature over the payment intent (see `spore msg approve`); required when -require-approval is set")
-	fs.String("approval-file", "", "read the approval signature from this file instead of -approval-sig")
+	fs.String("require-approval", "", "64-hex Ed25519 public key of a distinct second device approving one DERO transfer")
+	fs.String("approval-request", "", "write the unsigned typed DERO action request to this path (default: -state-dir/approval-NONCE.json)")
+	fs.String("approval-file", "", "signed typed DERO capability envelope (created by `spore msg approve`); posts its exact pointer without regenerating the ratchet frame")
 	// e2Common supplies the shared carrier, mailbox, and daemon flags
 	// (state-dir, state-key, maildb, store, chain, …) — same pattern as
 	// newDeroE2SendFlags.
@@ -588,6 +590,13 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	to = resolvedAddr
 	if pinned == "" {
 		pinned = resolvedPinned
+	}
+	approvalFile := flagValueOr(fs, "approval-file", "")
+	if approvalFile != "" {
+		if pinned == "" {
+			return fmt.Errorf("%s resolved to %s but no pinned sig is known: pass -pinned-sig HEX or use a trusted contact", to, to)
+		}
+		return postApprovedCapability(fs, to, amount, approvalFile)
 	}
 	if pinned == "" {
 		return fmt.Errorf("%s resolved to %s but no pinned sig is known: pass -pinned-sig HEX, or save it once with `spore msg mail add -addr %s -nick NAME -pinned SIG`. The pinned sig is your out-of-band trust anchor — Spore will not guess it", to, to, to)
@@ -657,10 +666,39 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 	if err != nil {
 		return err
 	}
-	// Second-device approval gate (money 2FA): must pass BEFORE any value
-	// moves (the HTLC escrow branch below funds before it posts the pointer).
-	if err := requireApproval(fs, flagValueOr(fs, "chain", ""), to, amount, raw); err != nil {
-		return err
+	if approverHex := flagValueOr(fs, "require-approval", ""); approverHex != "" {
+		approver, decodeErr := hex.DecodeString(approverHex)
+		if decodeErr != nil || len(approver) != ed25519.PublicKeySize {
+			return errors.New("-require-approval must be a 64-hex Ed25519 public key")
+		}
+		requester, keyErr := secure.SigKeypairOf(id)
+		if keyErr != nil {
+			return keyErr
+		}
+		defer func() {
+			for i := range requester {
+				requester[i] = 0
+			}
+		}()
+		carrier, carrierErr := e2Carrier(fs)
+		if carrierErr != nil {
+			return carrierErr
+		}
+		deroBackend, ok := carrier.Chain.(*dero.Backend)
+		if !ok {
+			return errors.New("second-device capability requires the DERO wallet backend")
+		}
+		senderAddress, keyErr := deroBackend.Address(context.Background())
+		if keyErr != nil {
+			return fmt.Errorf("read DERO sender address: %w", keyErr)
+		}
+		senderAddress, keyErr = dero.ValidateAddress(senderAddress)
+		if keyErr != nil {
+			return keyErr
+		}
+		if err := prepareCapabilityApproval(fs, flagValueOr(fs, "chain", ""), senderAddress, to, amount, raw, sessID, requester); err != nil {
+			return err
+		}
 	}
 	// Relay-fabric route (F2): resolve the contact's seed + relays EARLY, so
 	// a misconfigured -route-fabric fails BEFORE the chain post or the

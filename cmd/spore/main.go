@@ -175,6 +175,7 @@ func usage() {
   spore msg recv -chain evm|xmr|solana ...                              (legacy receive compatibility)
   spore msg prekeygen -identity-out F -spk-out F -bundle-out F [-opk-out F]   (E2 key material)
   spore msg send-e2 -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX
+             [-require-approval PUBKEY [-approval-request FILE | -approval-file SIGNED.json]]
              [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] [-ringsize 8|16] -store URL
              -state-dir D -state-key F [-msg-file F|-]   (forward-private E2 send; plaintext NEVER on argv)
   spore msg recv-e2 -identity F -spk F [-opk-pool F] -store URL -state-dir D -state-key F
@@ -190,6 +191,7 @@ func usage() {
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
+  spore msg approve -request FILE -identity FILE -out FILE [-confirm]      (review and sign a typed DERO transfer approval)
   spore msg escrow claim -hash HEX -preimage HEX -to ADDR -session HEX ...   (close a funded HTLC with the preimage; announces in-thread)
   spore msg escrow refund -hash HEX -to ADDR -session HEX ...                (refund an expired HTLC; announces in-thread)
   spore msg dex swap|wrap|unwrap [-ta T -tb T -min-out N | -amount Ndero] -to ADDR -session HEX ...  (relay-dex settlement; announces in-thread; SPORE_SAP_* env)
