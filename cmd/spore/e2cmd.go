@@ -22,6 +22,7 @@ import (
 	"github.com/liqdmetal/spore/internal/backend"
 	"github.com/liqdmetal/spore/internal/chain"
 	"github.com/liqdmetal/spore/internal/dero"
+	"github.com/liqdmetal/spore/internal/evm"
 	"github.com/liqdmetal/spore/internal/ratchet"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/sap"
@@ -684,19 +685,42 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 		if carrierErr != nil {
 			return carrierErr
 		}
-		deroBackend, ok := carrier.Chain.(*dero.Backend)
-		if !ok {
-			return errors.New("second-device capability requires the DERO wallet backend")
+		var senderAddress string
+		chain := strings.ToLower(flagValueOr(fs, "chain", ""))
+		switch chain {
+		case "dero":
+			deroBackend, ok := carrier.Chain.(*dero.Backend)
+			if !ok {
+				return errors.New("second-device capability requires the DERO wallet backend")
+			}
+			addr, err := deroBackend.Address(context.Background())
+			if err != nil {
+				return fmt.Errorf("read DERO sender address: %w", err)
+			}
+			senderAddress, err = dero.ValidateAddress(addr)
+			if err != nil {
+				return err
+			}
+		case "evm":
+			evmBackend, ok := carrier.Chain.(*evm.Backend)
+			if !ok {
+				return errors.New("second-device capability requires the EVM backend")
+			}
+			if evmBackend.Mailbox() == "" {
+				return errors.New("second-device capability requires a configured EVM MyceliumMailbox (-mailbox)")
+			}
+			addr, err := evmBackend.Address(context.Background())
+			if err != nil {
+				return fmt.Errorf("read EVM sender address: %w", err)
+			}
+			senderAddress, err = evm.ValidateAddress(addr)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("second-device capability unsupported on chain %q", chain)
 		}
-		senderAddress, keyErr := deroBackend.Address(context.Background())
-		if keyErr != nil {
-			return fmt.Errorf("read DERO sender address: %w", keyErr)
-		}
-		senderAddress, keyErr = dero.ValidateAddress(senderAddress)
-		if keyErr != nil {
-			return keyErr
-		}
-		if err := prepareCapabilityApproval(fs, flagValueOr(fs, "chain", ""), senderAddress, to, amount, raw, sessID, requester); err != nil {
+		if err := prepareCapabilityApproval(fs, chain, senderAddress, to, amount, raw, sessID, requester); err != nil {
 			return err
 		}
 	}

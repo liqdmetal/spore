@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -38,7 +39,7 @@ func approvalFixture(t *testing.T) (CapabilityEnvelope, ed25519.PrivateKey, ed25
 	var sessionID [8]byte
 	copy(sessionID[:], []byte("session1"))
 	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
-	envelope, err := newCapabilityEnvelope(derosim.ZeroAddress, derosim.ZeroAddress, 25_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	envelope, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, 25_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,4 +324,118 @@ func approvalFixtureKeys(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 		t.Fatal(err)
 	}
 	return private.Public().(ed25519.PublicKey), private
+}
+
+func TestEVMCapabilityApprovalRoundTripAndDeliverPost(t *testing.T) {
+	requesterIdentity := bytes.Repeat([]byte{0x31}, 32)
+	requesterPrivate, err := secure.SigKeypairOf(requesterIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverIdentity := bytes.Repeat([]byte{0x52}, 32)
+	approverPrivate, err := secure.SigKeypairOf(approverIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("sess-evm"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+
+	senderAddress := "0x1111111111111111111111111111111111111111"
+	recipientAddress := "0x2222222222222222222222222222222222222222"
+	mailboxAddress := "0x3333333333333333333333333333333333333333"
+
+	envelope, err := newCapabilityEnvelope("evm", senderAddress, recipientAddress, 0, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatalf("new EVM capability: %v", err)
+	}
+	if envelope.Action != capabilityEVMDeliver || envelope.Chain != "evm" {
+		t.Fatalf("wrong action=%q chain=%q", envelope.Action, envelope.Chain)
+	}
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(approverPrivate, transcript))
+
+	wantApprover := hex.EncodeToString(approverPublic)
+	if err := verifyCapabilityApproval(envelope, wantApprover, time.Now()); err != nil {
+		t.Fatalf("valid EVM capability rejected: %v", err)
+	}
+
+	// EVM deliver() is non-payable; any nonzero amount must be rejected
+	envelopeNonzero := envelope
+	envelopeNonzero.AmountAtomic = 100
+	if err := validateCapabilityEnvelope(envelopeNonzero, time.Now(), true); err == nil {
+		t.Fatal("payable EVM capability unexpectedly accepted")
+	}
+
+	// Mock node that captures the eth_sendTransaction deliver() call
+	var postedParams map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string        `json:"method"`
+			Params []interface{} `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "eth_sendTransaction" && len(req.Params) > 0 {
+			if m, ok := req.Params[0].(map[string]interface{}); ok {
+				postedParams = m
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0", "id": 1, "result": "0xfeedbeef00000000000000000000000000000000000000000000000000000001",
+		})
+	}))
+	defer srv.Close()
+
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(requesterIdentity)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approvalPath := filepath.Join(t.TempDir(), "evm-approved.json")
+	writeApprovalTestFile(t, approvalPath, envelope)
+	stateDir := t.TempDir()
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := flag.NewFlagSet("evm-approved-send", flag.ContinueOnError)
+	fs.SetOutput(new(bytes.Buffer))
+	e2Common(fs)
+	fs.String("identity", "", "")
+	fs.String("require-approval", "", "")
+	fs.String("approval-request", "", "")
+	fs.String("approval-file", "", "")
+	for name, value := range map[string]string{
+		"chain": "evm", "rpc": srv.URL, "identity": identityPath, "from": senderAddress, "mailbox": mailboxAddress,
+		"store": "http://127.0.0.1:1", "state-dir": stateDir, "state-key": stateKeyPath,
+		"require-approval": wantApprover, "approval-file": approvalPath,
+		"config": filepath.Join(t.TempDir(), "missing-config.json"), "session-ttl": "0s",
+	} {
+		if err := fs.Set(name, value); err != nil {
+			t.Fatalf("set -%s: %v", name, err)
+		}
+	}
+
+	if err := postApprovedCapability(fs, recipientAddress, "", approvalPath); err != nil {
+		t.Fatalf("postApprovedCapability EVM failed: %v", err)
+	}
+
+	if postedParams == nil {
+		t.Fatal("no transaction was posted to the EVM node")
+	}
+	if to, ok := postedParams["to"].(string); !ok || !strings.EqualFold(to, mailboxAddress) {
+		t.Fatalf("posted to=%v, want mailbox=%v", to, mailboxAddress)
+	}
+	if from, ok := postedParams["from"].(string); !ok || !strings.EqualFold(from, senderAddress) {
+		t.Fatalf("posted from=%v, want sender=%v", from, senderAddress)
+	}
+
+	// Replay must be refused immediately
+	if err := postApprovedCapability(fs, recipientAddress, "", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("replayed EVM capability error = %v", err)
+	}
 }

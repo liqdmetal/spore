@@ -58,6 +58,9 @@ func NewBackend(rpcURL, chainName, fromAddr string) *Backend {
 // ListIncoming reads Inbox logs. Empty clears it back to raw calldata.
 func (b *Backend) SetMailbox(addr string) { b.mailbox = addr }
 
+// Mailbox returns the currently configured MyceliumMailbox contract address.
+func (b *Backend) Mailbox() string { return b.mailbox }
+
 // SetHTTPClient swaps the backend's HTTP client (custom timeouts, proxying).
 func (b *Backend) SetHTTPClient(c *http.Client) { b.http = c }
 

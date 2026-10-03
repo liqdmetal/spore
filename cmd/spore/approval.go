@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/liqdmetal/spore/internal/dero"
+	"github.com/liqdmetal/spore/internal/evm"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
 )
@@ -31,6 +32,7 @@ const (
 	capabilityProtocol     = "spore.capability-approval"
 	capabilityVersion      = 1
 	capabilityDeroTransfer = "dero.transfer-with-pointer"
+	capabilityEVMDeliver   = "evm.deliver-with-pointer"
 	capabilityNonceSize    = 16
 	maxCapabilityFileBytes = 16 << 10
 )
@@ -56,7 +58,7 @@ type CapabilityEnvelope struct {
 	Signature          string `json:"signature,omitempty"`
 }
 
-func newCapabilityEnvelope(senderAddress, recipient string, amount uint64, pointer []byte, sessionID [8]byte, requesterPrivate ed25519.PrivateKey, approver ed25519.PublicKey, now time.Time) (CapabilityEnvelope, error) {
+func newCapabilityEnvelope(chain, senderAddress, recipient string, amount uint64, pointer []byte, sessionID [8]byte, requesterPrivate ed25519.PrivateKey, approver ed25519.PublicKey, now time.Time) (CapabilityEnvelope, error) {
 	var nonce [capabilityNonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return CapabilityEnvelope{}, fmt.Errorf("approval nonce: %w", err)
@@ -66,9 +68,16 @@ func newCapabilityEnvelope(senderAddress, recipient string, amount uint64, point
 	}
 	created := now.Unix()
 	requester := requesterPrivate.Public().(ed25519.PublicKey)
+	action := capabilityDeroTransfer
+	if strings.EqualFold(chain, "evm") {
+		action = capabilityEVMDeliver
+		chain = "evm"
+	} else {
+		chain = "dero"
+	}
 	e := CapabilityEnvelope{
-		Protocol: capabilityProtocol, Version: capabilityVersion, Action: capabilityDeroTransfer,
-		Chain: "dero", Requester: hex.EncodeToString(requester), SenderAddress: senderAddress, Recipient: recipient, AmountAtomic: amount,
+		Protocol: capabilityProtocol, Version: capabilityVersion, Action: action,
+		Chain: chain, Requester: hex.EncodeToString(requester), SenderAddress: senderAddress, Recipient: recipient, AmountAtomic: amount,
 		Pointer: hex.EncodeToString(pointer), SessionID: hex.EncodeToString(sessionID[:]), CreatedAt: created,
 		ExpiresAt: created + int64(ApprovalTTL.Seconds()),
 		Nonce:     hex.EncodeToString(nonce[:]), Approver: hex.EncodeToString(approver),
@@ -151,24 +160,42 @@ func validateCapabilityEnvelope(e CapabilityEnvelope, now time.Time, signed bool
 	if e.Protocol != capabilityProtocol || e.Version != capabilityVersion {
 		return errors.New("approval envelope: unsupported protocol or version")
 	}
-	if e.Action != capabilityDeroTransfer || e.Chain != "dero" {
-		return errors.New("approval envelope: only dero.transfer-with-pointer on DERO is supported")
+	switch e.Action {
+	case capabilityDeroTransfer:
+		if e.Chain != "dero" {
+			return errors.New("approval envelope: dero.transfer-with-pointer requires chain=dero")
+		}
+		if _, err := dero.ValidateAddress(e.Recipient); err != nil {
+			return fmt.Errorf("approval envelope: invalid DERO recipient: %w", err)
+		}
+		if _, err := dero.ValidateAddress(e.SenderAddress); err != nil {
+			return fmt.Errorf("approval envelope: invalid DERO sender address: %w", err)
+		}
+		if e.AmountAtomic == 0 {
+			return errors.New("approval envelope: amount_atomic must be greater than zero for DERO transfer")
+		}
+	case capabilityEVMDeliver:
+		if e.Chain != "evm" {
+			return errors.New("approval envelope: evm.deliver-with-pointer requires chain=evm")
+		}
+		if _, err := evm.ValidateAddress(e.Recipient); err != nil {
+			return fmt.Errorf("approval envelope: invalid EVM recipient: %w", err)
+		}
+		if _, err := evm.ValidateAddress(e.SenderAddress); err != nil {
+			return fmt.Errorf("approval envelope: invalid EVM sender address: %w", err)
+		}
+		if e.AmountAtomic != 0 {
+			return errors.New("approval envelope: EVM mailbox deliver() is not payable; amount_atomic must be 0")
+		}
+	default:
+		return errors.New("approval envelope: unsupported action")
 	}
 	if e.Recipient == "" || strings.TrimSpace(e.Recipient) != e.Recipient || len(e.Recipient) > 512 {
 		return errors.New("approval envelope: invalid recipient")
 	}
-	if _, err := dero.ValidateAddress(e.Recipient); err != nil {
-		return fmt.Errorf("approval envelope: invalid DERO recipient: %w", err)
-	}
-	if _, err := dero.ValidateAddress(e.SenderAddress); err != nil {
-		return fmt.Errorf("approval envelope: invalid DERO sender address: %w", err)
-	}
 	requester, err := hex.DecodeString(e.Requester)
 	if err != nil || len(requester) != ed25519.PublicKeySize || hex.EncodeToString(requester) != e.Requester {
 		return errors.New("approval envelope: requester_public_key must be 64 lowercase hex characters")
-	}
-	if e.AmountAtomic == 0 {
-		return errors.New("approval envelope: amount_atomic must be greater than zero")
 	}
 	pointer, err := hex.DecodeString(e.Pointer)
 	if err != nil || hex.EncodeToString(pointer) != e.Pointer {
@@ -311,7 +338,11 @@ func approveCapabilityFile(requestPath, identityPath, outputPath string, confirm
 	}
 	pointer, _ := hex.DecodeString(e.Pointer)
 	pointerHash := sha256.Sum256(pointer)
-	fmt.Fprintf(os.Stderr, "DERO transfer approval: %s DERO (%d atomic units) from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic, e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	if e.Action == capabilityEVMDeliver {
+		fmt.Fprintf(os.Stderr, "EVM mailbox deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	} else {
+		fmt.Fprintf(os.Stderr, "DERO transfer approval: %s DERO (%d atomic units) from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic, e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	}
 	if !confirm {
 		return errors.New("explicit human approval required; review the action above and retry with -confirm")
 	}
@@ -404,18 +435,24 @@ func validateCapabilityRequestFlags(fs *flag.FlagSet, chainName, amount, escrow 
 	if requestPath != "" && approvalPath != "" {
 		return errors.New("-approval-request cannot be combined with -approval-file")
 	}
-	if !strings.EqualFold(chainName, "dero") {
-		return errors.New("second-device capabilities currently support DERO only")
+	if !strings.EqualFold(chainName, "dero") && !strings.EqualFold(chainName, "evm") {
+		return errors.New("second-device capabilities currently support DERO and EVM only")
 	}
 	if escrow != "" {
 		return errors.New("second-device capabilities do not authorize HTLC escrow")
 	}
-	asset, atomic, err := parseAmountFlag(amount)
-	if err != nil {
-		return err
-	}
-	if asset != "dero" || atomic == 0 {
-		return errors.New("second-device capability requires a positive DERO -amount")
+	if strings.EqualFold(chainName, "dero") {
+		asset, atomic, err := parseAmountFlag(amount)
+		if err != nil {
+			return err
+		}
+		if asset != "dero" || atomic == 0 {
+			return errors.New("second-device capability requires a positive DERO -amount")
+		}
+	} else if strings.EqualFold(chainName, "evm") {
+		if amount != "" {
+			return errors.New("second-device capability on EVM mailbox path does not accept -amount")
+		}
 	}
 	approver, err := hex.DecodeString(approverHex)
 	if err != nil || len(approver) != ed25519.PublicKeySize {
@@ -489,15 +526,19 @@ func prepareCapabilityApproval(fs *flag.FlagSet, chainName, senderAddress, recip
 	if err := validateCapabilityRequestFlags(fs, chainName, amount, flagValueOr(fs, "escrow", ""), requesterPublic); err != nil {
 		return err
 	}
-	_, atomic, err := parseAmountFlag(amount)
-	if err != nil {
-		return err
+	var atomic uint64
+	if strings.EqualFold(chainName, "dero") {
+		_, a, err := parseAmountFlag(amount)
+		if err != nil {
+			return err
+		}
+		atomic = a
 	}
 	approver, err := hex.DecodeString(approverHex)
 	if err != nil {
 		return err
 	}
-	envelope, err := newCapabilityEnvelope(senderAddress, recipient, atomic, pointer, sessionID, requester, ed25519.PublicKey(approver), time.Now())
+	envelope, err := newCapabilityEnvelope(chainName, senderAddress, recipient, atomic, pointer, sessionID, requester, ed25519.PublicKey(approver), time.Now())
 	if err != nil {
 		return err
 	}
@@ -512,7 +553,7 @@ func prepareCapabilityApproval(fs *flag.FlagSet, chainName, senderAddress, recip
 	if err := writeCapabilityFile(path, envelope); err != nil {
 		return err
 	}
-	return fmt.Errorf("second-device approval required; review %s on the approver device with `spore msg approve -request %s -identity KEY -out SIGNED.json -confirm`, then rerun this exact DERO send with -approval-file SIGNED.json (valid until %s)", path, path, time.Unix(envelope.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	return fmt.Errorf("second-device approval required; review %s on the approver device with `spore msg approve -request %s -identity KEY -out SIGNED.json -confirm`, then rerun this exact %s send with -approval-file SIGNED.json (valid until %s)", path, path, strings.ToUpper(chainName), time.Unix(envelope.ExpiresAt, 0).UTC().Format(time.RFC3339))
 }
 
 func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath string) error {
@@ -520,27 +561,39 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	if approverHex == "" {
 		return errors.New("-approval-file requires -require-approval")
 	}
-	if !strings.EqualFold(flagValueOr(fs, "chain", ""), "dero") {
-		return errors.New("signed capabilities currently support DERO only")
+	chain := strings.ToLower(flagValueOr(fs, "chain", ""))
+	if chain != "dero" && chain != "evm" {
+		return errors.New("signed capabilities currently support DERO and EVM only")
 	}
 	if flagValueOr(fs, "escrow", "") != "" {
-		return errors.New("signed DERO capabilities do not authorize HTLC escrow")
+		return errors.New("signed capabilities do not authorize HTLC escrow")
 	}
 	if flagValueOr(fs, "approval-request", "") != "" {
 		return errors.New("-approval-request cannot be combined with -approval-file")
 	}
-	asset, atomic, err := parseAmountFlag(amount)
-	if err != nil {
-		return err
-	}
-	if asset != "dero" || atomic == 0 {
-		return errors.New("signed capability must match a positive DERO -amount")
+	var atomic uint64
+	if chain == "dero" {
+		asset, a, err := parseAmountFlag(amount)
+		if err != nil {
+			return err
+		}
+		if asset != "dero" || a == 0 {
+			return errors.New("signed capability must match a positive DERO -amount")
+		}
+		atomic = a
+	} else if amount != "" {
+		return errors.New("signed capability on EVM mailbox path does not accept -amount")
 	}
 	resolved, _, err := resolveTo(context.Background(), recipient, flagValueOr(fs, "maildb", ""), flagValueOr(fs, "daemon", ""))
 	if err != nil {
 		return err
 	}
-	canonicalRecipient, err := dero.ValidateAddress(resolved)
+	var canonicalRecipient string
+	if chain == "dero" {
+		canonicalRecipient, err = dero.ValidateAddress(resolved)
+	} else {
+		canonicalRecipient, err = evm.ValidateAddress(resolved)
+	}
 	if err != nil {
 		return err
 	}
@@ -551,12 +604,15 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	if err := verifyCapabilityApproval(envelope, approverHex, time.Now()); err != nil {
 		return err
 	}
+	if envelope.Chain != chain {
+		return fmt.Errorf("signed capability is for chain %s, not %s", envelope.Chain, chain)
+	}
 	if envelope.Recipient != canonicalRecipient || envelope.AmountAtomic != atomic {
 		return errors.New("signed capability does not match this recipient and amount")
 	}
 	identityPath := flagValueOr(fs, "identity", "")
 	if identityPath == "" {
-		return errors.New("approved DERO send requires the original -identity")
+		return fmt.Errorf("approved %s send requires the original -identity", strings.ToUpper(chain))
 	}
 	seed, err := readHexFile(identityPath, 32)
 	if err != nil {
@@ -579,20 +635,39 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	if err != nil {
 		return err
 	}
-	backend, ok := carrier.Chain.(*dero.Backend)
-	if !ok {
-		return errors.New("signed DERO capability resolved to a non-DERO carrier")
-	}
-	currentSender, err := backend.Address(context.Background())
-	if err != nil {
-		return fmt.Errorf("read current DERO sender address: %w", err)
-	}
-	canonicalSender, err := dero.ValidateAddress(currentSender)
-	if err != nil {
-		return err
+	var canonicalSender string
+	if chain == "dero" {
+		backend, ok := carrier.Chain.(*dero.Backend)
+		if !ok {
+			return errors.New("signed DERO capability resolved to a non-DERO carrier")
+		}
+		currentSender, err := backend.Address(context.Background())
+		if err != nil {
+			return fmt.Errorf("read current DERO sender address: %w", err)
+		}
+		canonicalSender, err = dero.ValidateAddress(currentSender)
+		if err != nil {
+			return err
+		}
+	} else {
+		evmBackend, ok := carrier.Chain.(*evm.Backend)
+		if !ok {
+			return errors.New("signed EVM capability resolved to a non-EVM carrier")
+		}
+		if evmBackend.Mailbox() == "" {
+			return errors.New("signed EVM capability requires a configured MyceliumMailbox (-mailbox)")
+		}
+		currentSender, err := evmBackend.Address(context.Background())
+		if err != nil {
+			return fmt.Errorf("read current EVM sender address: %w", err)
+		}
+		canonicalSender, err = evm.ValidateAddress(currentSender)
+		if err != nil {
+			return err
+		}
 	}
 	if envelope.SenderAddress != canonicalSender {
-		return errors.New("signed capability is bound to a different DERO sender wallet")
+		return fmt.Errorf("signed capability is bound to sender %s, current sender is %s", envelope.SenderAddress, canonicalSender)
 	}
 	pointer, _ := hex.DecodeString(envelope.Pointer)
 	if err := consumeCapabilityNonce(flagValueOr(fs, "state-dir", ""), envelope); err != nil {
@@ -600,12 +675,16 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	}
 	result, err := carrier.PostPointer(context.Background(), envelope.Recipient, pointer, envelope.AmountAtomic)
 	if err != nil {
-		return fmt.Errorf("approved DERO broadcast result is ambiguous; this nonce is burned and cannot be retried: %w", err)
+		return fmt.Errorf("approved %s broadcast result is ambiguous; this nonce is burned and cannot be retried: %w", strings.ToUpper(chain), err)
 	}
 	sid, _ := hex.DecodeString(envelope.SessionID)
 	var sessionID [8]byte
 	copy(sessionID[:], sid)
-	fmt.Printf("approved DERO capability posted txid %s amount %sdero pointer %s\n", result.TxID, formatAmount("dero", envelope.AmountAtomic), envelope.Pointer)
+	if chain == "dero" {
+		fmt.Printf("approved DERO capability posted txid %s amount %sdero pointer %s\n", result.TxID, formatAmount("dero", envelope.AmountAtomic), envelope.Pointer)
+	} else {
+		fmt.Printf("approved EVM capability posted txid %s pointer %s\n", result.TxID, envelope.Pointer)
+	}
 	fabricPublishPointer(context.Background(), fabricRoute, sessionID, pointer)
 	return nil
 }

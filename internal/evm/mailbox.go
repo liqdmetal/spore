@@ -70,6 +70,22 @@ func addrTopicToHex(b [32]byte) string {
 	return "0x" + strings.ToLower(hex.EncodeToString(b[:]))
 }
 
+// ValidateAddress verifies that an address is a valid 0x-prefixed 20-byte (40 hex digit) address
+// and returns it canonicalized to lowercase hex with 0x prefix.
+func ValidateAddress(addr string) (string, error) {
+	if !strings.HasPrefix(addr, "0x") && !strings.HasPrefix(addr, "0X") {
+		return "", fmt.Errorf("evm: address %q must start with 0x", addr)
+	}
+	raw, err := hex.DecodeString(addr[2:])
+	if err != nil {
+		return "", fmt.Errorf("evm: address %q invalid hex: %w", addr, err)
+	}
+	if len(raw) != 20 {
+		return "", fmt.Errorf("evm: address %q is %d bytes, want 20", addr, len(raw))
+	}
+	return "0x" + strings.ToLower(hex.EncodeToString(raw)), nil
+}
+
 // padAddr20 returns an ABI word (32 bytes) holding a 20-byte address, right-aligned.
 func padAddr20(addr string) ([32]byte, error) {
 	var out [32]byte
