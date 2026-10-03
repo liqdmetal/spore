@@ -295,9 +295,10 @@ even when out-of-repo design notes are gone.
 
 Before the signed tag, the release-prep pass finishes the release's honest
 claims: the fee + limit notes are filled from the step-2 estimate outputs,
-and the anvil-era current-state prose in VISION/design/ROADMAP is drained to
-match the published chain status — `TestReleasePrepProseDrainedAfterFlip`
-enforces that drain once the registry entry from step 4 exists.
+and Patches 6 and 7 drain the narrative and remaining audited-document
+status claims to match the published chain status —
+`TestReleasePrepProseDrainedAfterFlip` enforces that drain once the registry
+entry from step 4 exists.
 
 ### STATUS: MyceliumMailbox on Base — PENDING
 
