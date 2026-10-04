@@ -172,7 +172,38 @@ Solana inbox PDA, and the unspent nonce. Any mismatch refuses before broadcast.
 Once posted, the nonce is burned; re-scanning the queue with `-state-dir` will
 show the request as spent.
 
-## 5. Operating notes
+## 5. Operator metrics
+
+For queue health and SLA questions, summarize the pipeline's artifacts without
+touching anything:
+
+```bash
+spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/state
+# approval metrics (queue ~/approval-queue; outbox ~/outbox; ledger ~/state)
+#   queue: 12 request(s), 1 ignored file(s)
+#   status: EXPIRED=1 PENDING=2 SIGNED=1 SPENT=8
+#   skip reasons (why requests are not signable now):
+#     8 x nonce already consumed; replay refused
+#     1 x approval envelope: expired
+#   ledger: 8 spent nonce(s)
+#   outbox: 8 signed output(s), 0 signed-but-unspent
+#   approval latency (request -> signed), 8 matched: min 12s  p50 1m5s  p95 9m30s  max 13m40s  mean 2m1s
+#   post latency (signed -> spent), 8 matched: min 5s  p50 40s  p95 3m0s  max 4m10s  mean 55s
+```
+
+- Reads only files the workflow already produces (queue, outbox,
+  `approval-spent` ledger), so it needs no new state and always agrees with
+  what `approve` would do next. `-json` carries the same numbers for dashboards.
+- Approval latency (request created -> approval signed) is bounded by the
+  15-minute TTL; post latency (approval signed -> nonce burned) is the
+  requester's remaining window. p95 creeping toward 15m means requests are
+  expiring on the approver's desk — scale the `-watch` station or shorten the
+  requester's polling.
+- `signed-but-unspent` approvals in the outbox are waiting on the requester's
+  send; a growing count with a rising post latency means the handoff (not the
+  approval) is the bottleneck.
+
+## 6. Operating notes
 
 - **TTL is 15 minutes.** Expired requests are skipped, not signed. Re-request
   if the queue stalls; the nonce is fresh each time.
