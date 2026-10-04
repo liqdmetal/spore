@@ -138,14 +138,14 @@ func TestApprovalLockStaleBreakBusyAndOwnership(t *testing.T) {
 	lockPath := requestPath + ".lock"
 	now := time.Now()
 
-	// Busy: a fresh lock naming another station blocks acquisition with the
-	// holder PID in the reason.
-	if err := os.WriteFile(lockPath, []byte("4242\n"), 0o600); err != nil {
+	// Busy: a fresh lock naming a live holder blocks acquisition with the
+	// holder PID in the reason. Own hostname + own PID = provably live.
+	if err := os.WriteFile(lockPath, []byte(lockOwnerForTest()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	release, busy, err := lockApprovalRequest(requestPath, now)
-	if err != nil || release != nil || busy == "" || !strings.Contains(busy, "pid 4242") {
-		t.Fatalf("fresh foreign lock must be busy, got release!=nil=%v busy=%q err=%v", release != nil, busy, err)
+	if err != nil || release != nil || busy == "" || !strings.Contains(busy, "pid "+pidForTest()) {
+		t.Fatalf("fresh live lock must be busy, got release!=nil=%v busy=%q err=%v", release != nil, busy, err)
 	}
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("busy path must leave the lock in place: %v", err)
@@ -160,8 +160,8 @@ func TestApprovalLockStaleBreakBusyAndOwnership(t *testing.T) {
 	if err != nil || busy != "" || release == nil {
 		t.Fatalf("stale lock must be broken and taken, got busy=%q err=%v", busy, err != nil)
 	}
-	if b, rerr := os.ReadFile(lockPath); rerr != nil || strings.TrimSpace(string(b)) != pidForTest() {
-		t.Fatalf("lock must now name our pid, got %q err=%v", b, rerr)
+	if b, rerr := os.ReadFile(lockPath); rerr != nil || strings.TrimSpace(string(b)) != lockOwnerForTest() {
+		t.Fatalf("lock must now name us, got %q err=%v", b, rerr)
 	}
 	// Contention marker: a stale break must never leave delete-recreate races
 	// — verify no second .broken file lingers.
@@ -177,7 +177,8 @@ func TestApprovalLockStaleBreakBusyAndOwnership(t *testing.T) {
 	}
 
 	// Release must never delete a lock we do not own: take the lock, then
-	// overwrite its content as if a stale-breaker replaced it, and release.
+	// overwrite its content as if a stale-breaker replaced it (legacy pid-only
+	// body — never ours), and release.
 	release, _, err = lockApprovalRequest(requestPath, now)
 	if err != nil || release == nil {
 		t.Fatalf("reacquire after release failed: %v", err != nil)
@@ -194,17 +195,57 @@ func TestApprovalLockStaleBreakBusyAndOwnership(t *testing.T) {
 	}
 }
 
+// TestApprovalLockBreaksDeadLocalHolderOnly pins liveness breaking: a lock
+// whose holder is provably dead on this host breaks ahead of the TTL, while
+// another host's lock stays TTL-only even with a locally dead PID.
+func TestApprovalLockBreaksDeadLocalHolderOnly(t *testing.T) {
+	dir := t.TempDir()
+	requestPath, _ := lockTestRequest(t, dir, "dead", time.Now())
+	lockPath := requestPath + ".lock"
+	now := time.Now()
+
+	// Dead local holder (a PID no live process can carry): broken at once,
+	// ownership taken by the breaker.
+	if err := os.WriteFile(lockPath, []byte(approvalLockHostname+" 4194303\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, busy, err := lockApprovalRequest(requestPath, now)
+	if err != nil || release == nil || busy != "" {
+		t.Fatalf("dead local holder must be broken immediately, got busy=%q err=%v", busy, err)
+	}
+	if b, rerr := os.ReadFile(lockPath); rerr != nil || strings.TrimSpace(string(b)) != lockOwnerForTest() {
+		t.Fatalf("breaker must own the lock after the break, got %q err=%v", b, rerr)
+	}
+	release()
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("release must remove our lock, stat err=%v", err)
+	}
+
+	// Another host's lock is never broken by liveness, even though its PID
+	// is dead locally: TTL stays the only remote break trigger.
+	if err := os.WriteFile(lockPath, []byte("other-host-9 4194303\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, busy, err = lockApprovalRequest(requestPath, now)
+	if err != nil || release != nil || !strings.Contains(busy, "pid 4194303") {
+		t.Fatalf("remote lock must stay busy until TTL, got busy=%q err=%v", busy, err)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("busy path must leave a remote lock in place: %v", err)
+	}
+}
+
 // TestApprovalBatchSkipsOnLiveForeignLock pins the batch-core behavior for a
 // request whose lock is held by a live station: quiet skip, no signature.
 func TestApprovalBatchSkipsOnLiveForeignLock(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "outbox")
 	requestPath, identityPath := lockTestRequest(t, dir, "held", time.Now())
-	if err := os.WriteFile(requestPath+".lock", []byte("4242\n"), 0o600); err != nil {
+	if err := os.WriteFile(requestPath+".lock", []byte(lockOwnerForTest()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	results := runApprovalBatch([]string{requestPath}, identityPath, outDir, "", true)
-	if len(results) != 1 || results[0].Status != approvalBatchSkipped || !strings.Contains(results[0].Reason, "signing lock held by another approver (pid 4242)") {
+	if len(results) != 1 || results[0].Status != approvalBatchSkipped || !strings.Contains(results[0].Reason, "signing lock held by another approver (pid "+pidForTest()+")") {
 		t.Fatalf("live foreign lock must be a quiet skip, got: %+v", results)
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "held.signed.json")); !os.IsNotExist(err) {
@@ -217,11 +258,15 @@ func TestApprovalBatchSkipsOnLiveForeignLock(t *testing.T) {
 		}
 	}
 	// And the one-shot CLI path refuses the same way (no lock file left).
-	if err := approveCapabilityFile(requestPath, identityPath, filepath.Join(dir, "manual.signed.json"), true); err == nil || !strings.Contains(err.Error(), "pid 4242") {
+	if err := approveCapabilityFile(requestPath, identityPath, filepath.Join(dir, "manual.signed.json"), true); err == nil || !strings.Contains(err.Error(), "pid "+pidForTest()) {
 		t.Fatalf("one-shot approve must refuse a live foreign lock, got: %v", err)
 	}
 }
 
 func pidForTest() string {
 	return strconv.Itoa(os.Getpid())
+}
+
+func lockOwnerForTest() string {
+	return approvalLockHostname + " " + pidForTest()
 }

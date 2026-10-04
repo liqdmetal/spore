@@ -103,9 +103,10 @@ Batch rules:
   one-shot `approve -request` alike — so two approver stations racing the same
   queue can never double-sign one nonce, no matter how their `-out-dir`s differ.
 - Locks self-heal: a station that crashes mid-sign leaves its lock, and the
-  next scanner breaks it once the lock is older than 60 s (`approvalLockTTL`)
-  and signs the request itself. No manual cleanup unless you cannot wait a
-  minute.
+  next scanner breaks it and signs the request itself — immediately when the
+  lock provably names a dead process on the same host, otherwise once it is
+  older than 60 s (`approvalLockTTL`). No manual cleanup unless you cannot
+  wait a minute.
 - Exit code is 0 when nothing *failed*; skips are normal queue hygiene.
 - `-json` emits a self-contained report for driving the next step:
 

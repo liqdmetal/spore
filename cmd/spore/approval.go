@@ -928,8 +928,11 @@ func scanApprovalRequestDir(dir string) ([]string, error) {
 
 // approvalLockTTL is how long a signing lock may sit untouched before
 // another station treats its holder as crashed and breaks it. Signing is a
-// sub-second local operation, so a lock this old means the holder is gone;
-// the exclusive-create output remains the backstop for the same-out-dir case.
+// sub-second local operation, so a lock this old means the holder is gone.
+// Same-host locks whose holder process is provably dead break immediately
+// (see holderIsDeadLocal); remote or unknown owners keep the TTL as their
+// only break trigger. The exclusive-create output remains the backstop for
+// the same-out-dir case.
 const approvalLockTTL = 60 * time.Second
 
 // os.Remove on a lock can transiently fail: on Windows, deletion is refused
@@ -943,23 +946,35 @@ const (
 	approvalLockRemoveDelay  = 2 * time.Millisecond
 )
 
+// approvalLockHostname tags lock ownership. Liveness breaking must never
+// apply to another host's lock: a PID from a remote station means nothing
+// locally, and breaking it would un-guard double-signing across hosts.
+var approvalLockHostname = func() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "" // unknown host: every lock stays TTL-only
+	}
+	return h
+}()
+
 // lockApprovalRequest takes an exclusive signing lock for one queue request
 // so two approver stations on the same queue never double-sign the same
 // nonce: without it, two stations with different -out-dir would each produce
 // a valid approval for one nonce (the same-out-dir race is already covered by
 // the exclusive-create output). The lock is a sibling <request>.lock file
-// whose content is the owner PID; creation is O_CREATE|O_EXCL, and a lock
-// older than approvalLockTTL is broken by ATOMIC RENAME (never
+// whose content is the owner as "<hostname> <pid>"; creation is
+// O_CREATE|O_EXCL, and a lock is broken by ATOMIC RENAME (never
 // delete-and-recreate, which would let two stale-breakers race into mutual
-// ownership).
+// ownership) when it is older than approvalLockTTL — or, same host only,
+// when its PID is provably dead (holderIsDeadLocal).
 //
 // Returns exactly one of: a release func (idempotent; removes the file only
-// if it still names our PID), a busyReason (the lock is held by a live
-// station), or err (lock infrastructure failed — the caller must treat the
-// request as FAILED rather than sign unlocked).
+// if it still names us), a busyReason (the lock is held by a live station),
+// or err (lock infrastructure failed — the caller must treat the request as
+// FAILED rather than sign unlocked).
 func lockApprovalRequest(requestPath string, now time.Time) (release func(), busyReason string, err error) {
 	lockPath := requestPath + ".lock"
-	myPID := strconv.Itoa(os.Getpid())
+	myOwner := approvalLockHostname + " " + strconv.Itoa(os.Getpid())
 	create := func() (*os.File, error) {
 		return os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	}
@@ -968,23 +983,22 @@ func lockApprovalRequest(requestPath string, now time.Time) (release func(), bus
 		if !errors.Is(err, os.ErrExist) {
 			return nil, "", fmt.Errorf("create %s: %w", lockPath, err)
 		}
-		// Held by someone: decide live vs crashed by age.
+		// Held by someone: decide live vs crashed — by age past the TTL, or
+		// immediately when the lock provably names a dead holder on this host.
 		info, statErr := os.Stat(lockPath)
 		if statErr != nil {
 			// Vanished between create and stat: a holder released or a breaker
 			// is mid-retry — report busy this cycle; the next scan re-checks.
 			return nil, "signing lock contended; retried on the next scan", nil
 		}
-		heldPID := "unknown"
-		if b, rerr := os.ReadFile(lockPath); rerr == nil {
-			heldPID = strings.TrimSpace(string(b))
-		}
-		if now.Sub(info.ModTime()) <= approvalLockTTL {
+		holderHost, heldPID := parseLockOwner(lockPath)
+		if now.Sub(info.ModTime()) <= approvalLockTTL && !holderIsDeadLocal(holderHost, heldPID) {
 			return nil, fmt.Sprintf("signing lock held by another approver (pid %s)", heldPID), nil
 		}
-		// Stale: break by atomic rename, then retry the create. If the rename
-		// fails the holder released (or another breaker won) underneath us —
-		// either way re-enter the normal flow instead of forcing it.
+		// Stale holder or dead local holder: break by atomic rename, then
+		// retry the create. If the rename fails the holder released (or
+		// another breaker won) underneath us — either way re-enter the normal
+		// flow instead of forcing it.
 		broken := fmt.Sprintf("%s.broken-%d-%d", lockPath, os.Getpid(), now.UnixNano())
 		if rerr := os.Rename(lockPath, broken); rerr == nil {
 			os.Remove(broken)
@@ -997,7 +1011,7 @@ func lockApprovalRequest(requestPath string, now time.Time) (release func(), bus
 			return nil, "", fmt.Errorf("create %s: %w", lockPath, err)
 		}
 	}
-	if _, werr := f.WriteString(myPID + "\n"); werr != nil {
+	if _, werr := f.WriteString(myOwner + "\n"); werr != nil {
 		f.Close()
 		os.Remove(lockPath)
 		return nil, "", fmt.Errorf("write %s: %w", lockPath, werr)
@@ -1016,7 +1030,7 @@ func lockApprovalRequest(requestPath string, now time.Time) (release func(), bus
 		deadline := time.Now().Add(approvalLockRemoveBudget)
 		for {
 			b, rerr := os.ReadFile(lockPath)
-			if rerr != nil || strings.TrimSpace(string(b)) != myPID {
+			if rerr != nil || strings.TrimSpace(string(b)) != myOwner {
 				return
 			}
 			if os.Remove(lockPath) == nil {
@@ -1028,6 +1042,40 @@ func lockApprovalRequest(requestPath string, now time.Time) (release func(), bus
 			time.Sleep(approvalLockRemoveDelay)
 		}
 	}, "", nil
+}
+
+// parseLockOwner reads a lock's owner tag as "<hostname> <pid>". A pid-only
+// body is a legacy or mid-write lock and yields an empty host, which disables
+// liveness breaking and keeps the TTL as the only break trigger.
+func parseLockOwner(lockPath string) (host, pid string) {
+	b, rerr := os.ReadFile(lockPath)
+	if rerr != nil {
+		return "", "unknown"
+	}
+	fields := strings.Fields(string(b))
+	switch {
+	case len(fields) >= 2:
+		return fields[0], fields[1]
+	case len(fields) == 1:
+		return "", fields[0]
+	default:
+		return "", "unknown"
+	}
+}
+
+// holderIsDeadLocal reports whether a lock provably names a dead holder on
+// this host: same hostname, parseable positive PID, and no live process
+// behind it. A recycled PID or any remote or unknown owner stays on the
+// conservative TTL path.
+func holderIsDeadLocal(host, pid string) bool {
+	if host == "" || host != approvalLockHostname {
+		return false
+	}
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 0 {
+		return false
+	}
+	return !pidAlive(n)
 }
 
 // runApprovalBatch validates and signs each request into outDir as
