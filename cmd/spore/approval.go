@@ -330,6 +330,29 @@ func approveCapabilityFile(requestPath, identityPath, outputPath string, confirm
 	if err != nil {
 		return err
 	}
+	return approveCapabilityEnvelope(e, identityPath, outputPath, confirm)
+}
+
+// printCapabilityActionReview writes the exact human-reviewable action (what
+// moves, where, which pointer, until when) to stderr before any signature.
+func printCapabilityActionReview(e CapabilityEnvelope) {
+	pointer, _ := hex.DecodeString(e.Pointer)
+	pointerHash := sha256.Sum256(pointer)
+	expires := time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339)
+	switch e.Action {
+	case capabilityEVMDeliver:
+		fmt.Fprintf(os.Stderr, "EVM mailbox deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, expires)
+	case capabilitySolanaDeliver:
+		fmt.Fprintf(os.Stderr, "Solana program deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, expires)
+	default:
+		fmt.Fprintf(os.Stderr, "DERO transfer approval: %s DERO (%d atomic units) from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic, e.SenderAddress, e.Recipient, pointerHash, e.Requester, expires)
+	}
+}
+
+// approveCapabilityEnvelope validates and signs an already-decoded capability
+// request after printing a human review of the exact action; shared by the
+// single-file and batch approve paths.
+func approveCapabilityEnvelope(e CapabilityEnvelope, identityPath, outputPath string, confirm bool) error {
 	if err := validateCapabilityEnvelope(e, time.Now(), false); err != nil {
 		return err
 	}
@@ -354,15 +377,7 @@ func approveCapabilityFile(requestPath, identityPath, outputPath string, confirm
 	if !bytes.Equal(publicKey, approver) {
 		return errors.New("approval request names a different approver key")
 	}
-	pointer, _ := hex.DecodeString(e.Pointer)
-	pointerHash := sha256.Sum256(pointer)
-	if e.Action == capabilityEVMDeliver {
-		fmt.Fprintf(os.Stderr, "EVM mailbox deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
-	} else if e.Action == capabilitySolanaDeliver {
-		fmt.Fprintf(os.Stderr, "Solana program deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
-	} else {
-		fmt.Fprintf(os.Stderr, "DERO transfer approval: %s DERO (%d atomic units) from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic, e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
-	}
+	printCapabilityActionReview(e)
 	if !confirm {
 		return errors.New("explicit human approval required; review the action above and retry with -confirm")
 	}
@@ -739,21 +754,240 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	return nil
 }
 
-// msgApprove signs a prepared capability only after an explicit -confirm.
+// msgApprove signs prepared capabilities only after an explicit -confirm.
+// A single request is signed to -out; several requests (comma-separated
+// -request list, or a -request-dir scan of a shared queue) are signed to one
+// <name>.signed.json each under -out-dir, reporting per-file outcomes instead
+// of aborting at the first bad file. Without -confirm a batch only reviews.
 //
 //	spore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
+//	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json]
+//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json]
 func msgApprove(args []string) {
 	fs := flag.NewFlagSet("msg approve", flag.ExitOnError)
-	request := fs.String("request", "", "approval request JSON file to review and sign")
+	request := fs.String("request", "", "approval request JSON file(s) to review and sign (comma-separated list for batch)")
+	requestDir := fs.String("request-dir", "", "directory to scan for pending approval request JSON files (batch mode)")
 	identity := fs.String("identity", "", "approver identity private key file (hex, 32 bytes)")
-	out := fs.String("out", "", "write signed approval JSON envelope to this file")
-	confirm := fs.Bool("confirm", false, "confirm the printed action; required to sign")
+	out := fs.String("out", "", "write signed approval JSON envelope to this file (single request)")
+	outDir := fs.String("out-dir", "", "write one signed approval per request into this directory (batch mode)")
+	confirm := fs.Bool("confirm", false, "confirm the printed actions; required to sign")
+	asJSON := fs.Bool("json", false, "batch mode: emit per-request results in machine-readable JSON format")
 	_ = fs.Parse(args)
-	if *request == "" || *identity == "" || *out == "" {
-		check(errors.New("approve requires -request, -identity, and -out"))
+	if *identity == "" {
+		check(errors.New("approve requires -identity"))
 	}
-	check(approveCapabilityFile(*request, *identity, *out, *confirm))
-	fmt.Printf("approval written to %s\n", *out)
+	batch := *requestDir != "" || *outDir != "" || strings.Contains(*request, ",")
+	if !batch {
+		if *request == "" {
+			check(errors.New("approve requires -request, or -request-dir for batch mode"))
+		}
+		if *out == "" {
+			check(errors.New("approve requires -out, or -out-dir for batch mode"))
+		}
+		if *asJSON {
+			check(errors.New("approve: -json is only supported in batch mode"))
+		}
+		check(approveCapabilityFile(*request, *identity, *out, *confirm))
+		fmt.Printf("approval written to %s\n", *out)
+		return
+	}
+	if *requestDir != "" && *request != "" {
+		check(errors.New("approve: -request-dir cannot be combined with -request"))
+	}
+	if *out != "" {
+		check(errors.New("approve: -out signs exactly one request; use -out-dir for batch mode"))
+	}
+	if *outDir == "" {
+		check(errors.New("batch approve requires -out-dir"))
+	}
+	var requestPaths []string
+	if *requestDir != "" {
+		paths, err := scanApprovalRequestDir(*requestDir)
+		check(err)
+		requestPaths = paths
+	} else {
+		for _, part := range strings.Split(*request, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				check(errors.New("approve: -request contains an empty path"))
+			}
+			requestPaths = append(requestPaths, part)
+		}
+	}
+	if len(requestPaths) == 0 {
+		if *asJSON {
+			renderApprovalBatchReport(nil, true)
+			return
+		}
+		fmt.Printf("no capability approval requests found in %s\n", *requestDir)
+		return
+	}
+	results := runApprovalBatch(requestPaths, *identity, *outDir, *confirm)
+	renderApprovalBatchReport(results, *asJSON)
+	failed := 0
+	for _, r := range results {
+		if r.Status != approvalBatchSigned && r.Status != approvalBatchSkipped {
+			failed++
+		}
+	}
+	if failed > 0 {
+		check(fmt.Errorf("batch approve: %d of %d request(s) failed", failed, len(results)))
+	}
+}
+
+// Batch approve outcomes.
+const (
+	approvalBatchSigned  = "signed"
+	approvalBatchSkipped = "skipped"
+	approvalBatchFailed  = "failed"
+)
+
+// approvalBatchResult is the per-request outcome of one batch approve run.
+type approvalBatchResult struct {
+	Request string `json:"request"`
+	Output  string `json:"output,omitempty"`
+	Nonce   string `json:"nonce,omitempty"`
+	Status  string `json:"status"` // signed, skipped, failed
+	Reason  string `json:"reason,omitempty"`
+}
+
+// scanApprovalRequestDir returns the capability-envelope JSON files in dir.
+// Non-JSON files and JSON that is not a capability envelope are ignored so a
+// shared queue directory may hold unrelated files.
+func scanApprovalRequestDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("batch approve: scan %s: %w", dir, err)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if e, err := decodeCapabilityFile(path); err != nil || e.Protocol != capabilityProtocol {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+// runApprovalBatch validates and signs each request into outDir as
+// <request base>.signed.json, aggregating per-file outcomes instead of
+// aborting on the first bad file. Already-signed, invalid, expired, and
+// other-approver requests are skipped with a reason; without -confirm
+// nothing is signed (dry run). Outputs are exclusive-create, so a rerun
+// never overwrites an existing approval.
+func runApprovalBatch(requestPaths []string, identityPath, outDir string, confirm bool) []approvalBatchResult {
+	results := make([]approvalBatchResult, 0, len(requestPaths))
+	if len(requestPaths) == 0 {
+		return results
+	}
+	approverPublic, seed, err := sendIdentityPublic(identityPath)
+	if err != nil {
+		for _, requestPath := range requestPaths {
+			results = append(results, approvalBatchResult{Request: requestPath, Status: approvalBatchFailed, Reason: fmt.Sprintf("approval identity: %v", err)})
+		}
+		return results
+	}
+	wipeBytes(seed)
+	outDirReady := false
+	for _, requestPath := range requestPaths {
+		result := approvalBatchResult{Request: requestPath, Status: approvalBatchFailed}
+		e, err := decodeCapabilityFile(requestPath)
+		if err != nil {
+			result.Reason = err.Error()
+			results = append(results, result)
+			continue
+		}
+		result.Nonce = e.Nonce
+		if e.Signature != "" {
+			result.Status = approvalBatchSkipped
+			result.Reason = "already signed"
+			results = append(results, result)
+			continue
+		}
+		if err := validateCapabilityEnvelope(e, time.Now(), false); err != nil {
+			result.Status = approvalBatchSkipped
+			result.Reason = err.Error()
+			results = append(results, result)
+			continue
+		}
+		approver, _ := hex.DecodeString(e.Approver)
+		if !bytes.Equal(approver, approverPublic) {
+			result.Status = approvalBatchSkipped
+			result.Reason = "named for a different approver key"
+			results = append(results, result)
+			continue
+		}
+		if !confirm {
+			printCapabilityActionReview(e)
+			result.Status = approvalBatchSkipped
+			result.Reason = "confirmation required; rerun with -confirm to sign"
+			results = append(results, result)
+			continue
+		}
+		if !outDirReady {
+			if err := os.MkdirAll(outDir, 0o700); err != nil {
+				result.Reason = fmt.Sprintf("create output dir: %v", err)
+				results = append(results, result)
+				continue
+			}
+			outDirReady = true
+		}
+		outputPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(requestPath), ".json")+".signed.json")
+		result.Output = outputPath
+		if err := approveCapabilityEnvelope(e, identityPath, outputPath, true); err != nil {
+			result.Reason = err.Error()
+			results = append(results, result)
+			continue
+		}
+		result.Status = approvalBatchSigned
+		results = append(results, result)
+	}
+	return results
+}
+
+// renderApprovalBatchReport prints per-request outcomes as text or JSON.
+func renderApprovalBatchReport(results []approvalBatchResult, asJSON bool) {
+	signed, skipped, failed := 0, 0, 0
+	for _, r := range results {
+		switch r.Status {
+		case approvalBatchSigned:
+			signed++
+		case approvalBatchSkipped:
+			skipped++
+		default:
+			failed++
+		}
+	}
+	if asJSON {
+		report := struct {
+			Signed  int                   `json:"signed"`
+			Skipped int                   `json:"skipped"`
+			Failed  int                   `json:"failed"`
+			Results []approvalBatchResult `json:"results"`
+		}{Signed: signed, Skipped: skipped, Failed: failed, Results: results}
+		if report.Results == nil {
+			report.Results = []approvalBatchResult{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(report)
+		return
+	}
+	fmt.Printf("batch approve: %d signed, %d skipped, %d failed\n", signed, skipped, failed)
+	for _, r := range results {
+		switch r.Status {
+		case approvalBatchSigned:
+			fmt.Printf("  SIGNED  %s -> %s\n", r.Request, r.Output)
+		case approvalBatchSkipped:
+			fmt.Printf("  SKIPPED %s (%s)\n", r.Request, r.Reason)
+		default:
+			fmt.Printf("  FAILED  %s (%s)\n", r.Request, r.Reason)
+		}
+	}
 }
 
 // msgInspectApproval parses and displays a capability envelope file,

@@ -809,3 +809,246 @@ func TestMsgListApprovals(t *testing.T) {
 		t.Errorf("expected spent and pending items in json summary, got: %+v", list)
 	}
 }
+
+func TestMsgApproveBatch(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "signed")
+	identitySeed := bytes.Repeat([]byte{0x52}, 32)
+	identityPath := filepath.Join(dir, "approver.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPrivate, err := secure.SigKeypairOf(identitySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	buildEnvelope := func(amount uint64) CapabilityEnvelope {
+		var sessionID [8]byte
+		copy(sessionID[:], []byte("batch001"))
+		pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+		envelope, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, amount, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	pendingA := filepath.Join(dir, "a_pending.json")
+	writeApprovalTestFile(t, pendingA, buildEnvelope(5_000))
+	pendingB := filepath.Join(dir, "b_pending.json")
+	writeApprovalTestFile(t, pendingB, buildEnvelope(7_000))
+	signedPath := filepath.Join(dir, "c_signed.json")
+	signedEnv, _, _ := approvalFixture(t) // already signed by the 0x52 approver
+	writeApprovalTestFile(t, signedPath, signedEnv)
+	invalidPath := filepath.Join(dir, "d_invalid.json")
+	invalidEnv := buildEnvelope(9_000)
+	invalidEnv.ExpiresAt = time.Now().Add(-time.Minute).Unix() // expiry no longer covered by requester sig
+	writeApprovalTestFile(t, invalidPath, invalidEnv)
+	unrelatedPath := filepath.Join(dir, "unrelated.json")
+	if err := os.WriteFile(unrelatedPath, []byte(`{"hello":"world"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := []string{pendingA, pendingB, signedPath, invalidPath}
+	countStatus := func(results []approvalBatchResult, status string) int {
+		n := 0
+		for _, r := range results {
+			if r.Status == status {
+				n++
+			}
+		}
+		return n
+	}
+
+	// 1. Dry run (no -confirm): everything is skipped, nothing is written.
+	results := runApprovalBatch(batch, identityPath, outDir, false)
+	if len(results) != 4 || countStatus(results, "skipped") != 4 {
+		t.Fatalf("dry run should skip all four requests, got: %+v", results)
+	}
+	if _, err := os.Stat(outDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry run created output dir: stat error=%v", err)
+	}
+
+	// 2. Confirmed run: only the two pending requests are signed and verify.
+	results = runApprovalBatch(batch, identityPath, outDir, true)
+	if len(results) != 4 || countStatus(results, "signed") != 2 || countStatus(results, "skipped") != 2 || countStatus(results, "failed") != 0 {
+		t.Fatalf("confirmed batch outcomes wrong, got: %+v", results)
+	}
+	for _, r := range results {
+		if r.Status != "signed" {
+			continue
+		}
+		if r.Nonce == "" || r.Output == "" {
+			t.Fatalf("signed result missing nonce/output: %+v", r)
+		}
+		signedFile, err := decodeCapabilityFile(r.Output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyCapabilityApproval(signedFile, hex.EncodeToString(approverPublic), time.Now()); err != nil {
+			t.Fatalf("batch-signed approval %s did not verify: %v", r.Output, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "a_pending.signed.json")); err != nil {
+		t.Fatalf("expected a_pending.signed.json in out-dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "c_signed.signed.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("already-signed request must not be re-signed: stat error=%v", err)
+	}
+
+	// 3. Directory scan picks up exactly the capability envelopes.
+	scanned, err := scanApprovalRequestDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scanned) != 4 {
+		t.Fatalf("expected 4 capability envelopes in scan, got %d: %v", len(scanned), scanned)
+	}
+
+	// 4. Rerun: exclusive-create outputs turn into per-file failures, not overwrites.
+	results = runApprovalBatch([]string{pendingA, pendingB}, identityPath, outDir, true)
+	if countStatus(results, "failed") != 2 {
+		t.Fatalf("rerun over existing outputs must fail per file, got: %+v", results)
+	}
+
+	// 5. JSON report matches the results.
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+	outJSON := captureOutput(func() {
+		renderApprovalBatchReport(results, true)
+	})
+	var report struct {
+		Signed  int                   `json:"signed"`
+		Skipped int                   `json:"skipped"`
+		Failed  int                   `json:"failed"`
+		Results []approvalBatchResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &report); err != nil {
+		t.Fatalf("unmarshal batch json: %v; raw:\n%s", err, outJSON)
+	}
+	if report.Signed != 0 || report.Skipped != 0 || report.Failed != 2 || len(report.Results) != 2 {
+		t.Fatalf("unexpected batch report: %+v", report)
+	}
+
+	// 6. Requests addressed to another approver device are skipped, not signed.
+	otherIdentity := filepath.Join(dir, "other.key")
+	if err := os.WriteFile(otherIdentity, []byte(hex.EncodeToString(bytes.Repeat([]byte{0x77}, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherApproverPath := filepath.Join(dir, "e_other_approver.json")
+	writeApprovalTestFile(t, otherApproverPath, buildEnvelope(11_000))
+	results = runApprovalBatch([]string{otherApproverPath}, otherIdentity, outDir, true)
+	if len(results) != 1 || results[0].Status != "skipped" || !strings.Contains(results[0].Reason, "different approver") {
+		t.Fatalf("other-approver request must be skipped, got: %+v", results)
+	}
+}
+
+func TestMsgApproveBatchCLI(t *testing.T) {
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+
+	dir := t.TempDir()
+	identitySeed := bytes.Repeat([]byte{0x52}, 32)
+	identityPath := filepath.Join(dir, "approver.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPrivate, err := secure.SigKeypairOf(identitySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+
+	// Empty queue: -json still emits a valid empty report.
+	emptyQueue := filepath.Join(dir, "empty")
+	if err := os.MkdirAll(emptyQueue, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	emptyOut := filepath.Join(dir, "signed-empty")
+	outJSON := captureOutput(func() {
+		msgApprove([]string{"-request-dir", emptyQueue, "-identity", identityPath, "-out-dir", emptyOut, "-confirm", "-json"})
+	})
+	var emptyReport struct {
+		Signed  int                   `json:"signed"`
+		Skipped int                   `json:"skipped"`
+		Failed  int                   `json:"failed"`
+		Results []approvalBatchResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &emptyReport); err != nil {
+		t.Fatalf("unmarshal empty batch json: %v; raw:\n%s", err, outJSON)
+	}
+	if emptyReport.Signed != 0 || len(emptyReport.Results) != 0 {
+		t.Fatalf("unexpected empty batch report: %+v", emptyReport)
+	}
+
+	// Single pending request in a scanned queue dir gets signed via the CLI.
+	queueDir := filepath.Join(dir, "queue")
+	if err := os.MkdirAll(queueDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("batch002"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	pending, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, 3_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeApprovalTestFile(t, filepath.Join(queueDir, "pending.json"), pending)
+	outDir := filepath.Join(dir, "signed")
+	outJSON = captureOutput(func() {
+		msgApprove([]string{"-request-dir", queueDir, "-identity", identityPath, "-out-dir", outDir, "-confirm", "-json"})
+	})
+	var report struct {
+		Signed  int                   `json:"signed"`
+		Skipped int                   `json:"skipped"`
+		Failed  int                   `json:"failed"`
+		Results []approvalBatchResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &report); err != nil {
+		t.Fatalf("unmarshal batch json: %v; raw:\n%s", err, outJSON)
+	}
+	if report.Signed != 1 || report.Skipped != 0 || report.Failed != 0 || len(report.Results) != 1 || report.Results[0].Output == "" {
+		t.Fatalf("unexpected batch report: %+v", report)
+	}
+	signedFile, err := decodeCapabilityFile(report.Results[0].Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCapabilityApproval(signedFile, hex.EncodeToString(approverPublic), time.Now()); err != nil {
+		t.Fatalf("CLI batch approval did not verify: %v", err)
+	}
+}
