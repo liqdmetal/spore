@@ -687,6 +687,31 @@ func TestMsgInspectApprovalOutputAndReplayStatus(t *testing.T) {
 	if !strings.Contains(outUnsigned, "ready for review") {
 		t.Errorf("expected ready for review status, got:\n%s", outUnsigned)
 	}
-	_ = approverPublic
+
+	// 4. Test -json output format
+	outJSON := captureOutput(func() {
+		msgInspectApproval([]string{"-file", approvedPath, "-state-dir", stateDir, "-json"})
+	})
+	var jsonRes struct {
+		PointerSHA256 string `json:"pointer_sha256"`
+		Valid         bool   `json:"valid"`
+		Signed        bool   `json:"signed"`
+		NonceStatus   string `json:"nonce_status"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &jsonRes); err != nil {
+		t.Fatalf("unmarshal -json inspect output: %v; raw:\n%s", err, outJSON)
+	}
+	if !jsonRes.Valid || !jsonRes.Signed || jsonRes.NonceStatus != "SPENT" {
+		t.Errorf("unexpected json result: %+v", jsonRes)
+	}
+
+	// 5. Test -require-approver match
+	wantApproverHex := hex.EncodeToString(approverPublic)
+	outMatch := captureOutput(func() {
+		msgInspectApproval([]string{"-file", approvedPath, "-require-approver", wantApproverHex})
+	})
+	if !strings.Contains(outMatch, "Capability Envelope:") {
+		t.Errorf("expected inspect output on approver match, got:\n%s", outMatch)
+	}
 	_ = buf
 }
