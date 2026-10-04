@@ -16,9 +16,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/dero"
@@ -763,10 +766,14 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 // With -state-dir (or the configured default), requests whose nonce is
 // already burned in the approval-spent replay ledger are skipped, so a
 // re-scanned queue only signs what can still be posted.
+// With -watch the same batch becomes an always-on approver station: it
+// rescans -request-dir every -every interval and signs new requests as they
+// arrive, until SIGINT/SIGTERM.
 //
 //	spore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
 //	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
 //	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
+//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -watch [-every 30s] [-state-dir D]
 func msgApprove(args []string) {
 	fs := flag.NewFlagSet("msg approve", flag.ExitOnError)
 	request := fs.String("request", "", "approval request JSON file(s) to review and sign (comma-separated list for batch)")
@@ -777,11 +784,16 @@ func msgApprove(args []string) {
 	confirm := fs.Bool("confirm", false, "confirm the printed actions; required to sign")
 	asJSON := fs.Bool("json", false, "batch mode: emit per-request results in machine-readable JSON format")
 	stateDir := fs.String("state-dir", "", "batch mode: encrypted endpoint session state directory whose approval-spent ledger marks already-consumed nonces")
+	watch := fs.Bool("watch", false, "batch mode: keep rescanning -request-dir and signing new requests until interrupted (always-on approver station)")
+	every := fs.Duration("every", 30*time.Second, "watch mode: queue rescan interval (e.g. 10s, 1m)")
 	_ = fs.Parse(args)
 	if *identity == "" {
 		check(errors.New("approve requires -identity"))
 	}
-	batch := *requestDir != "" || *outDir != "" || strings.Contains(*request, ",")
+	if *watch {
+		check(validateApproveWatchFlags(*requestDir, *request, *confirm, *asJSON, *every))
+	}
+	batch := *watch || *requestDir != "" || *outDir != "" || strings.Contains(*request, ",")
 	if !batch {
 		if *request == "" {
 			check(errors.New("approve requires -request, or -request-dir for batch mode"))
@@ -810,6 +822,12 @@ func msgApprove(args []string) {
 		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
 			*stateDir = f.Value.String()
 		}
+	}
+	if *watch {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		runApprovalWatchLoop(ctx, *requestDir, *identity, *outDir, *stateDir, *every)
+		return
 	}
 	var requestPaths []string
 	if *requestDir != "" {
@@ -1023,6 +1041,111 @@ func renderApprovalBatchReport(results []approvalBatchResult, asJSON bool) {
 	}
 }
 
+// validateApproveWatchFlags enforces the -watch flag combinations: watch is a
+// rescannable queue (not a fixed -request list), it signs automatically so it
+// needs the same explicit -confirm as a one-shot batch, JSON reports are a
+// one-shot feature (the signed files are the watch artifacts), and the rescan
+// interval must be positive.
+func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool, every time.Duration) error {
+	if requestDir == "" {
+		return errors.New("approve: -watch requires -request-dir (a queue directory to rescan)")
+	}
+	if request != "" {
+		return errors.New("approve: -watch rescans a queue directory; use -request-dir instead of -request")
+	}
+	if !confirm {
+		return errors.New("approve: -watch signs automatically; pass -confirm to authorize it")
+	}
+	if asJSON {
+		return errors.New("approve: -json is not supported in -watch mode; the signed files in -out-dir are the artifacts")
+	}
+	if every <= 0 {
+		return errors.New("approve: -every must be a positive duration (e.g. 10s, 1m)")
+	}
+	return nil
+}
+
+// runApprovalWatchLoop is the always-on approver station: rescan the queue
+// every interval, sign new pending requests, and stay quiet about files whose
+// status has not changed since the previous cycle. A transient scan failure
+// (queue dir briefly missing, permissions) is logged and retried on the next
+// tick — it must not kill the station. Returns when ctx is cancelled
+// (SIGINT/SIGTERM via signal.NotifyContext at the call site).
+func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir, stateDir string, every time.Duration) {
+	seen := make(map[string]string)
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	log.Printf("approve: watching %s every %s; signing to %s as requests arrive (Ctrl-C to stop)", requestDir, every, outDir)
+	for cycle := 1; ; cycle++ {
+		signed, failed, err := runApprovalWatchCycle(requestDir, identityPath, outDir, stateDir, true, seen)
+		if err != nil {
+			log.Printf("approve: watch: %v (retrying next tick)", err)
+		} else if signed > 0 || failed > 0 {
+			log.Printf("approve: cycle %d: %d signed, %d failed", cycle, signed, failed)
+		}
+		select {
+		case <-ctx.Done():
+			log.Printf("approve: watch stopped after %d cycle(s)", cycle)
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// runApprovalWatchCycle performs one watch iteration: rescan requestDir, sign
+// what is pending, and print only requests whose (status, reason) changed
+// since the previous cycle, so steady-state rescans stay quiet. Requests
+// whose signed output already exists in outDir are left out entirely — the
+// batch core would only fail on the exclusive-create output again, and the
+// cycle that signed it already reported. seen keys are request paths and
+// values are "status|reason" summaries; entries for files that left the queue
+// are dropped so a re-arriving file is reported again. signed/failed count
+// only requests handled this cycle. The shared batch core (runApprovalBatch)
+// does the actual signing unchanged.
+func runApprovalWatchCycle(requestDir, identityPath, outDir, stateDir string, confirm bool, seen map[string]string) (signed, failed int, err error) {
+	paths, err := scanApprovalRequestDir(requestDir)
+	if err != nil {
+		return 0, 0, err
+	}
+	current := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		current[path] = true
+	}
+	for path := range seen {
+		if !current[path] {
+			delete(seen, path)
+		}
+	}
+	var pending []string
+	for _, path := range paths {
+		outPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(path), ".json")+".signed.json")
+		if info, serr := os.Stat(outPath); serr == nil && !info.IsDir() {
+			continue // signed output exists from an earlier cycle or run: handled
+		}
+		pending = append(pending, path)
+	}
+	for _, r := range runApprovalBatch(pending, identityPath, outDir, stateDir, confirm) {
+		summary := r.Status + "|" + r.Reason
+		if prev, ok := seen[r.Request]; ok && prev == summary {
+			continue // unchanged since a previous cycle: already reported
+		}
+		seen[r.Request] = summary
+		switch r.Status {
+		case approvalBatchSigned:
+			seen[r.Request] = approvalBatchSkipped + "|already signed" // the next rescan sees it signed; stay quiet
+			signed++
+			fmt.Printf("  SIGNED  %s -> %s\n", r.Request, r.Output)
+			fmt.Printf("          next: rerun the original %s send to %s with -approval-file %s\n", strings.ToUpper(r.Chain), r.Recipient, r.Output)
+		case approvalBatchSkipped:
+			fmt.Printf("  SKIPPED %s (%s)\n", r.Request, r.Reason)
+		default:
+			failed++
+			fmt.Printf("  FAILED  %s (%s)\n", r.Request, r.Reason)
+		}
+	}
+	return signed, failed, nil
+}
+
 // msgInspectApproval parses and displays a capability envelope file,
 // checks signatures and expiry, and verifies replay status against state-dir.
 //
@@ -1199,20 +1322,22 @@ func shortSig(s string) string {
 }
 
 type approvalSummary struct {
-	Path      string `json:"path"`
-	Chain     string `json:"chain"`
-	Action    string `json:"action"`
-	Sender    string `json:"sender"`
-	Recipient string `json:"recipient"`
-	Amount    string `json:"amount"`
-	Nonce     string `json:"nonce"`
-	Status    string `json:"status"` // PENDING, SIGNED, EXPIRED, SPENT, INVALID
-	Expired   bool   `json:"expired"`
-	Signed    bool   `json:"signed"`
-	Spent     bool   `json:"spent"`
-	Valid     bool   `json:"valid"`
-	ExpiresAt int64  `json:"expires_at_unix"`
-	ExpiresIn string `json:"expires_in"`
+	Path         string `json:"path"`
+	Chain        string `json:"chain"`
+	Action       string `json:"action"`
+	Sender       string `json:"sender"`
+	Recipient    string `json:"recipient"`
+	Amount       string `json:"amount"`
+	AmountAtomic uint64 `json:"amount_atomic,omitempty"`
+	Approver     string `json:"approver,omitempty"`
+	Nonce        string `json:"nonce"`
+	Status       string `json:"status"` // PENDING, SIGNED, EXPIRED, SPENT, INVALID
+	Expired      bool   `json:"expired"`
+	Signed       bool   `json:"signed"`
+	Spent        bool   `json:"spent"`
+	Valid        bool   `json:"valid"`
+	ExpiresAt    int64  `json:"expires_at_unix"`
+	ExpiresIn    string `json:"expires_in"`
 }
 
 // msgListApprovals scans a directory or state-dir and lists capability envelopes.

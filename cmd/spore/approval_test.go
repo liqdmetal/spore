@@ -1058,6 +1058,168 @@ func TestMsgApproveBatchCLI(t *testing.T) {
 	}
 }
 
+func TestValidateApproveWatchFlags(t *testing.T) {
+	cases := []struct {
+		name       string
+		requestDir string
+		request    string
+		confirm    bool
+		asJSON     bool
+		every      time.Duration
+		wantErr    string
+	}{
+		{"valid", "queue", "", true, false, 30 * time.Second, ""},
+		{"missing request-dir", "", "", true, false, 30 * time.Second, "-watch requires -request-dir"},
+		{"-request rejected", "queue", "a.json", true, false, 30 * time.Second, "use -request-dir instead of -request"},
+		{"-confirm required", "queue", "", false, false, 30 * time.Second, "pass -confirm"},
+		{"-json rejected", "queue", "", true, true, 30 * time.Second, "-json is not supported in -watch mode"},
+		{"zero interval", "queue", "", true, false, 0, "-every must be a positive duration"},
+		{"negative interval", "queue", "", true, false, -time.Second, "-every must be a positive duration"},
+	}
+	for _, tc := range cases {
+		err := validateApproveWatchFlags(tc.requestDir, tc.request, tc.confirm, tc.asJSON, tc.every)
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Errorf("%s: unexpected error: %v", tc.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: want error containing %q, got: %v", tc.name, tc.wantErr, err)
+		}
+	}
+}
+
+func TestRunApprovalWatchCycle(t *testing.T) {
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+
+	dir := t.TempDir()
+	identitySeed := bytes.Repeat([]byte{0x52}, 32)
+	identityPath := filepath.Join(dir, "approver.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPrivate, err := secure.SigKeypairOf(identitySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	queueDir := filepath.Join(dir, "queue")
+	outDir := filepath.Join(dir, "signed")
+	if err := os.MkdirAll(queueDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	makeEnvelope := func(tag string, amount uint64) string {
+		var sessionID [8]byte
+		copy(sessionID[:], []byte(tag))
+		pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+		envelope, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, amount, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(queueDir, tag+".json")
+		writeApprovalTestFile(t, path, envelope)
+		return path
+	}
+
+	seen := make(map[string]string)
+	// Cycle 1 with an empty queue: nothing signed, no output, no error.
+	signed, failed, err := runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	if err != nil || signed != 0 || failed != 0 {
+		t.Fatalf("empty queue cycle: signed=%d failed=%d err=%v", signed, failed, err)
+	}
+
+	// Cycle 2: one request appears and gets signed; the report includes the
+	// post-signing handoff line.
+	pendingPath := makeEnvelope("watch001", 4_000)
+	out := captureOutput(func() {
+		signed, failed, err = runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	})
+	if err != nil || signed != 1 || failed != 0 {
+		t.Fatalf("cycle with one pending request: signed=%d failed=%d err=%v", signed, failed, err)
+	}
+	if !strings.Contains(out, "SIGNED  "+pendingPath) || !strings.Contains(out, "-approval-file "+filepath.Join(outDir, "watch001.signed.json")) {
+		t.Errorf("expected signed report with handoff, got:\n%s", out)
+	}
+
+	// Cycle 3: the same queue again — the signed file is skipped as "already
+	// signed" with no output (deduped), and nothing is re-signed.
+	out = captureOutput(func() {
+		signed, failed, err = runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	})
+	if err != nil || signed != 0 || failed != 0 {
+		t.Fatalf("steady-state rerun cycle: signed=%d failed=%d err=%v", signed, failed, err)
+	}
+	if strings.Contains(out, "SIGNED") {
+		t.Errorf("steady-state rerun must stay quiet, got:\n%s", out)
+	}
+
+	// A request that leaves the queue loses its dedup entry, so re-arriving
+	// is reported again. Use an other-approver request (never signable, so it
+	// stays SKIPPED and never gains a signed output) to exercise that path.
+	approverOtherPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x99}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeOtherApprover := func() CapabilityEnvelope {
+		var sessionID [8]byte
+		copy(sessionID[:], []byte("watch002"))
+		pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+		envelope, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, 6_000, pointer, sessionID, requesterPrivate, approverOtherPrivate.Public().(ed25519.PublicKey), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	otherPath := filepath.Join(queueDir, "other.json")
+	writeApprovalTestFile(t, otherPath, makeOtherApprover())
+	out = captureOutput(func() {
+		signed, failed, err = runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	})
+	if err != nil || !strings.Contains(out, "SKIPPED "+otherPath) {
+		t.Fatalf("other-approver request must be skipped and reported once, out:\n%s", out)
+	}
+	// Unchanged status next cycle: deduped, quiet.
+	out = captureOutput(func() {
+		signed, failed, err = runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	})
+	if err != nil || signed != 0 || failed != 0 || strings.Contains(out, otherPath) {
+		t.Errorf("unchanged status must stay quiet, out:\n%s", out)
+	}
+	// Leave the queue and come back: reported again.
+	if err := os.Remove(otherPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen); err != nil {
+		t.Fatal(err)
+	}
+	writeApprovalTestFile(t, otherPath, makeOtherApprover())
+	out = captureOutput(func() {
+		signed, failed, err = runApprovalWatchCycle(queueDir, identityPath, outDir, "", true, seen)
+	})
+	if err != nil || !strings.Contains(out, "SKIPPED "+otherPath) {
+		t.Errorf("re-arriving file must be re-reported, out:\n%s", out)
+	}
+}
+
 func TestMsgApproveBatchSkipsSpentNonces(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "signed")
