@@ -115,6 +115,29 @@ Batch rules:
 The text report prints a `next:` hint per signed envelope naming the recipient
 and the `-approval-file` to rerun the send with.
 
+### 3.1 Always-on approver station: `-watch`
+
+For an approver device on duty, run batch approve as a long-lived station that
+picks up new requests as they land in the queue:
+
+```bash
+spore msg approve -request-dir ~/approval-queue \
+  -identity ~/keys/approver.key -out-dir ~/outbox -state-dir ~/state \
+  -watch -every 30s
+```
+
+- Requires `-confirm` (the station signs automatically), `-request-dir`, and a
+  positive `-every` (default 30s); `-json` is refused — the signed files in
+  `-out-dir` are the artifacts. Stops cleanly on SIGINT/SIGTERM.
+- The same batch rules apply, and steady-state cycles stay quiet: requests
+  whose signed output already exists are left out of the rescan, and unchanged
+  statuses are not re-printed. Only new signatures, new skips, and failures
+  appear, each with the usual `next:` handoff. A queue directory that
+  disappears briefly is logged and retried on the next tick.
+- A request consumed by the requester's send still resurfaces as
+  `nonce already consumed; replay refused` unless you pass `-state-dir` — pass
+  it; the ledger is what keeps a re-scanned queue from re-signing.
+
 ## 4. Requester side: post and verify
 
 ```bash
@@ -126,6 +149,22 @@ spore msg send-e2 ... -require-approval APPROVER_KEY_HEX -approval-file ~/outbox
 spore msg inspect-approval -file ~/outbox/d_dero_3000.signed.json \
   -state-dir ~/state -require-approver APPROVER_KEY_HEX
 ```
+
+To see exactly what is ready to post without sending anything, list the
+approvals and print one ready-to-run command per SIGNED envelope:
+
+```bash
+spore msg list-approvals -dir ~/outbox -state-dir ~/state -print-commands \
+  -identity ~/keys/requester.key -pinned-sig REQUESTER_PINNED_HEX
+# spore msg send-e2 -chain dero -to dero1qy... -amount 0.03 dero \
+#   -require-approval APPROVER_KEY_HEX -approval-file ... \
+#   -identity ... -pinned-sig ...
+# (non-ready envelopes are summarized as comment counts, never commands)
+```
+
+The requester-only secrets (`-identity`, `-pinned-sig`) are printed as
+`IDENTITY`/`PINNED_SIG` placeholders when the flags are omitted — printing
+beats silently half-sending, because posting a capability burns its nonce.
 
 The post re-checks everything on the sending device: approver signature,
 requester binding, chain/recipient/amount match, current sender address,
@@ -143,6 +182,7 @@ show the request as spent.
   requester's `-state-dir`; do not share one state dir across independent
   senders for the same chain.
 - **`-confirm` is the human gate.** There is no batch flag that bypasses it;
-  dry runs exist so you can see what *would* be signed first.
+  dry runs exist so you can see what *would* be signed first. `-watch` also
+  requires it, because the station signs without a human watching each action.
 - **Plaintext never on argv.** Bodies stay in `-msg-file`; the envelope only
   ever carries the opaque E2 pointer hash.
