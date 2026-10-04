@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -334,7 +335,22 @@ func approveCapabilityFile(requestPath, identityPath, outputPath string, confirm
 	if err != nil {
 		return err
 	}
-	return approveCapabilityEnvelope(e, identityPath, outputPath, confirm)
+	// The one-shot path races watch stations on the same queue, so it takes
+	// the same per-request signing lock the batch core uses. Dry runs never
+	// sign and never lock.
+	if !confirm {
+		return approveCapabilityEnvelope(e, identityPath, outputPath, false)
+	}
+	release, busy, lockErr := lockApprovalRequest(requestPath, time.Now())
+	if lockErr != nil {
+		return fmt.Errorf("signing lock: %w", lockErr)
+	}
+	if busy != "" {
+		return errors.New(busy)
+	}
+	err = approveCapabilityEnvelope(e, identityPath, outputPath, true)
+	release()
+	return err
 }
 
 // printCapabilityActionReview writes the exact human-reviewable action (what
@@ -910,6 +926,110 @@ func scanApprovalRequestDir(dir string) ([]string, error) {
 	return paths, nil
 }
 
+// approvalLockTTL is how long a signing lock may sit untouched before
+// another station treats its holder as crashed and breaks it. Signing is a
+// sub-second local operation, so a lock this old means the holder is gone;
+// the exclusive-create output remains the backstop for the same-out-dir case.
+const approvalLockTTL = 60 * time.Second
+
+// os.Remove on a lock can transiently fail: on Windows, deletion is refused
+// with a sharing violation while any other handle to the file is open (Go's
+// os.Open omits FILE_SHARE_DELETE), and a racing station's busy-path lookup
+// reads the lock for a few microseconds. release() therefore retries the
+// removal within this budget; a lock that still survives it self-heals via
+// the TTL stale-break.
+const (
+	approvalLockRemoveBudget = 250 * time.Millisecond
+	approvalLockRemoveDelay  = 2 * time.Millisecond
+)
+
+// lockApprovalRequest takes an exclusive signing lock for one queue request
+// so two approver stations on the same queue never double-sign the same
+// nonce: without it, two stations with different -out-dir would each produce
+// a valid approval for one nonce (the same-out-dir race is already covered by
+// the exclusive-create output). The lock is a sibling <request>.lock file
+// whose content is the owner PID; creation is O_CREATE|O_EXCL, and a lock
+// older than approvalLockTTL is broken by ATOMIC RENAME (never
+// delete-and-recreate, which would let two stale-breakers race into mutual
+// ownership).
+//
+// Returns exactly one of: a release func (idempotent; removes the file only
+// if it still names our PID), a busyReason (the lock is held by a live
+// station), or err (lock infrastructure failed — the caller must treat the
+// request as FAILED rather than sign unlocked).
+func lockApprovalRequest(requestPath string, now time.Time) (release func(), busyReason string, err error) {
+	lockPath := requestPath + ".lock"
+	myPID := strconv.Itoa(os.Getpid())
+	create := func() (*os.File, error) {
+		return os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	}
+	f, err := create()
+	if err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", fmt.Errorf("create %s: %w", lockPath, err)
+		}
+		// Held by someone: decide live vs crashed by age.
+		info, statErr := os.Stat(lockPath)
+		if statErr != nil {
+			// Vanished between create and stat: a holder released or a breaker
+			// is mid-retry — report busy this cycle; the next scan re-checks.
+			return nil, "signing lock contended; retried on the next scan", nil
+		}
+		heldPID := "unknown"
+		if b, rerr := os.ReadFile(lockPath); rerr == nil {
+			heldPID = strings.TrimSpace(string(b))
+		}
+		if now.Sub(info.ModTime()) <= approvalLockTTL {
+			return nil, fmt.Sprintf("signing lock held by another approver (pid %s)", heldPID), nil
+		}
+		// Stale: break by atomic rename, then retry the create. If the rename
+		// fails the holder released (or another breaker won) underneath us —
+		// either way re-enter the normal flow instead of forcing it.
+		broken := fmt.Sprintf("%s.broken-%d-%d", lockPath, os.Getpid(), now.UnixNano())
+		if rerr := os.Rename(lockPath, broken); rerr == nil {
+			os.Remove(broken)
+		}
+		f, err = create()
+		if err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return nil, "signing lock contended; retried on the next scan", nil
+			}
+			return nil, "", fmt.Errorf("create %s: %w", lockPath, err)
+		}
+	}
+	if _, werr := f.WriteString(myPID + "\n"); werr != nil {
+		f.Close()
+		os.Remove(lockPath)
+		return nil, "", fmt.Errorf("write %s: %w", lockPath, werr)
+	}
+	f.Close()
+	var once bool
+	return func() {
+		if once {
+			return
+		}
+		once = true
+		// Remove only while the file still names us: a stale-breaker must
+		// never delete a lock a live station took after ours was broken.
+		// Re-check ownership on every attempt — the lock can be stale-broken
+		// and re-taken while we are retrying.
+		deadline := time.Now().Add(approvalLockRemoveBudget)
+		for {
+			b, rerr := os.ReadFile(lockPath)
+			if rerr != nil || strings.TrimSpace(string(b)) != myPID {
+				return
+			}
+			if os.Remove(lockPath) == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(approvalLockRemoveDelay)
+		}
+	}, "", nil
+}
+
 // runApprovalBatch validates and signs each request into outDir as
 // <request base>.signed.json, aggregating per-file outcomes instead of
 // aborting on the first bad file. Already-signed, invalid, expired, spent
@@ -987,9 +1107,27 @@ func runApprovalBatch(requestPaths []string, identityPath, outDir, stateDir stri
 			}
 			outDirReady = true
 		}
+		// Signing lock: two stations racing the same queue (different -out-dir,
+		// or a watch station racing a manual one-shot) must never both sign one
+		// nonce. Infrastructure failure is loud (failed), a live holder is a
+		// quiet skip the next scan re-classifies as "already signed".
+		release, busy, lockErr := lockApprovalRequest(requestPath, time.Now())
+		if lockErr != nil {
+			result.Reason = fmt.Sprintf("signing lock: %v", lockErr)
+			results = append(results, result)
+			continue
+		}
+		if busy != "" {
+			result.Status = approvalBatchSkipped
+			result.Reason = busy
+			results = append(results, result)
+			continue
+		}
 		outputPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(requestPath), ".json")+".signed.json")
 		result.Output = outputPath
-		if err := approveCapabilityEnvelope(e, identityPath, outputPath, true); err != nil {
+		err = approveCapabilityEnvelope(e, identityPath, outputPath, true)
+		release()
+		if err != nil {
 			result.Reason = err.Error()
 			results = append(results, result)
 			continue

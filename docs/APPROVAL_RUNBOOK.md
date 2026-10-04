@@ -96,6 +96,16 @@ Batch rules:
     only takes requests addressed to its key
   - `approval file: create ...: file exists` — outputs are exclusive-create, so
     a rerun never overwrites an existing approval
+  - `signing lock held by another approver (pid N)` — a second station on the
+    same queue reached the request first; it is a skip, and the next scan
+    re-classifies the request as `already signed`
+- Signing takes a per-request sibling lock (`<request>.lock`) — batch and
+  one-shot `approve -request` alike — so two approver stations racing the same
+  queue can never double-sign one nonce, no matter how their `-out-dir`s differ.
+- Locks self-heal: a station that crashes mid-sign leaves its lock, and the
+  next scanner breaks it once the lock is older than 60 s (`approvalLockTTL`)
+  and signs the request itself. No manual cleanup unless you cannot wait a
+  minute.
 - Exit code is 0 when nothing *failed*; skips are normal queue hygiene.
 - `-json` emits a self-contained report for driving the next step:
 
