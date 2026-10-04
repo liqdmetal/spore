@@ -930,3 +930,153 @@ func shortSig(s string) string {
 	}
 	return s
 }
+
+type approvalSummary struct {
+	Path      string `json:"path"`
+	Chain     string `json:"chain"`
+	Action    string `json:"action"`
+	Sender    string `json:"sender"`
+	Recipient string `json:"recipient"`
+	Amount    string `json:"amount"`
+	Nonce     string `json:"nonce"`
+	Status    string `json:"status"` // PENDING, SIGNED, EXPIRED, SPENT, INVALID
+	Expired   bool   `json:"expired"`
+	Signed    bool   `json:"signed"`
+	Spent     bool   `json:"spent"`
+	Valid     bool   `json:"valid"`
+	ExpiresAt int64  `json:"expires_at_unix"`
+	ExpiresIn string `json:"expires_in"`
+}
+
+// msgListApprovals scans a directory or state-dir and lists capability envelopes.
+//
+//	spore msg list-approvals [-dir DIR] [-state-dir DIR] [-status pending|signed|spent|all] [-json]
+func msgListApprovals(args []string) {
+	fs := flag.NewFlagSet("msg list-approvals", flag.ExitOnError)
+	scanDir := fs.String("dir", "", "directory to scan for .json capability envelopes (defaults to -state-dir or current dir)")
+	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory to check spent nonce replay ledger")
+	statusFilter := fs.String("status", "all", "filter by status: all|pending|signed|spent|expired")
+	asJSON := fs.Bool("json", false, "output summary list in machine-readable JSON format")
+	_ = fs.Parse(args)
+
+	if *stateDir == "" {
+		_ = loadConfigForFlags(fs)
+		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
+			*stateDir = f.Value.String()
+		}
+	}
+	targetDir := *scanDir
+	if targetDir == "" {
+		if *stateDir != "" {
+			targetDir = *stateDir
+		} else {
+			targetDir = "."
+		}
+	}
+
+	entries, err := os.ReadDir(targetDir)
+	check(err)
+
+	now := time.Now()
+	var summaries []approvalSummary
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(targetDir, entry.Name())
+		e, err := decodeCapabilityFile(path)
+		if err != nil {
+			continue // skip non-capability JSON files
+		}
+		if e.Protocol != capabilityProtocol {
+			continue
+		}
+
+		signed := e.Signature != ""
+		valErr := validateCapabilityEnvelope(e, now, signed)
+		isExpired := now.Unix() >= e.ExpiresAt
+
+		isSpent := false
+		if *stateDir != "" {
+			spentPath := filepath.Join(*stateDir, "approval-spent", e.Nonce+".spent")
+			if info, err := os.Stat(spentPath); err == nil && !info.IsDir() {
+				isSpent = true
+			}
+		}
+
+		status := "PENDING"
+		if valErr != nil && !isExpired {
+			status = "INVALID"
+		} else if isSpent {
+			status = "SPENT"
+		} else if isExpired {
+			status = "EXPIRED"
+		} else if signed {
+			status = "SIGNED"
+		}
+
+		filter := strings.ToLower(strings.TrimSpace(*statusFilter))
+		if filter != "" && filter != "all" {
+			if !strings.EqualFold(status, filter) {
+				continue
+			}
+		}
+
+		amountStr := "0"
+		if e.Action == capabilityDeroTransfer {
+			amountStr = formatAmount("dero", e.AmountAtomic) + " dero"
+		}
+
+		expiresInStr := "expired"
+		if !isExpired {
+			rem := time.Duration(e.ExpiresAt-now.Unix()) * time.Second
+			expiresInStr = rem.Round(time.Second).String()
+		}
+
+		summaries = append(summaries, approvalSummary{
+			Path:      path,
+			Chain:     e.Chain,
+			Action:    e.Action,
+			Sender:    e.SenderAddress,
+			Recipient: e.Recipient,
+			Amount:    amountStr,
+			Nonce:     e.Nonce,
+			Status:    status,
+			Expired:   isExpired,
+			Signed:    signed,
+			Spent:     isSpent,
+			Valid:     valErr == nil,
+			ExpiresAt: e.ExpiresAt,
+			ExpiresIn: expiresInStr,
+		})
+	}
+
+	if *asJSON {
+		if summaries == nil {
+			summaries = []approvalSummary{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		check(enc.Encode(summaries))
+		return
+	}
+
+	if len(summaries) == 0 {
+		fmt.Printf("no capability envelopes found in %s (filter: %s)\n", targetDir, *statusFilter)
+		return
+	}
+
+	fmt.Printf("%-10s %-8s %-12s %-16s %-16s %-12s %s\n", "STATUS", "CHAIN", "AMOUNT", "SENDER", "RECIPIENT", "EXPIRES IN", "FILE")
+	for _, s := range summaries {
+		fmt.Printf("%-10s %-8s %-12s %-16s %-16s %-12s %s\n",
+			s.Status,
+			s.Chain,
+			s.Amount,
+			shortTx(s.Sender),
+			shortTx(s.Recipient),
+			s.ExpiresIn,
+			filepath.Base(s.Path),
+		)
+	}
+}

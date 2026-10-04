@@ -87,7 +87,7 @@ func main() {
 	case "donate":
 		donatecmd(os.Args[2:])
 	case "msg":
-		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "escrow" || os.Args[2] == "dex" || os.Args[2] == "approve" || os.Args[2] == "inspect-approval" || os.Args[2] == "receipts") {
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "escrow" || os.Args[2] == "dex" || os.Args[2] == "approve" || os.Args[2] == "inspect-approval" || os.Args[2] == "list-approvals" || os.Args[2] == "receipts") {
 			msgE2(os.Args[2:])
 		} else {
 			msgcmd(os.Args[2:])
@@ -193,6 +193,7 @@ func usage() {
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
   spore msg approve -request FILE -identity FILE -out FILE [-confirm]      (review and sign a typed capability approval)
   spore msg inspect-approval -file FILE [-state-dir D]                     (inspect capability envelope, signatures, and replay ledger)
+  spore msg list-approvals [-dir D] [-state-dir D] [-status pending|signed|spent|expired|all] [-json]   (list and summarize capability envelopes)
   spore msg escrow claim -hash HEX -preimage HEX -to ADDR -session HEX ...   (close a funded HTLC with the preimage; announces in-thread)
   spore msg escrow refund -hash HEX -to ADDR -session HEX ...                (refund an expired HTLC; announces in-thread)
   spore msg dex swap|wrap|unwrap [-ta T -tb T -min-out N | -amount Ndero] -to ADDR -session HEX ...  (relay-dex settlement; announces in-thread; SPORE_SAP_* env)

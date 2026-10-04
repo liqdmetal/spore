@@ -715,3 +715,97 @@ func TestMsgInspectApprovalOutputAndReplayStatus(t *testing.T) {
 	}
 	_ = buf
 }
+
+func TestMsgListApprovals(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	envelope1, _, _ := approvalFixture(t) // DERO signed
+	envelope1Path := filepath.Join(dir, "1_dero_signed.json")
+	writeApprovalTestFile(t, envelope1Path, envelope1)
+
+	requesterIdentity := bytes.Repeat([]byte{0x31}, 32)
+	requesterPrivate, err := secure.SigKeypairOf(requesterIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverIdentity := bytes.Repeat([]byte{0x52}, 32)
+	approverPrivate, err := secure.SigKeypairOf(approverIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("session2"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	envelope2, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, 15_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope2Path := filepath.Join(dir, "2_dero_pending.json")
+	writeApprovalTestFile(t, envelope2Path, envelope2)
+
+	// Consume envelope1's nonce so it becomes SPENT
+	if err := consumeCapabilityNonce(stateDir, envelope1); err != nil {
+		t.Fatal(err)
+	}
+
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+
+	// 1. Text listing (all)
+	outAll := captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir})
+	})
+	if !strings.Contains(outAll, "SPENT") || !strings.Contains(outAll, "PENDING") {
+		t.Errorf("expected SPENT and PENDING in list output:\n%s", outAll)
+	}
+
+	// 2. Filter status: pending
+	outPending := captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir, "-status", "pending"})
+	})
+	if strings.Contains(outPending, "SPENT") || !strings.Contains(outPending, "PENDING") {
+		t.Errorf("expected only PENDING in filtered output:\n%s", outPending)
+	}
+
+	// 3. JSON output format
+	outJSON := captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir, "-json"})
+	})
+	var list []approvalSummary
+	if err := json.Unmarshal([]byte(outJSON), &list); err != nil {
+		t.Fatalf("unmarshal json list: %v; raw:\n%s", err, outJSON)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 envelopes, got %d", len(list))
+	}
+	foundSpent, foundPending := false, false
+	for _, item := range list {
+		if item.Status == "SPENT" {
+			foundSpent = true
+		}
+		if item.Status == "PENDING" {
+			foundPending = true
+		}
+	}
+	if !foundSpent || !foundPending {
+		t.Errorf("expected spent and pending items in json summary, got: %+v", list)
+	}
+}
