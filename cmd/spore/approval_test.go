@@ -241,6 +241,169 @@ func TestApprovedCapabilityPostsExactPointerOnceOnRealDeroSurface(t *testing.T) 
 	}
 }
 
+// Two-device loop over a real simulated DERO surface: a requester builds a
+// capability request for the exact pointer it would post, the approver signs
+// it through the batch core (as `msg approve -request-dir` would), the
+// requester posts it through the same postApprovedCapability path send-e2
+// uses, and the spent ledger + exclusive-create outputs make every stage idempotent.
+func TestTwoDeviceApprovalLoopEndToEnd(t *testing.T) {
+	sim := derosim.New("htlc", "dex", "wdero")
+	sim.AddWallet("sender")
+	sim.AddWallet("recipient")
+	server := httptest.NewServer(sim.Handler())
+	defer server.Close()
+	senderRPC := server.URL + "/w/sender"
+	recipientRPC := server.URL + "/w/recipient"
+	senderAddress, err := dero.NewClient(senderRPC, "", "").GetAddress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientAddress, err := dero.NewClient(recipientRPC, "", "").GetAddress(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two distinct devices: requester key 0x31 signs the request, approver
+	// key 0x52 must be the one that signs the approval.
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic, _ := approvalFixtureKeys(t)
+	approverHex := hex.EncodeToString(approverPublic)
+
+	// The exact pointer the approved send must post: same payload
+	// send-e2 would generate for this session right now.
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("loop0001"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	request, err := newCapabilityEnvelope("dero", senderAddress, recipientAddress, 60_000, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Requester device: queue dir holds the pending request.
+	queueDir := filepath.Join(t.TempDir(), "queue")
+	if err := os.MkdirAll(queueDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(queueDir, "loop0001.json")
+	writeApprovalTestFile(t, requestPath, request)
+
+	// Approver device: identity file, outbox, and the requester's state-dir
+	// for spent-nonce hygiene; sign via the batch core, exactly as
+	// `msg approve -request-dir QUEUE -out-dir OUTBOX -state-dir STATE -confirm`.
+	approverSeed := bytes.Repeat([]byte{0x52}, 32)
+	approverKeyPath := filepath.Join(t.TempDir(), "approver.key")
+	if err := os.WriteFile(approverKeyPath, []byte(hex.EncodeToString(approverSeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(t.TempDir(), "outbox")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	results := runApprovalBatch([]string{requestPath}, approverKeyPath, outDir, stateDir, true)
+	if len(results) != 1 || results[0].Status != approvalBatchSigned || results[0].Output == "" {
+		t.Fatalf("batch approve must sign the pending request, got: %+v", results)
+	}
+	approvedPath := results[0].Output
+
+	// The signed output must verify against the approver key out-of-band,
+	// and the batch result must carry everything a requester needs to build
+	// the follow-up send command without re-reading the request.
+	approved, err := decodeCapabilityFile(approvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCapabilityApproval(approved, approverHex, time.Now()); err != nil {
+		t.Fatalf("signed output does not verify: %v", err)
+	}
+	if results[0].Chain != "dero" || results[0].Recipient != recipientAddress || results[0].AmountAtomic != 60_000 {
+		t.Fatalf("batch result lost the handoff fields: %+v", results[0])
+	}
+
+	// Requester device: post the approval through the exact send-e2 path.
+	requesterSeed := bytes.Repeat([]byte{0x31}, 32)
+	requesterKeyPath := filepath.Join(t.TempDir(), "requester.key")
+	if err := os.WriteFile(requesterKeyPath, []byte(hex.EncodeToString(requesterSeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := newSendApprovalFlags(t, senderRPC, requesterKeyPath, stateDir, stateKeyPath, approvedPath, approverHex)
+	bodyStore, err := mailbox.Open(filepath.Join(t.TempDir(), "body-store"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyServer := httptest.NewServer(bodyStore.Handler())
+	defer bodyServer.Close()
+	if err := fs.Set("store", bodyServer.URL); err != nil {
+		t.Fatal(err)
+	}
+	balanceBefore := sim.Balance("sender")
+	if err := postApprovedCapability(fs, recipientAddress, "0.6dero", approvedPath); err != nil {
+		t.Fatalf("approved post failed: %v", err)
+	}
+	if got := sim.Balance("sender"); got != balanceBefore-60_000 {
+		t.Fatalf("sender balance=%d want=%d", got, balanceBefore-60_000)
+	}
+
+	// The posted transfer must carry the exact approved pointer.
+	entries, err := dero.NewClient(recipientRPC, "", "").GetTransfers(context.Background(), dero.GetTransfersParams{In: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("recipient got %d transfer entries, want exactly one", len(entries))
+	}
+	posted, err := dero.EntryPayload(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPointer, _ := hex.DecodeString(approved.Pointer)
+	gotPointer, ok := (ratchetwire.DeroChainCodec{}).DecodePointer(posted)
+	if !ok || !bytes.Equal(gotPointer.MarshalBinary(), wantPointer) {
+		t.Fatalf("posted pointer=%x, want exact approved pointer %x", gotPointer.MarshalBinary(), wantPointer)
+	}
+
+	// The nonce burned at post time. Re-offering the same request to the
+	// approver (a re-scanned queue, or -watch rescanning forever) is refused
+	// with the replay reason — the loop is closed and idempotent.
+	reResult := runApprovalBatch([]string{requestPath}, approverKeyPath, outDir, stateDir, true)
+	if len(reResult) != 1 || reResult[0].Status != approvalBatchSkipped || !strings.Contains(reResult[0].Reason, "replay refused") {
+		t.Fatalf("post-consume rescan must be refused by the spent ledger, got: %+v", reResult)
+	}
+
+	// The already-signed envelope survives the rescan as a live queue member:
+	// with the shared state-dir it is now SPENT, so the handoff helper must
+	// exclude it (the send already happened) while -json marks it spent for
+	// pipeline consumers.
+	summariesOut := captureApprovalTestOutput(t, func() {
+		msgListApprovals([]string{"-dir", outDir, "-state-dir", stateDir, "-json"})
+	})
+	var summaries []approvalSummary
+	if err := json.Unmarshal([]byte(summariesOut), &summaries); err != nil {
+		t.Fatalf("unmarshal list-approvals json: %v; raw:\n%s", err, summariesOut)
+	}
+	if len(summaries) != 1 || summaries[0].Status != "SPENT" || summaries[0].Nonce != approved.Nonce {
+		t.Fatalf("outbox summary must mark the consumed approval SPENT, got: %+v", summaries)
+	}
+	commandsOut := captureApprovalTestOutput(t, func() {
+		msgListApprovals([]string{"-dir", outDir, "-state-dir", stateDir, "-print-commands"})
+	})
+	if !strings.Contains(commandsOut, "no SIGNED approvals ready to send") || strings.Contains(commandsOut, approvedPath) {
+		t.Fatalf("handoff must exclude the spent approval, got:\n%s", commandsOut)
+	}
+
+	// Posting the same approval again is refused before broadcast.
+	if err := postApprovedCapability(fs, recipientAddress, "0.6dero", approvedPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("same approval replay error = %v", err)
+	}
+	if got := sim.Balance("sender"); got != balanceBefore-60_000 {
+		t.Fatalf("replay moved funds: sender balance=%d want=%d", got, balanceBefore-60_000)
+	}
+}
+
 func TestApprovedCapabilityRejectsAmountRecipientAndWalletMismatchBeforePost(t *testing.T) {
 	envelope, _, approver := approvalFixture(t)
 	sim := derosim.New("htlc", "dex", "wdero")
@@ -304,6 +467,29 @@ func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, appro
 		}
 	}
 	return fs
+}
+
+// captureApprovalTestOutput runs fn with os.Stdout swapped for a pipe and
+// returns everything it printed (approval_test local variant of the capture
+// pattern used across the suite).
+func captureApprovalTestOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	outC := make(chan string)
+	go func() {
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(r)
+		outC <- b.String()
+	}()
+	fn()
+	_ = w.Close()
+	os.Stdout = origStdout
+	return <-outC
 }
 
 func signRequesterForTest(t *testing.T, envelope *CapabilityEnvelope) {
