@@ -1322,6 +1322,60 @@ func shortSig(s string) string {
 	return s
 }
 
+// approvalEnvelopeStatus is the classified state of one capability envelope
+// against a queue/state snapshot.
+type approvalEnvelopeStatus struct {
+	Status     string // PENDING, SIGNED, SPENT, EXPIRED, INVALID (list-approvals vocabulary)
+	SkipReason string // batch-core-shaped reason the request is not signable now ("" for PENDING)
+	Signed     bool
+	Valid      bool
+	Expired    bool
+	Spent      bool
+}
+
+// classifyApprovalEnvelope is the single source of truth for envelope queue
+// status: msgListApprovals' table and msgApprovalMetrics' skip-reason
+// breakdown must never disagree. Status precedence mirrors list-approvals
+// exactly; skipReason names what the batch core would report for a request
+// it cannot sign ("already signed", "nonce already consumed; replay refused",
+// "approval envelope: expired", or the validation error for INVALID).
+func classifyApprovalEnvelope(e CapabilityEnvelope, now time.Time, stateDir string) approvalEnvelopeStatus {
+	signed := e.Signature != ""
+	valErr := validateCapabilityEnvelope(e, now, signed)
+	isExpired := now.Unix() >= e.ExpiresAt
+
+	isSpent := false
+	if stateDir != "" {
+		spentPath := filepath.Join(stateDir, "approval-spent", e.Nonce+".spent")
+		if info, err := os.Stat(spentPath); err == nil && !info.IsDir() {
+			isSpent = true
+		}
+	}
+
+	cls := approvalEnvelopeStatus{Signed: signed, Valid: valErr == nil, Expired: isExpired, Spent: isSpent}
+	cls.Status = "PENDING"
+	if valErr != nil && !isExpired {
+		cls.Status = "INVALID"
+	} else if isSpent {
+		cls.Status = "SPENT"
+	} else if isExpired {
+		cls.Status = "EXPIRED"
+	} else if signed {
+		cls.Status = "SIGNED"
+	}
+	switch cls.Status {
+	case "SIGNED":
+		cls.SkipReason = "already signed"
+	case "SPENT":
+		cls.SkipReason = "nonce already consumed; replay refused"
+	case "EXPIRED":
+		cls.SkipReason = "approval envelope: expired"
+	case "INVALID":
+		cls.SkipReason = valErr.Error()
+	}
+	return cls
+}
+
 type approvalSummary struct {
 	Path         string `json:"path"`
 	Chain        string `json:"chain"`
@@ -1406,32 +1460,11 @@ func msgListApprovals(args []string) {
 			continue
 		}
 
-		signed := e.Signature != ""
-		valErr := validateCapabilityEnvelope(e, now, signed)
-		isExpired := now.Unix() >= e.ExpiresAt
-
-		isSpent := false
-		if *stateDir != "" {
-			spentPath := filepath.Join(*stateDir, "approval-spent", e.Nonce+".spent")
-			if info, err := os.Stat(spentPath); err == nil && !info.IsDir() {
-				isSpent = true
-			}
-		}
-
-		status := "PENDING"
-		if valErr != nil && !isExpired {
-			status = "INVALID"
-		} else if isSpent {
-			status = "SPENT"
-		} else if isExpired {
-			status = "EXPIRED"
-		} else if signed {
-			status = "SIGNED"
-		}
+		cls := classifyApprovalEnvelope(e, now, *stateDir)
 
 		filter := strings.ToLower(strings.TrimSpace(*statusFilter))
 		if filter != "" && filter != "all" {
-			if !strings.EqualFold(status, filter) {
+			if !strings.EqualFold(cls.Status, filter) {
 				continue
 			}
 		}
@@ -1442,7 +1475,7 @@ func msgListApprovals(args []string) {
 		}
 
 		expiresInStr := "expired"
-		if !isExpired {
+		if !cls.Expired {
 			rem := time.Duration(e.ExpiresAt-now.Unix()) * time.Second
 			expiresInStr = rem.Round(time.Second).String()
 		}
@@ -1457,11 +1490,11 @@ func msgListApprovals(args []string) {
 			AmountAtomic: e.AmountAtomic,
 			Approver:     e.Approver,
 			Nonce:        e.Nonce,
-			Status:       status,
-			Expired:      isExpired,
-			Signed:       signed,
-			Spent:        isSpent,
-			Valid:        valErr == nil,
+			Status:       cls.Status,
+			Expired:      cls.Expired,
+			Signed:       cls.Signed,
+			Spent:        cls.Spent,
+			Valid:        cls.Valid,
 			ExpiresAt:    e.ExpiresAt,
 			ExpiresIn:    expiresInStr,
 		})

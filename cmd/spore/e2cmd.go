@@ -94,10 +94,12 @@ func msgE2(args []string) {
 		msgInspectApproval(args[1:])
 	case "list-approvals":
 		msgListApprovals(args[1:])
+	case "approval-metrics":
+		msgApprovalMetrics(args[1:])
 	case "receipts":
 		msgReceipts(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand")
+		fmt.Fprintln(os.Stderr, "msg: unknown e2 subcommand (want send-e2|recv-e2|...|approve|inspect-approval|list-approvals|approval-metrics|receipts)")
 	}
 }
 
