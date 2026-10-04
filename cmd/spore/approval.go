@@ -454,9 +454,10 @@ func consumeCapabilityNonce(stateDir string, e CapabilityEnvelope) error {
 	return nil
 }
 
-// msgApprove signs a prepared capability only after an explicit -confirm.
-//
-// \tspore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
+// validateCapabilityRequestFlags enforces the second-device capability flag
+// combinations on the send paths: -require-approval must name a distinct
+// approver key, the chain must support typed capabilities, escrow is refused,
+// and -amount must match the chain (positive DERO; none for EVM/Solana).
 func validateCapabilityRequestFlags(fs *flag.FlagSet, chainName, amount, escrow string, requester ed25519.PublicKey) error {
 	approverHex := flagValueOr(fs, "require-approval", "")
 	requestPath := flagValueOr(fs, "approval-request", "")
