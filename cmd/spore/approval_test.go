@@ -865,7 +865,7 @@ func TestMsgApproveBatch(t *testing.T) {
 	}
 
 	// 1. Dry run (no -confirm): everything is skipped, nothing is written.
-	results := runApprovalBatch(batch, identityPath, outDir, false)
+	results := runApprovalBatch(batch, identityPath, outDir, "", false)
 	if len(results) != 4 || countStatus(results, "skipped") != 4 {
 		t.Fatalf("dry run should skip all four requests, got: %+v", results)
 	}
@@ -874,7 +874,7 @@ func TestMsgApproveBatch(t *testing.T) {
 	}
 
 	// 2. Confirmed run: only the two pending requests are signed and verify.
-	results = runApprovalBatch(batch, identityPath, outDir, true)
+	results = runApprovalBatch(batch, identityPath, outDir, "", true)
 	if len(results) != 4 || countStatus(results, "signed") != 2 || countStatus(results, "skipped") != 2 || countStatus(results, "failed") != 0 {
 		t.Fatalf("confirmed batch outcomes wrong, got: %+v", results)
 	}
@@ -910,7 +910,7 @@ func TestMsgApproveBatch(t *testing.T) {
 	}
 
 	// 4. Rerun: exclusive-create outputs turn into per-file failures, not overwrites.
-	results = runApprovalBatch([]string{pendingA, pendingB}, identityPath, outDir, true)
+	results = runApprovalBatch([]string{pendingA, pendingB}, identityPath, outDir, "", true)
 	if countStatus(results, "failed") != 2 {
 		t.Fatalf("rerun over existing outputs must fail per file, got: %+v", results)
 	}
@@ -946,6 +946,11 @@ func TestMsgApproveBatch(t *testing.T) {
 	if report.Signed != 0 || report.Skipped != 0 || report.Failed != 2 || len(report.Results) != 2 {
 		t.Fatalf("unexpected batch report: %+v", report)
 	}
+	for _, r := range report.Results {
+		if r.Chain != "dero" || r.Recipient == "" || r.Nonce == "" {
+			t.Fatalf("batch report result missing envelope fields: %+v", r)
+		}
+	}
 
 	// 6. Requests addressed to another approver device are skipped, not signed.
 	otherIdentity := filepath.Join(dir, "other.key")
@@ -954,7 +959,7 @@ func TestMsgApproveBatch(t *testing.T) {
 	}
 	otherApproverPath := filepath.Join(dir, "e_other_approver.json")
 	writeApprovalTestFile(t, otherApproverPath, buildEnvelope(11_000))
-	results = runApprovalBatch([]string{otherApproverPath}, otherIdentity, outDir, true)
+	results = runApprovalBatch([]string{otherApproverPath}, otherIdentity, outDir, "", true)
 	if len(results) != 1 || results[0].Status != "skipped" || !strings.Contains(results[0].Reason, "different approver") {
 		t.Fatalf("other-approver request must be skipped, got: %+v", results)
 	}
@@ -1030,7 +1035,7 @@ func TestMsgApproveBatchCLI(t *testing.T) {
 	writeApprovalTestFile(t, filepath.Join(queueDir, "pending.json"), pending)
 	outDir := filepath.Join(dir, "signed")
 	outJSON = captureOutput(func() {
-		msgApprove([]string{"-request-dir", queueDir, "-identity", identityPath, "-out-dir", outDir, "-confirm", "-json"})
+		msgApprove([]string{"-request-dir", queueDir, "-identity", identityPath, "-out-dir", outDir, "-state-dir", filepath.Join(dir, "state"), "-confirm", "-json"})
 	})
 	var report struct {
 		Signed  int                   `json:"signed"`
@@ -1050,5 +1055,65 @@ func TestMsgApproveBatchCLI(t *testing.T) {
 	}
 	if err := verifyCapabilityApproval(signedFile, hex.EncodeToString(approverPublic), time.Now()); err != nil {
 		t.Fatalf("CLI batch approval did not verify: %v", err)
+	}
+}
+
+func TestMsgApproveBatchSkipsSpentNonces(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "signed")
+	stateDir := filepath.Join(dir, "state")
+	identitySeed := bytes.Repeat([]byte{0x52}, 32)
+	identityPath := filepath.Join(dir, "approver.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPrivate, err := secure.SigKeypairOf(identitySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	buildEnvelope := func(amount uint64) CapabilityEnvelope {
+		var sessionID [8]byte
+		copy(sessionID[:], []byte("spent001"))
+		pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+		envelope, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, amount, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	spentPath := filepath.Join(dir, "spent.json")
+	spentEnv := buildEnvelope(1_000)
+	writeApprovalTestFile(t, spentPath, spentEnv)
+	freshPath := filepath.Join(dir, "fresh.json")
+	writeApprovalTestFile(t, freshPath, buildEnvelope(2_000))
+
+	if err := consumeCapabilityNonce(stateDir, spentEnv); err != nil {
+		t.Fatal(err)
+	}
+
+	// With -state-dir the burned request is skipped with a replay reason and
+	// only the fresh one is signed.
+	results := runApprovalBatch([]string{spentPath, freshPath}, identityPath, outDir, stateDir, true)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got: %+v", results)
+	}
+	if results[0].Status != "skipped" || !strings.Contains(results[0].Reason, "replay") {
+		t.Fatalf("spent-nonce request must be skipped with replay reason, got: %+v", results[0])
+	}
+	if results[1].Status != "signed" {
+		t.Fatalf("fresh request must be signed, got: %+v", results[1])
+	}
+
+	// Negative control: without -state-dir the same spent request is signed
+	// again, proving the skip came from the replay ledger, not the envelope.
+	otherOut := filepath.Join(dir, "signed-nostate")
+	results = runApprovalBatch([]string{spentPath}, identityPath, otherOut, "", true)
+	if len(results) != 1 || results[0].Status != "signed" {
+		t.Fatalf("spent request without -state-dir must still be signed, got: %+v", results)
 	}
 }

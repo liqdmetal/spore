@@ -759,10 +759,13 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 // -request list, or a -request-dir scan of a shared queue) are signed to one
 // <name>.signed.json each under -out-dir, reporting per-file outcomes instead
 // of aborting at the first bad file. Without -confirm a batch only reviews.
+// With -state-dir (or the configured default), requests whose nonce is
+// already burned in the approval-spent replay ledger are skipped, so a
+// re-scanned queue only signs what can still be posted.
 //
 //	spore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
-//	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json]
-//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json]
+//	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
+//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
 func msgApprove(args []string) {
 	fs := flag.NewFlagSet("msg approve", flag.ExitOnError)
 	request := fs.String("request", "", "approval request JSON file(s) to review and sign (comma-separated list for batch)")
@@ -772,6 +775,7 @@ func msgApprove(args []string) {
 	outDir := fs.String("out-dir", "", "write one signed approval per request into this directory (batch mode)")
 	confirm := fs.Bool("confirm", false, "confirm the printed actions; required to sign")
 	asJSON := fs.Bool("json", false, "batch mode: emit per-request results in machine-readable JSON format")
+	stateDir := fs.String("state-dir", "", "batch mode: encrypted endpoint session state directory whose approval-spent ledger marks already-consumed nonces")
 	_ = fs.Parse(args)
 	if *identity == "" {
 		check(errors.New("approve requires -identity"))
@@ -800,6 +804,12 @@ func msgApprove(args []string) {
 	if *outDir == "" {
 		check(errors.New("batch approve requires -out-dir"))
 	}
+	if *stateDir == "" {
+		_ = loadConfigForFlags(fs)
+		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
+			*stateDir = f.Value.String()
+		}
+	}
 	var requestPaths []string
 	if *requestDir != "" {
 		paths, err := scanApprovalRequestDir(*requestDir)
@@ -822,7 +832,7 @@ func msgApprove(args []string) {
 		fmt.Printf("no capability approval requests found in %s\n", *requestDir)
 		return
 	}
-	results := runApprovalBatch(requestPaths, *identity, *outDir, *confirm)
+	results := runApprovalBatch(requestPaths, *identity, *outDir, *stateDir, *confirm)
 	renderApprovalBatchReport(results, *asJSON)
 	failed := 0
 	for _, r := range results {
@@ -843,12 +853,19 @@ const (
 )
 
 // approvalBatchResult is the per-request outcome of one batch approve run.
+// The envelope fields (chain/action/recipient/amount) make the JSON report
+// self-contained, so pipeline tooling can build the follow-up send command
+// for each signed envelope without re-reading the request files.
 type approvalBatchResult struct {
-	Request string `json:"request"`
-	Output  string `json:"output,omitempty"`
-	Nonce   string `json:"nonce,omitempty"`
-	Status  string `json:"status"` // signed, skipped, failed
-	Reason  string `json:"reason,omitempty"`
+	Request      string `json:"request"`
+	Output       string `json:"output,omitempty"`
+	Nonce        string `json:"nonce,omitempty"`
+	Chain        string `json:"chain,omitempty"`
+	Action       string `json:"action,omitempty"`
+	Recipient    string `json:"recipient,omitempty"`
+	AmountAtomic uint64 `json:"amount_atomic,omitempty"`
+	Status       string `json:"status"` // signed, skipped, failed
+	Reason       string `json:"reason,omitempty"`
 }
 
 // scanApprovalRequestDir returns the capability-envelope JSON files in dir.
@@ -875,11 +892,12 @@ func scanApprovalRequestDir(dir string) ([]string, error) {
 
 // runApprovalBatch validates and signs each request into outDir as
 // <request base>.signed.json, aggregating per-file outcomes instead of
-// aborting on the first bad file. Already-signed, invalid, expired, and
-// other-approver requests are skipped with a reason; without -confirm
-// nothing is signed (dry run). Outputs are exclusive-create, so a rerun
-// never overwrites an existing approval.
-func runApprovalBatch(requestPaths []string, identityPath, outDir string, confirm bool) []approvalBatchResult {
+// aborting on the first bad file. Already-signed, invalid, expired, spent
+// (nonce burned in stateDir's approval-spent ledger), and other-approver
+// requests are skipped with a reason; without -confirm nothing is signed
+// (dry run). Outputs are exclusive-create, so a rerun never overwrites an
+// existing approval.
+func runApprovalBatch(requestPaths []string, identityPath, outDir, stateDir string, confirm bool) []approvalBatchResult {
 	results := make([]approvalBatchResult, 0, len(requestPaths))
 	if len(requestPaths) == 0 {
 		return results
@@ -902,6 +920,10 @@ func runApprovalBatch(requestPaths []string, identityPath, outDir string, confir
 			continue
 		}
 		result.Nonce = e.Nonce
+		result.Chain = e.Chain
+		result.Action = e.Action
+		result.Recipient = e.Recipient
+		result.AmountAtomic = e.AmountAtomic
 		if e.Signature != "" {
 			result.Status = approvalBatchSkipped
 			result.Reason = "already signed"
@@ -913,6 +935,15 @@ func runApprovalBatch(requestPaths []string, identityPath, outDir string, confir
 			result.Reason = err.Error()
 			results = append(results, result)
 			continue
+		}
+		if stateDir != "" {
+			spentPath := filepath.Join(stateDir, "approval-spent", e.Nonce+".spent")
+			if info, err := os.Stat(spentPath); err == nil && !info.IsDir() {
+				result.Status = approvalBatchSkipped
+				result.Reason = "nonce already consumed; replay refused"
+				results = append(results, result)
+				continue
+			}
 		}
 		approver, _ := hex.DecodeString(e.Approver)
 		if !bytes.Equal(approver, approverPublic) {
@@ -982,6 +1013,7 @@ func renderApprovalBatchReport(results []approvalBatchResult, asJSON bool) {
 		switch r.Status {
 		case approvalBatchSigned:
 			fmt.Printf("  SIGNED  %s -> %s\n", r.Request, r.Output)
+			fmt.Printf("          next: rerun the original %s send to %s with -approval-file %s\n", strings.ToUpper(r.Chain), r.Recipient, r.Output)
 		case approvalBatchSkipped:
 			fmt.Printf("  SKIPPED %s (%s)\n", r.Request, r.Reason)
 		default:

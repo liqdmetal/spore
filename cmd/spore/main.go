@@ -192,7 +192,7 @@ func usage() {
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
   spore msg approve -request FILE -identity FILE -out FILE [-confirm]      (review and sign a typed capability approval)
-  spore msg approve (-request A.json,B.json | -request-dir DIR) -identity FILE -out-dir DIR [-confirm] [-json]   (batch-sign approval requests; skips signed/invalid/expired/other-approver)
+  spore msg approve (-request A.json,B.json | -request-dir DIR) -identity FILE -out-dir DIR [-confirm] [-json] [-state-dir D]   (batch-sign approval requests; skips signed/invalid/expired/spent/other-approver)
   spore msg inspect-approval -file FILE [-state-dir D]                     (inspect capability envelope, signatures, and replay ledger)
   spore msg list-approvals [-dir D] [-state-dir D] [-status pending|signed|spent|expired|all] [-json]   (list and summarize capability envelopes)
   spore msg escrow claim -hash HEX -preimage HEX -to ADDR -session HEX ...   (close a funded HTLC with the preimage; announces in-thread)
