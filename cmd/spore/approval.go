@@ -25,16 +25,18 @@ import (
 	"github.com/liqdmetal/spore/internal/evm"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
+	solanaBackend "github.com/liqdmetal/spore/internal/solana"
 )
 
 const (
-	ApprovalTTL            = 15 * time.Minute
-	capabilityProtocol     = "spore.capability-approval"
-	capabilityVersion      = 1
-	capabilityDeroTransfer = "dero.transfer-with-pointer"
-	capabilityEVMDeliver   = "evm.deliver-with-pointer"
-	capabilityNonceSize    = 16
-	maxCapabilityFileBytes = 16 << 10
+	ApprovalTTL             = 15 * time.Minute
+	capabilityProtocol      = "spore.capability-approval"
+	capabilityVersion       = 1
+	capabilityDeroTransfer  = "dero.transfer-with-pointer"
+	capabilityEVMDeliver    = "evm.deliver-with-pointer"
+	capabilitySolanaDeliver = "solana.deliver-with-pointer"
+	capabilityNonceSize     = 16
+	maxCapabilityFileBytes  = 16 << 10
 )
 
 // CapabilityEnvelope is the only action currently accepted by the approval
@@ -72,6 +74,9 @@ func newCapabilityEnvelope(chain, senderAddress, recipient string, amount uint64
 	if strings.EqualFold(chain, "evm") {
 		action = capabilityEVMDeliver
 		chain = "evm"
+	} else if strings.EqualFold(chain, "solana") {
+		action = capabilitySolanaDeliver
+		chain = "solana"
 	} else {
 		chain = "dero"
 	}
@@ -186,6 +191,19 @@ func validateCapabilityEnvelope(e CapabilityEnvelope, now time.Time, signed bool
 		}
 		if e.AmountAtomic != 0 {
 			return errors.New("approval envelope: EVM mailbox deliver() is not payable; amount_atomic must be 0")
+		}
+	case capabilitySolanaDeliver:
+		if e.Chain != "solana" {
+			return errors.New("approval envelope: solana.deliver-with-pointer requires chain=solana")
+		}
+		if _, err := solanaBackend.ValidateAddress(e.Recipient); err != nil {
+			return fmt.Errorf("approval envelope: invalid Solana recipient: %w", err)
+		}
+		if _, err := solanaBackend.ValidateAddress(e.SenderAddress); err != nil {
+			return fmt.Errorf("approval envelope: invalid Solana sender address: %w", err)
+		}
+		if e.AmountAtomic != 0 {
+			return errors.New("approval envelope: Solana program deliver() is not payable; amount_atomic must be 0")
 		}
 	default:
 		return errors.New("approval envelope: unsupported action")
@@ -340,6 +358,8 @@ func approveCapabilityFile(requestPath, identityPath, outputPath string, confirm
 	pointerHash := sha256.Sum256(pointer)
 	if e.Action == capabilityEVMDeliver {
 		fmt.Fprintf(os.Stderr, "EVM mailbox deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	} else if e.Action == capabilitySolanaDeliver {
+		fmt.Fprintf(os.Stderr, "Solana program deliver approval: 0 value from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
 	} else {
 		fmt.Fprintf(os.Stderr, "DERO transfer approval: %s DERO (%d atomic units) from %s to %s; pointer sha256 %x; requested by %s; expires %s\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic, e.SenderAddress, e.Recipient, pointerHash, e.Requester, time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
 	}
@@ -435,8 +455,8 @@ func validateCapabilityRequestFlags(fs *flag.FlagSet, chainName, amount, escrow 
 	if requestPath != "" && approvalPath != "" {
 		return errors.New("-approval-request cannot be combined with -approval-file")
 	}
-	if !strings.EqualFold(chainName, "dero") && !strings.EqualFold(chainName, "evm") {
-		return errors.New("second-device capabilities currently support DERO and EVM only")
+	if !strings.EqualFold(chainName, "dero") && !strings.EqualFold(chainName, "evm") && !strings.EqualFold(chainName, "solana") {
+		return errors.New("second-device capabilities currently support DERO, EVM, and Solana only")
 	}
 	if escrow != "" {
 		return errors.New("second-device capabilities do not authorize HTLC escrow")
@@ -452,6 +472,10 @@ func validateCapabilityRequestFlags(fs *flag.FlagSet, chainName, amount, escrow 
 	} else if strings.EqualFold(chainName, "evm") {
 		if amount != "" {
 			return errors.New("second-device capability on EVM mailbox path does not accept -amount")
+		}
+	} else if strings.EqualFold(chainName, "solana") {
+		if amount != "" {
+			return errors.New("second-device capability on Solana deliver path does not accept -amount")
 		}
 	}
 	approver, err := hex.DecodeString(approverHex)
@@ -562,8 +586,8 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 		return errors.New("-approval-file requires -require-approval")
 	}
 	chain := strings.ToLower(flagValueOr(fs, "chain", ""))
-	if chain != "dero" && chain != "evm" {
-		return errors.New("signed capabilities currently support DERO and EVM only")
+	if chain != "dero" && chain != "evm" && chain != "solana" {
+		return errors.New("signed capabilities currently support DERO, EVM, and Solana only")
 	}
 	if flagValueOr(fs, "escrow", "") != "" {
 		return errors.New("signed capabilities do not authorize HTLC escrow")
@@ -581,8 +605,10 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 			return errors.New("signed capability must match a positive DERO -amount")
 		}
 		atomic = a
-	} else if amount != "" {
+	} else if chain == "evm" && amount != "" {
 		return errors.New("signed capability on EVM mailbox path does not accept -amount")
+	} else if chain == "solana" && amount != "" {
+		return errors.New("signed capability on Solana deliver path does not accept -amount")
 	}
 	resolved, _, err := resolveTo(context.Background(), recipient, flagValueOr(fs, "maildb", ""), flagValueOr(fs, "daemon", ""))
 	if err != nil {
@@ -591,8 +617,10 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	var canonicalRecipient string
 	if chain == "dero" {
 		canonicalRecipient, err = dero.ValidateAddress(resolved)
-	} else {
+	} else if chain == "evm" {
 		canonicalRecipient, err = evm.ValidateAddress(resolved)
+	} else {
+		canonicalRecipient, err = solanaBackend.ValidateAddress(resolved)
 	}
 	if err != nil {
 		return err
@@ -649,7 +677,7 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if chain == "evm" {
 		evmBackend, ok := carrier.Chain.(*evm.Backend)
 		if !ok {
 			return errors.New("signed EVM capability resolved to a non-EVM carrier")
@@ -664,6 +692,26 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 		canonicalSender, err = evm.ValidateAddress(currentSender)
 		if err != nil {
 			return err
+		}
+	} else {
+		solBackend, ok := carrier.Chain.(*solanaBackend.Backend)
+		if !ok {
+			return errors.New("signed Solana capability resolved to a non-Solana carrier")
+		}
+		currentSender, err := solBackend.Address(context.Background())
+		if err != nil {
+			return fmt.Errorf("read current Solana sender address: %w", err)
+		}
+		canonicalSender, err = solanaBackend.ValidateAddress(currentSender)
+		if err != nil {
+			return err
+		}
+		recPK, err := solanaBackend.PublicKeyFromAddress(canonicalRecipient)
+		if err != nil {
+			return fmt.Errorf("verify Solana recipient pubkey: %w", err)
+		}
+		if _, err := solBackend.InboxPDA(recPK); err != nil {
+			return fmt.Errorf("verify Solana recipient inbox PDA: %w", err)
 		}
 	}
 	if envelope.SenderAddress != canonicalSender {
@@ -682,8 +730,10 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	copy(sessionID[:], sid)
 	if chain == "dero" {
 		fmt.Printf("approved DERO capability posted txid %s amount %sdero pointer %s\n", result.TxID, formatAmount("dero", envelope.AmountAtomic), envelope.Pointer)
-	} else {
+	} else if chain == "evm" {
 		fmt.Printf("approved EVM capability posted txid %s pointer %s\n", result.TxID, envelope.Pointer)
+	} else {
+		fmt.Printf("approved Solana capability posted txid %s pointer %s\n", result.TxID, envelope.Pointer)
 	}
 	fabricPublishPointer(context.Background(), fabricRoute, sessionID, pointer)
 	return nil
@@ -705,4 +755,3 @@ func msgApprove(args []string) {
 	check(approveCapabilityFile(*request, *identity, *out, *confirm))
 	fmt.Printf("approval written to %s\n", *out)
 }
-

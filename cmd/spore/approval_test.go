@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/liqdmetal/spore/internal/mailbox"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
+	solanaBackend "github.com/liqdmetal/spore/internal/solana"
 )
 
 func approvalFixture(t *testing.T) (CapabilityEnvelope, ed25519.PrivateKey, ed25519.PublicKey) {
@@ -437,5 +439,180 @@ func TestEVMCapabilityApprovalRoundTripAndDeliverPost(t *testing.T) {
 	// Replay must be refused immediately
 	if err := postApprovedCapability(fs, recipientAddress, "", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
 		t.Fatalf("replayed EVM capability error = %v", err)
+	}
+}
+
+func TestSolanaCapabilityApprovalRoundTripAndDeliverPost(t *testing.T) {
+	requesterIdentity := bytes.Repeat([]byte{0x41}, 32)
+	requesterPrivate, err := secure.SigKeypairOf(requesterIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverIdentity := bytes.Repeat([]byte{0x62}, 32)
+	approverPrivate, err := secure.SigKeypairOf(approverIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("sess-sol"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+
+	senderKey, err := solanaBackend.NewRandomPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderAddress := senderKey.PublicKey().String()
+
+	recipientKey, err := solanaBackend.NewRandomPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientAddress := recipientKey.PublicKey().String()
+
+	// Verify PDA derivation helper works for recipient
+	expectedInboxPDA, err := solanaBackend.DeriveInboxPDA(solanaBackend.DefaultProgramID, recipientKey.PublicKey())
+	if err != nil {
+		t.Fatalf("derive inbox PDA: %v", err)
+	}
+
+	envelope, err := newCapabilityEnvelope("solana", senderAddress, recipientAddress, 0, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatalf("new Solana capability: %v", err)
+	}
+	if envelope.Action != capabilitySolanaDeliver || envelope.Chain != "solana" {
+		t.Fatalf("wrong action=%q chain=%q", envelope.Action, envelope.Chain)
+	}
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(approverPrivate, transcript))
+
+	wantApprover := hex.EncodeToString(approverPublic)
+	if err := verifyCapabilityApproval(envelope, wantApprover, time.Now()); err != nil {
+		t.Fatalf("valid Solana capability rejected: %v", err)
+	}
+
+	// Solana deliver() is non-payable; any nonzero amount must be rejected
+	envelopeNonzero := envelope
+	envelopeNonzero.AmountAtomic = 50
+	if err := validateCapabilityEnvelope(envelopeNonzero, time.Now(), true); err == nil {
+		t.Fatal("payable Solana capability unexpectedly accepted")
+	}
+
+	// Mock node that captures the RPC calls
+	var sentTxPayload string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "getLatestBlockhash" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{
+					"context": map[string]any{"slot": 42},
+					"value": map[string]any{
+						"blockhash":            "11111111111111111111111111111111",
+						"lastValidBlockHeight": 1000,
+					},
+				},
+			})
+			return
+		}
+		if req.Method == "sendTransaction" {
+			if len(req.Params) > 0 {
+				sentTxPayload = fmt.Sprint(req.Params[0])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUc",
+			})
+			return
+		}
+	}))
+	defer srv.Close()
+
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(requesterIdentity)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyfilePath := filepath.Join(t.TempDir(), "solana-sender.json")
+	senderKeyBytes, err := json.Marshal([]byte(senderKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyfilePath, senderKeyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	approvalPath := filepath.Join(t.TempDir(), "solana-approved.json")
+	writeApprovalTestFile(t, approvalPath, envelope)
+	stateDir := t.TempDir()
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := flag.NewFlagSet("solana-approved-send", flag.ContinueOnError)
+	fs.SetOutput(new(bytes.Buffer))
+	e2Common(fs)
+	fs.String("identity", "", "")
+	fs.String("require-approval", "", "")
+	fs.String("approval-request", "", "")
+	fs.String("approval-file", "", "")
+	for name, value := range map[string]string{
+		"chain": "solana", "rpc": srv.URL, "identity": identityPath, "keyfile": keyfilePath,
+		"store": "http://127.0.0.1:1", "state-dir": stateDir, "state-key": stateKeyPath,
+		"require-approval": wantApprover, "approval-file": approvalPath,
+		"config": filepath.Join(t.TempDir(), "missing-config.json"), "session-ttl": "0s",
+	} {
+		if err := fs.Set(name, value); err != nil {
+			t.Fatalf("set -%s: %v", name, err)
+		}
+	}
+
+	if err := postApprovedCapability(fs, recipientAddress, "", approvalPath); err != nil {
+		t.Fatalf("postApprovedCapability Solana failed: %v", err)
+	}
+
+	if sentTxPayload == "" {
+		t.Fatal("no transaction was posted to the Solana RPC")
+	}
+	_ = expectedInboxPDA
+
+	// Replay must be refused immediately
+	if err := postApprovedCapability(fs, recipientAddress, "", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("replayed Solana capability error = %v", err)
+	}
+
+	// Test approveCapabilityFile human confirmation for Solana
+	requestPath := filepath.Join(t.TempDir(), "solana-request.json")
+	approvedOutPath := filepath.Join(t.TempDir(), "solana-out.json")
+	approverKeyPath := filepath.Join(t.TempDir(), "approver.key")
+	if err := os.WriteFile(approverKeyPath, []byte(hex.EncodeToString(approverIdentity)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelopeUnsigned := envelope
+	envelopeUnsigned.Signature = ""
+	writeApprovalTestFile(t, requestPath, envelopeUnsigned)
+
+	// Refusal without -confirm
+	if err := approveCapabilityFile(requestPath, approverKeyPath, approvedOutPath, false); err == nil || !strings.Contains(err.Error(), "explicit human approval required") {
+		t.Fatalf("approval without -confirm unexpectedly succeeded: %v", err)
+	}
+	// Success with -confirm
+	if err := approveCapabilityFile(requestPath, approverKeyPath, approvedOutPath, true); err != nil {
+		t.Fatalf("approval with -confirm failed: %v", err)
+	}
+	decodedApproved, err := decodeCapabilityFile(approvedOutPath)
+	if err != nil {
+		t.Fatalf("decode approved: %v", err)
+	}
+	if err := verifyCapabilityApproval(decodedApproved, wantApprover, time.Now()); err != nil {
+		t.Fatalf("verify signed approval: %v", err)
 	}
 }

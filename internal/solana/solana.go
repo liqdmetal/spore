@@ -59,6 +59,43 @@ func NewBackend(rpcURL string, programID solana.PublicKey, signer solana.Private
 // Name implements chain.Chain.
 func (b *Backend) Name() string { return "solana" }
 
+// ProgramID returns the mailbox program ID used by this backend.
+func (b *Backend) ProgramID() solana.PublicKey { return b.programID }
+
+// InboxPDA derives the recipient's inbox program address for this backend's program ID.
+func (b *Backend) InboxPDA(recipient solana.PublicKey) (solana.PublicKey, error) {
+	return b.inboxPDA(recipient)
+}
+
+// DeriveInboxPDA computes the recipient's inbox PDA for a given program ID.
+func DeriveInboxPDA(programID, recipient solana.PublicKey) (solana.PublicKey, error) {
+	pda, _, err := solana.FindProgramAddress(
+		[][]byte{[]byte("mycelium"), recipient.Bytes()},
+		programID,
+	)
+	return pda, err
+}
+
+// ValidateAddress verifies that an address is a valid base58 Solana public key
+// and returns its canonical base58 string.
+func ValidateAddress(addr string) (string, error) {
+	pk, err := solana.PublicKeyFromBase58(addr)
+	if err != nil {
+		return "", fmt.Errorf("solana: invalid address %q: %w", addr, err)
+	}
+	return pk.String(), nil
+}
+
+// PublicKeyFromAddress parses a validated base58 Solana address into a solana.PublicKey.
+func PublicKeyFromAddress(addr string) (solana.PublicKey, error) {
+	return solana.PublicKeyFromBase58(addr)
+}
+
+// NewRandomPrivateKey generates a random Solana signer private key.
+func NewRandomPrivateKey() (solana.PrivateKey, error) {
+	return solana.NewRandomPrivateKey()
+}
+
 // Address implements chain.Chain. Returns the signer's base58 pubkey.
 func (b *Backend) Address(ctx context.Context) (string, error) {
 	return b.signer.PublicKey().String(), nil

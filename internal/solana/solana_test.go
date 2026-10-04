@@ -153,6 +153,9 @@ func TestBackendSelfConsistency(t *testing.T) {
 	if b.Name() != "solana" {
 		t.Errorf("Name = %q, want solana", b.Name())
 	}
+	if b.ProgramID() != DefaultProgramID {
+		t.Errorf("ProgramID = %s, want %s", b.ProgramID(), DefaultProgramID)
+	}
 	addr := b.signer.PublicKey().String()
 	gotAddr, _ := b.Address(nil)
 	if gotAddr != addr {
@@ -171,6 +174,39 @@ func TestBackendSelfConsistency(t *testing.T) {
 	}
 	if pda != ref {
 		t.Errorf("inboxPDA = %s, want %s", pda, ref)
+	}
+	pubPDA, err := b.InboxPDA(b.signer.PublicKey())
+	if err != nil || pubPDA != pda {
+		t.Errorf("InboxPDA = %s, want %s, err = %v", pubPDA, pda, err)
+	}
+	derived, err := DeriveInboxPDA(DefaultProgramID, b.signer.PublicKey())
+	if err != nil || derived != pda {
+		t.Errorf("DeriveInboxPDA = %s, want %s, err = %v", derived, pda, err)
+	}
+}
+
+func TestValidateAddress(t *testing.T) {
+	key, err := solana.NewRandomPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := key.PublicKey().String()
+	canonical, err := ValidateAddress(valid)
+	if err != nil || canonical != valid {
+		t.Fatalf("ValidateAddress(%q) = %q, err = %v", valid, canonical, err)
+	}
+
+	for _, invalid := range []string{
+		"",
+		"not-a-solana-address",
+		"0x1111111111111111111111111111111111111111",                         // EVM hex
+		"dero1qykyta6ntpd27nl0yq4xtzaf4ls6p5e9pqu0k2x4x3pqq5xavjsdxqgfamjm8", // DERO bech32
+		"short",
+		valid + "!", // invalid base58 char
+	} {
+		if _, err := ValidateAddress(invalid); err == nil {
+			t.Errorf("ValidateAddress(%q) unexpectedly succeeded", invalid)
+		}
 	}
 }
 

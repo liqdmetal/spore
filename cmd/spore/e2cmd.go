@@ -27,6 +27,7 @@ import (
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/sap"
 	"github.com/liqdmetal/spore/internal/secure"
+	solanaBackend "github.com/liqdmetal/spore/internal/solana"
 	"github.com/liqdmetal/spore/internal/store"
 )
 
@@ -523,9 +524,9 @@ func newSendE2Flagset() (*flag.FlagSet, *sendE2Opts) {
 	// the ratchet's own authentication") and made the default send path
 	// undecryptable by default receivers. The ratchet's X3DH binding is the
 	// authentication; do not re-add per-frame envelope wrapping here.
-	fs.String("require-approval", "", "64-hex Ed25519 public key of a distinct second device approving one DERO transfer")
-	fs.String("approval-request", "", "write the unsigned typed DERO action request to this path (default: -state-dir/approval-NONCE.json)")
-	fs.String("approval-file", "", "signed typed DERO capability envelope (created by `spore msg approve`); posts its exact pointer without regenerating the ratchet frame")
+	fs.String("require-approval", "", "64-hex Ed25519 public key of a distinct second device approving this send action")
+	fs.String("approval-request", "", "write the unsigned typed action request to this path (default: -state-dir/approval-NONCE.json)")
+	fs.String("approval-file", "", "signed typed capability envelope (created by `spore msg approve`); posts its exact pointer without regenerating the ratchet frame")
 	// e2Common supplies the shared carrier, mailbox, and daemon flags
 	// (state-dir, state-key, maildb, store, chain, …) — same pattern as
 	// newDeroE2SendFlags.
@@ -716,6 +717,27 @@ func sendE2Core(fs *flag.FlagSet, to, identity, bundle, bundleURL, bundleToken, 
 			senderAddress, err = evm.ValidateAddress(addr)
 			if err != nil {
 				return err
+			}
+		case "solana":
+			solBackend, ok := carrier.Chain.(*solanaBackend.Backend)
+			if !ok {
+				return errors.New("second-device capability requires the Solana backend")
+			}
+			addr, err := solBackend.Address(context.Background())
+			if err != nil {
+				return fmt.Errorf("read Solana sender address: %w", err)
+			}
+			senderAddress, err = solanaBackend.ValidateAddress(addr)
+			if err != nil {
+				return err
+			}
+			// Verify recipient address and PDA derivation upfront
+			recPK, err := solanaBackend.PublicKeyFromAddress(to)
+			if err != nil {
+				return fmt.Errorf("verify Solana recipient address: %w", err)
+			}
+			if _, err := solBackend.InboxPDA(recPK); err != nil {
+				return fmt.Errorf("verify Solana recipient inbox PDA: %w", err)
 			}
 		default:
 			return fmt.Errorf("second-device capability unsupported on chain %q", chain)
