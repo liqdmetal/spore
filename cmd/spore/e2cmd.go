@@ -90,6 +90,8 @@ func msgE2(args []string) {
 		}
 	case "approve":
 		msgApprove(args[1:])
+	case "inspect-approval":
+		msgInspectApproval(args[1:])
 	case "receipts":
 		msgReceipts(args[1:])
 	default:

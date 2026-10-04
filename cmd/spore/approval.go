@@ -755,3 +755,113 @@ func msgApprove(args []string) {
 	check(approveCapabilityFile(*request, *identity, *out, *confirm))
 	fmt.Printf("approval written to %s\n", *out)
 }
+
+// msgInspectApproval parses and displays a capability envelope file,
+// checks signatures and expiry, and verifies replay status against state-dir.
+//
+//	spore msg inspect-approval -file ENVELOPE.json [-state-dir DIR]
+func msgInspectApproval(args []string) {
+	fs := flag.NewFlagSet("msg inspect-approval", flag.ExitOnError)
+	file := fs.String("file", "", "capability envelope JSON file to inspect (request or signed approval)")
+	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory to check spent nonce replay ledger")
+	_ = fs.Parse(args)
+	if *file == "" {
+		check(errors.New("inspect-approval requires -file"))
+	}
+	if *stateDir == "" {
+		_ = loadConfigForFlags(fs)
+		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
+			*stateDir = f.Value.String()
+		}
+	}
+	e, err := decodeCapabilityFile(*file)
+	check(err)
+
+	now := time.Now()
+	signed := e.Signature != ""
+
+	// Check validity
+	valErr := validateCapabilityEnvelope(e, now, signed)
+
+	var pointerHash [32]byte
+	if ptr, err := hex.DecodeString(e.Pointer); err == nil {
+		pointerHash = sha256.Sum256(ptr)
+	}
+
+	transcript, _ := capabilityTranscript(e)
+
+	fmt.Println("Capability Envelope:")
+	fmt.Printf("  Protocol:       %s (v%d)\n", e.Protocol, e.Version)
+	fmt.Printf("  Action:         %s\n", e.Action)
+	fmt.Printf("  Chain:          %s\n", e.Chain)
+	fmt.Printf("  Sender:         %s\n", e.SenderAddress)
+	fmt.Printf("  Recipient:      %s\n", e.Recipient)
+	if e.Action == capabilityDeroTransfer {
+		fmt.Printf("  Amount:         %s DERO (%d atomic)\n", formatAmount("dero", e.AmountAtomic), e.AmountAtomic)
+	} else {
+		fmt.Printf("  Amount:         0 (non-payable deliver)\n")
+	}
+	fmt.Printf("  Session ID:     %s\n", e.SessionID)
+	fmt.Printf("  Pointer SHA256: %x\n", pointerHash)
+	fmt.Printf("  Nonce:          %s\n", e.Nonce)
+	fmt.Printf("  Created:        %s\n", time.Unix(e.CreatedAt, 0).UTC().Format(time.RFC3339))
+	fmt.Printf("  Expires:        %s\n", time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	if now.Unix() >= e.ExpiresAt {
+		fmt.Println("  Expiry Status:  EXPIRED")
+	} else {
+		rem := time.Duration(e.ExpiresAt-now.Unix()) * time.Second
+		fmt.Printf("  Expiry Status:  VALID (expires in %s)\n", rem.Round(time.Second))
+	}
+
+	fmt.Println("\nSignatures & Authorities:")
+	fmt.Printf("  Requester:      %s\n", e.Requester)
+	reqPK, err := hex.DecodeString(e.Requester)
+	reqSig, err2 := hex.DecodeString(e.RequesterSignature)
+	if err == nil && err2 == nil && len(reqPK) == ed25519.PublicKeySize && len(reqSig) == ed25519.SignatureSize && transcript != nil && ed25519.Verify(ed25519.PublicKey(reqPK), transcript, reqSig) {
+		fmt.Printf("  Requester Sig:  VALID (%s...)\n", shortSig(e.RequesterSignature))
+	} else {
+		fmt.Printf("  Requester Sig:  INVALID (%s)\n", e.RequesterSignature)
+	}
+
+	fmt.Printf("  Approver:       %s\n", e.Approver)
+	if signed {
+		appPK, err := hex.DecodeString(e.Approver)
+		appSig, err2 := hex.DecodeString(e.Signature)
+		if err == nil && err2 == nil && len(appPK) == ed25519.PublicKeySize && len(appSig) == ed25519.SignatureSize && transcript != nil && ed25519.Verify(ed25519.PublicKey(appPK), transcript, appSig) {
+			fmt.Printf("  Approver Sig:   VALID (%s...)\n", shortSig(e.Signature))
+		} else {
+			fmt.Printf("  Approver Sig:   INVALID (%s)\n", e.Signature)
+		}
+	} else {
+		fmt.Println("  Approver Sig:   UNSIGNED (pending approval)")
+	}
+
+	fmt.Println("\nReplay & Ledger Status:")
+	if *stateDir != "" {
+		spentPath := filepath.Join(*stateDir, "approval-spent", e.Nonce+".spent")
+		if info, err := os.Stat(spentPath); err == nil && !info.IsDir() {
+			fmt.Printf("  Nonce Status:   SPENT (consumed in %s)\n", spentPath)
+		} else if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("  Nonce Status:   UNSPENT (not recorded in local approval-spent ledger)")
+		} else {
+			fmt.Printf("  Nonce Status:   UNKNOWN (error inspecting ledger: %v)\n", err)
+		}
+	} else {
+		fmt.Println("  Nonce Status:   UNKNOWN (no -state-dir supplied to check approval-spent ledger)")
+	}
+
+	if valErr != nil {
+		fmt.Printf("\nOverall Validity: INVALID (%v)\n", valErr)
+	} else if signed {
+		fmt.Println("\nOverall Validity: VALID (signed capability approval ready to post)")
+	} else {
+		fmt.Println("\nOverall Validity: VALID (unsigned approval request ready for review)")
+	}
+}
+
+func shortSig(s string) string {
+	if len(s) > 16 {
+		return s[:16]
+	}
+	return s
+}

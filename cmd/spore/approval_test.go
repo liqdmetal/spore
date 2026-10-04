@@ -616,3 +616,77 @@ func TestSolanaCapabilityApprovalRoundTripAndDeliverPost(t *testing.T) {
 		t.Fatalf("verify signed approval: %v", err)
 	}
 }
+
+func TestMsgInspectApprovalOutputAndReplayStatus(t *testing.T) {
+	envelope, _, approverPublic := approvalFixture(t)
+	dir := t.TempDir()
+	approvedPath := filepath.Join(dir, "approved.json")
+	writeApprovalTestFile(t, approvedPath, envelope)
+
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Unspent check
+	var buf bytes.Buffer
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+
+	outUnspent := captureOutput(func() {
+		msgInspectApproval([]string{"-file", approvedPath, "-state-dir", stateDir})
+	})
+	if !strings.Contains(outUnspent, "dero.transfer-with-pointer") {
+		t.Errorf("expected action in output, got:\n%s", outUnspent)
+	}
+	if !strings.Contains(outUnspent, "UNSPENT") {
+		t.Errorf("expected UNSPENT status, got:\n%s", outUnspent)
+	}
+	if !strings.Contains(outUnspent, "Approver Sig:   VALID") {
+		t.Errorf("expected valid approver sig, got:\n%s", outUnspent)
+	}
+	if !strings.Contains(outUnspent, "Overall Validity: VALID") {
+		t.Errorf("expected valid overall status, got:\n%s", outUnspent)
+	}
+
+	// 2. Consume nonce and inspect again -> SPENT
+	if err := consumeCapabilityNonce(stateDir, envelope); err != nil {
+		t.Fatalf("consume nonce: %v", err)
+	}
+	outSpent := captureOutput(func() {
+		msgInspectApproval([]string{"-file", approvedPath, "-state-dir", stateDir})
+	})
+	if !strings.Contains(outSpent, "Nonce Status:   SPENT") {
+		t.Errorf("expected SPENT status, got:\n%s", outSpent)
+	}
+
+	// 3. Inspect unsigned request
+	requestPath := filepath.Join(dir, "request.json")
+	unsigned := envelope
+	unsigned.Signature = ""
+	writeApprovalTestFile(t, requestPath, unsigned)
+	outUnsigned := captureOutput(func() {
+		msgInspectApproval([]string{"-file", requestPath})
+	})
+	if !strings.Contains(outUnsigned, "UNSIGNED (pending approval)") {
+		t.Errorf("expected unsigned status, got:\n%s", outUnsigned)
+	}
+	if !strings.Contains(outUnsigned, "ready for review") {
+		t.Errorf("expected ready for review status, got:\n%s", outUnsigned)
+	}
+	_ = approverPublic
+	_ = buf
+}
