@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gagliardetto/solana-go"
 	"github.com/liqdmetal/spore/internal/dero"
 	"github.com/liqdmetal/spore/internal/derosim"
+	"github.com/liqdmetal/spore/internal/evm"
 	"github.com/liqdmetal/spore/internal/mailbox"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/secure"
@@ -404,6 +407,365 @@ func TestTwoDeviceApprovalLoopEndToEnd(t *testing.T) {
 	}
 }
 
+// runTwoDeviceApprovalLoop is the chain-neutral two-device workflow shared by
+// the EVM and Solana loop tests: the requester queues a request for the exact
+// pointer it would post, the approver signs it through the batch core (the
+// -request-dir/-watch engine), and the requester posts it through the same
+// postApprovedCapability path send-e2 uses against the provided mock node.
+// replayRefusal must fail the second post. Returns the signed envelope plus
+// the approval-spent state dir for the post-loop ledger assertions.
+func runTwoDeviceApprovalLoop(t *testing.T, chain, requestPath, approverKeyPath string, amountAtomic uint64, requesterPrivate ed25519.PrivateKey, post func(t *testing.T, fs *flag.FlagSet, to, amount, approvalPath string), buildFlags func(t *testing.T, rpc, identityPath, stateDir, stateKeyPath, approvalPath, approverHex string) *flag.FlagSet) (CapabilityEnvelope, string) {
+	t.Helper()
+	approverPublic, _ := approvalFixtureKeys(t)
+	approverHex := hex.EncodeToString(approverPublic)
+	outDir := filepath.Join(t.TempDir(), "outbox")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	results := runApprovalBatch([]string{requestPath}, approverKeyPath, outDir, stateDir, true)
+	if len(results) != 1 || results[0].Status != approvalBatchSigned || results[0].Output == "" {
+		t.Fatalf("batch approve must sign the pending %s request, got: %+v", chain, results)
+	}
+	approvedPath := results[0].Output
+	approved, err := decodeCapabilityFile(approvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCapabilityApproval(approved, approverHex, time.Now()); err != nil {
+		t.Fatalf("signed %s output does not verify: %v", chain, err)
+	}
+	if results[0].Chain != chain || results[0].AmountAtomic != amountAtomic {
+		t.Fatalf("batch result lost the %s handoff fields: %+v", chain, results[0])
+	}
+	identityPath := filepath.Join(t.TempDir(), "requester.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(bytes.Repeat([]byte{0x31}, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := buildFlags(t, "", identityPath, stateDir, stateKeyPath, approvedPath, approverHex)
+	storedRequester, err := hex.DecodeString(approved.Requester)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// postApprovedCapability re-derives the requester pub from the -identity
+	// file via secure.SigPubOf (a spore-namespaced KDF, NOT the raw key); the
+	// identity file must therefore hold the requester identity seed and the
+	// envelope must have been requested by that same identity.
+	fileSeed, err := readHexFile(identityPath, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePub, err := secure.SigPubOf(fileSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipeBytes(fileSeed)
+	if !bytes.Equal(filePub, storedRequester) {
+		t.Fatalf("identity file pub %x does not match envelope requester %x", filePub, storedRequester)
+	}
+	post(t, fs, approved.Recipient, "", approvedPath)
+	// The nonce burned at post time: re-offering the same request to the
+	// approver (a re-scanned queue, or -watch rescanning forever) is refused
+	// with the replay reason.
+	reResult := runApprovalBatch([]string{requestPath}, approverKeyPath, outDir, stateDir, true)
+	if len(reResult) != 1 || reResult[0].Status != approvalBatchSkipped || !strings.Contains(reResult[0].Reason, "replay refused") {
+		t.Fatalf("post-consume rescan must be refused by the spent ledger, got: %+v", reResult)
+	}
+	// The handoff helper must exclude the consumed envelope (the send already
+	// happened) while -json marks it SPENT for pipeline consumers.
+	commandsOut := captureApprovalTestOutput(t, func() {
+		msgListApprovals([]string{"-dir", outDir, "-state-dir", stateDir, "-print-commands"})
+	})
+	if !strings.Contains(commandsOut, "no SIGNED approvals ready to send") || strings.Contains(commandsOut, approvedPath) {
+		t.Fatalf("handoff must exclude the spent %s approval, got:\n%s", chain, commandsOut)
+	}
+	summariesOut := captureApprovalTestOutput(t, func() {
+		msgListApprovals([]string{"-dir", outDir, "-state-dir", stateDir, "-json"})
+	})
+	var summaries []approvalSummary
+	if err := json.Unmarshal([]byte(summariesOut), &summaries); err != nil {
+		t.Fatalf("unmarshal list-approvals json: %v; raw:\n%s", err, summariesOut)
+	}
+	if len(summaries) != 1 || summaries[0].Status != "SPENT" || summaries[0].Nonce != approved.Nonce {
+		t.Fatalf("outbox summary must mark the consumed %s approval SPENT, got: %+v", chain, summaries)
+	}
+	return approved, stateDir
+}
+
+func TestTwoDeviceApprovalLoopEndToEndEVM(t *testing.T) {
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic, _ := approvalFixtureKeys(t)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("loopevm1"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	recipientAddress := "0x2222222222222222222222222222222222222222"
+	mailboxAddress := "0x3333333333333333333333333333333333333333"
+	// The requester's sending key must be the EVM key whose 0x address the
+	// envelope is bound to (postApprovedCapability refuses a different sender).
+	evmKeyHex := "0102030405060708010203040506070801020304050607080102030405060708" // fixed never-for-funds rehearsal key
+	evmAddress, err := evm.AddressForKey(evmKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := newCapabilityEnvelope("evm", evmAddress, recipientAddress, 0, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != capabilityEVMDeliver {
+		t.Fatalf("wrong action %q", request.Action)
+	}
+
+	// Mock EVM node: a read-only RPC fronted by the SAME local EIP-155
+	// signing proxy the evm-proxy command uses (the production path for
+	// send-e2). The raw eth_sendRawTransaction layer captures the broadcast so
+	// we can prove the delivered calldata is the byte-identical approved
+	// pointer.
+	var rawTxHex string
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_chainId":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": "0x1"})
+		case "eth_getTransactionCount":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": "0x0"})
+		case "eth_gasPrice":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": "0x1"})
+		case "eth_estimateGas":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": "0x5208"})
+		case "eth_sendRawTransaction":
+			var params []string
+			_ = json.Unmarshal(req.Params, &params)
+			if len(params) == 1 {
+				rawTxHex = params[0]
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": "0xfeedbeef00000000000000000000000000000000000000000000000000000001"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": "no such method: " + req.Method}})
+		}
+	}))
+	defer node.Close()
+	proxy, err := evm.NewProxy(node.URL, evmKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(proxy.Handler())
+	defer srv.Close()
+
+	queueDir := filepath.Join(t.TempDir(), "queue")
+	if err := os.MkdirAll(queueDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(queueDir, "loopevm1.json")
+	writeApprovalTestFile(t, requestPath, request)
+	approverKeyPath := filepath.Join(t.TempDir(), "approver.key")
+	if err := os.WriteFile(approverKeyPath, []byte(hex.EncodeToString(bytes.Repeat([]byte{0x52}, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	post := func(t *testing.T, fs *flag.FlagSet, to, amount, approvalPath string) {
+		t.Helper()
+		if err := postApprovedCapability(fs, to, "", approvalPath); err != nil {
+			t.Fatalf("approved EVM post failed: %v", err)
+		}
+		// Replaying the same approval must be refused by the spent ledger
+		// before any broadcast.
+		if err := postApprovedCapability(fs, to, "", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+			t.Fatalf("same EVM approval replay error = %v", err)
+		}
+	}
+	buildFlags := func(t *testing.T, _, identityPath, stateDir, stateKeyPath, approvalPath, approver string) *flag.FlagSet {
+		t.Helper()
+		fs := flag.NewFlagSet("evm-loop-send", flag.ContinueOnError)
+		fs.SetOutput(new(bytes.Buffer))
+		e2Common(fs)
+		fs.String("identity", "", "")
+		fs.String("require-approval", "", "")
+		fs.String("approval-request", "", "")
+		fs.String("approval-file", "", "")
+		for name, value := range map[string]string{
+			"chain": "evm", "rpc": srv.URL, "identity": identityPath, "from": evmAddress, "mailbox": mailboxAddress,
+			"store": "http://127.0.0.1:1", "state-dir": stateDir, "state-key": stateKeyPath,
+			"require-approval": approver, "approval-file": approvalPath,
+			"config": filepath.Join(t.TempDir(), "missing-config.json"), "session-ttl": "0s",
+		} {
+			if err := fs.Set(name, value); err != nil {
+				t.Fatalf("set -%s: %v", name, err)
+			}
+		}
+		return fs
+	}
+	approved, _ := runTwoDeviceApprovalLoop(t, "evm", requestPath, approverKeyPath, 0, requesterPrivate, post, buildFlags)
+
+	// The broadcast raw transaction must carry the deliver() calldata holding
+	// the JSON-encoded approved pointer (EVM/Solana ride the JSONCodec), with
+	// the recipient address the envelope approved.
+	if rawTxHex == "" {
+		t.Fatal("no raw transaction was broadcast to the EVM node")
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(rawTxHex, "0x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := ratchetwire.JSONCodec{}.EncodePointer(mustParsePointerPayload(t, approved.Pointer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantRecipient [20]byte
+	reqBytes, _ := hex.DecodeString(strings.TrimPrefix(recipientAddress, "0x"))
+	copy(wantRecipient[:], reqBytes)
+	if !bytes.Contains(raw, encoded) || !bytes.Contains(raw, wantRecipient[:]) {
+		t.Fatalf("broadcast tx calldata does not carry the approved pointer for %s", recipientAddress)
+	}
+}
+
+func TestTwoDeviceApprovalLoopEndToEndSolana(t *testing.T) {
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic, _ := approvalFixtureKeys(t)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("loopsol1"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	// Deterministic sender keypair from a fixed seed: ed25519.NewKeyFromSeed
+	// yields seed(32) || pub(32), exactly the solana.PrivateKey layout. The
+	// requester's -identity (ed25519 0x41) and this Solana signer are separate
+	// keys by design: the envelope binds the ed25519 requester, the carrier
+	// flags bind this signer.
+	senderKey := solana.PrivateKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, 32)))
+	recipientKey, err := solana.NewRandomPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedInboxPDA, err := solanaBackend.DeriveInboxPDA(solanaBackend.DefaultProgramID, recipientKey.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := newCapabilityEnvelope("solana", senderKey.PublicKey().String(), recipientKey.PublicKey().String(), 0, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != capabilitySolanaDeliver {
+		t.Fatalf("wrong action %q", request.Action)
+	}
+
+	// Mock Solana RPC: satisfy getLatestBlockhash, capture sendTransaction.
+	var sentTxPayload string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "getLatestBlockhash":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{
+					"context": map[string]any{"slot": 42},
+					"value":   map[string]any{"blockhash": "11111111111111111111111111111111", "lastValidBlockHeight": 1000},
+				},
+			})
+		case "sendTransaction":
+			// Decode the base64 wire tx and capture its message bytes so the
+			// assertion can prove the approved recipient's inbox PDA rides in
+			// the account keys (the mock's error path also mirrors a real
+			// node's preflight failure when the payer is not funded).
+			if len(req.Params) > 0 {
+				if txB64, ok := req.Params[0].(string); ok {
+					if raw, derr := base64.StdEncoding.DecodeString(txB64); derr == nil {
+						sentTxPayload = string(raw)
+					}
+				}
+			}
+			// Simulate the node's preflight: the payer has no funds in this
+			// mock, which surfaces as an RPC error after the tx is captured.
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32002, "message": "Transaction simulation failed", "data": map[string]any{"err": "InvalidAccountForFee", "logs": []string{}}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": "no such method: " + req.Method}})
+		}
+	}))
+	defer srv.Close()
+
+	queueDir := filepath.Join(t.TempDir(), "queue")
+	if err := os.MkdirAll(queueDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(queueDir, "loopsol1.json")
+	writeApprovalTestFile(t, requestPath, request)
+	approverKeyPath := filepath.Join(t.TempDir(), "approver.key")
+	if err := os.WriteFile(approverKeyPath, []byte(hex.EncodeToString(bytes.Repeat([]byte{0x52}, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyfilePath := filepath.Join(t.TempDir(), "solana-sender.json")
+	senderKeyBytes, err := json.Marshal([]byte(senderKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyfilePath, senderKeyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	post := func(t *testing.T, fs *flag.FlagSet, to, amount, approvalPath string) {
+		t.Helper()
+		// The mock node deliberately fails the send (preflight: unfunded payer,
+		// the one thing a mock cannot fake) AFTER receiving the fully signed
+		// transaction; postApprovedCapability must surface that as the
+		// ambiguous-broadcast burn so the approval cannot be retried unsafely.
+		err := postApprovedCapability(fs, to, "", approvalPath)
+		if err == nil {
+			t.Fatalf("mock Solana node rejected the send but postApprovedCapability reported success")
+		}
+		if !strings.Contains(err.Error(), "broadcast result is ambiguous") {
+			t.Fatalf("expected ambiguous-broadcast burn on mock rejection, got: %v", err)
+		}
+	}
+	buildFlags := func(t *testing.T, _, identityPath, stateDir, stateKeyPath, approvalPath, approver string) *flag.FlagSet {
+		t.Helper()
+		fs := flag.NewFlagSet("solana-loop-send", flag.ContinueOnError)
+		fs.SetOutput(new(bytes.Buffer))
+		e2Common(fs)
+		fs.String("identity", "", "")
+		fs.String("require-approval", "", "")
+		fs.String("approval-request", "", "")
+		fs.String("approval-file", "", "")
+		for name, value := range map[string]string{
+			"chain": "solana", "rpc": srv.URL, "identity": identityPath, "keyfile": keyfilePath,
+			"store": "http://127.0.0.1:1", "state-dir": stateDir, "state-key": stateKeyPath,
+			"require-approval": approver, "approval-file": approvalPath,
+			"config": filepath.Join(t.TempDir(), "missing-config.json"), "session-ttl": "0s",
+		} {
+			if err := fs.Set(name, value); err != nil {
+				t.Fatalf("set -%s: %v", name, err)
+			}
+		}
+		return fs
+	}
+	runTwoDeviceApprovalLoop(t, "solana", requestPath, approverKeyPath, 0, requesterPrivate, post, buildFlags)
+
+	// The submitted (mock-rejected, but captured) transaction must reference
+	// the approved recipient's inbox PDA in its account keys — the Solana
+	// deliver surface this approval authorizes. The transaction is fully
+	// signed by the payer key from -keyfile before submission.
+	if sentTxPayload == "" {
+		t.Fatal("no transaction was submitted to the Solana RPC")
+	}
+	if !bytes.Contains([]byte(sentTxPayload), expectedInboxPDA.Bytes()) {
+		t.Fatalf("submitted tx does not reference the approved recipient inbox PDA %s", expectedInboxPDA)
+	}
+	if !bytes.Contains([]byte(sentTxPayload), senderKey.PublicKey().Bytes()) {
+		t.Fatalf("submitted tx was not signed by the -keyfile payer %s", senderKey.PublicKey())
+	}
+}
+
 func TestApprovedCapabilityRejectsAmountRecipientAndWalletMismatchBeforePost(t *testing.T) {
 	envelope, _, approver := approvalFixture(t)
 	sim := derosim.New("htlc", "dex", "wdero")
@@ -467,6 +829,21 @@ func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, appro
 		}
 	}
 	return fs
+}
+
+// mustParsePointerPayload parses a hex pointer field into a PointerPayload
+// (approval_test local helper for the chain-assertion steps).
+func mustParsePointerPayload(t *testing.T, hexPointer string) ratchetwire.PointerPayload {
+	t.Helper()
+	raw, err := hex.DecodeString(hexPointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ratchetwire.ParsePointerPayload(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // captureApprovalTestOutput runs fn with os.Stdout swapped for a pipe and
