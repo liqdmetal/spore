@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -1340,16 +1341,36 @@ type approvalSummary struct {
 	ExpiresIn    string `json:"expires_in"`
 }
 
+// validateListApprovalsFlags enforces the list-approvals flag combinations:
+// -json and -print-commands are mutually exclusive (-json already carries
+// every field the commands are built from).
+func validateListApprovalsFlags(printCommands, asJSON bool) error {
+	if printCommands && asJSON {
+		return errors.New("list-approvals: -json and -print-commands are mutually exclusive (-json already carries every field the commands are built from)")
+	}
+	return nil
+}
+
 // msgListApprovals scans a directory or state-dir and lists capability envelopes.
+// With -print-commands it instead prints one ready-to-run requester send
+// command per SIGNED envelope (the requester supplies -identity and
+// -pinned-sig to fill in the last two blanks), mirroring `spore sub send`:
+// printing beats silently half-sending, because posting a capability burns
+// its nonce.
 //
 //	spore msg list-approvals [-dir DIR] [-state-dir DIR] [-status pending|signed|spent|all] [-json]
+//	spore msg list-approvals [-dir DIR] [-state-dir DIR] -print-commands [-identity KEYFILE] [-pinned-sig HEX]
 func msgListApprovals(args []string) {
 	fs := flag.NewFlagSet("msg list-approvals", flag.ExitOnError)
 	scanDir := fs.String("dir", "", "directory to scan for .json capability envelopes (defaults to -state-dir or current dir)")
 	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory to check spent nonce replay ledger")
 	statusFilter := fs.String("status", "all", "filter by status: all|pending|signed|spent|expired")
 	asJSON := fs.Bool("json", false, "output summary list in machine-readable JSON format")
+	printCommands := fs.Bool("print-commands", false, "print one ready-to-run requester send command per SIGNED envelope instead of the summary table")
+	commandIdentity := fs.String("identity", "", "print-commands: requester identity private key file to embed in the commands (placeholder if empty)")
+	commandPinned := fs.String("pinned-sig", "", "print-commands: recipient pinned signing key hex to embed in the commands (placeholder if empty)")
 	_ = fs.Parse(args)
+	check(validateListApprovalsFlags(*printCommands, *asJSON))
 
 	if *stateDir == "" {
 		_ = loadConfigForFlags(fs)
@@ -1427,20 +1448,22 @@ func msgListApprovals(args []string) {
 		}
 
 		summaries = append(summaries, approvalSummary{
-			Path:      path,
-			Chain:     e.Chain,
-			Action:    e.Action,
-			Sender:    e.SenderAddress,
-			Recipient: e.Recipient,
-			Amount:    amountStr,
-			Nonce:     e.Nonce,
-			Status:    status,
-			Expired:   isExpired,
-			Signed:    signed,
-			Spent:     isSpent,
-			Valid:     valErr == nil,
-			ExpiresAt: e.ExpiresAt,
-			ExpiresIn: expiresInStr,
+			Path:         path,
+			Chain:        e.Chain,
+			Action:       e.Action,
+			Sender:       e.SenderAddress,
+			Recipient:    e.Recipient,
+			Amount:       amountStr,
+			AmountAtomic: e.AmountAtomic,
+			Approver:     e.Approver,
+			Nonce:        e.Nonce,
+			Status:       status,
+			Expired:      isExpired,
+			Signed:       signed,
+			Spent:        isSpent,
+			Valid:        valErr == nil,
+			ExpiresAt:    e.ExpiresAt,
+			ExpiresIn:    expiresInStr,
 		})
 	}
 
@@ -1451,6 +1474,11 @@ func msgListApprovals(args []string) {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		check(enc.Encode(summaries))
+		return
+	}
+
+	if *printCommands {
+		printApprovalSendCommands(summaries, *commandIdentity, *commandPinned)
 		return
 	}
 
@@ -1470,5 +1498,55 @@ func msgListApprovals(args []string) {
 			s.ExpiresIn,
 			filepath.Base(s.Path),
 		)
+	}
+}
+
+// approvalSendCommand builds the ready-to-run requester command that posts
+// one SIGNED capability: rerun the exact send with -approval-file (the
+// -require-approval key must match the envelope's approver). identity and
+// pinned may be empty, in which case placeholder shells are printed for the
+// two requester-only secrets (never guess them: -pinned-sig is the requester's
+// out-of-band trust anchor, same policy as send-e2).
+func approvalSendCommand(s approvalSummary, identity, pinned string) string {
+	if identity == "" {
+		identity = "IDENTITY"
+	}
+	if pinned == "" {
+		pinned = "PINNED_SIG"
+	}
+	return fmt.Sprintf("spore msg send-e2 -chain %s -to %s -amount %s -require-approval %s -approval-file %s -identity %s -pinned-sig %s",
+		s.Chain, s.Recipient, s.Amount, s.Approver, s.Path, identity, pinned)
+}
+
+// printApprovalSendCommands prints one ready-to-run requester command per
+// SIGNED envelope, with change-quieting comments for everything else (spent
+// is success — the send already happened and burned the nonce). The requester
+// still supplies -identity and -pinned-sig: printing beats silently
+// half-sending, because posting a capability burns its nonce (same
+// philosophy as `spore sub send`).
+func printApprovalSendCommands(summaries []approvalSummary, identity, pinned string) {
+	printed := 0
+	for _, s := range summaries {
+		if s.Status == "SIGNED" {
+			fmt.Println(approvalSendCommand(s, identity, pinned))
+			printed++
+		}
+	}
+	other := make(map[string]int)
+	for _, s := range summaries {
+		if s.Status != "SIGNED" {
+			other[s.Status]++
+		}
+	}
+	statuses := make([]string, 0, len(other))
+	for status := range other {
+		statuses = append(statuses, status)
+	}
+	sort.Strings(statuses)
+	for _, status := range statuses {
+		fmt.Printf("# %d %s (not ready to send)\n", other[status], status)
+	}
+	if printed == 0 {
+		fmt.Println("# no SIGNED approvals ready to send")
 	}
 }

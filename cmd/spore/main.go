@@ -196,6 +196,7 @@ func usage() {
   spore msg approve -request-dir QUEUE -identity FILE -out-dir DIR -watch [-every 30s] [-state-dir D]   (always-on approver: rescan the queue and sign new requests until SIGINT/SIGTERM)
   spore msg inspect-approval -file FILE [-state-dir D]                     (inspect capability envelope, signatures, and replay ledger)
   spore msg list-approvals [-dir D] [-state-dir D] [-status pending|signed|spent|expired|all] [-json]   (list and summarize capability envelopes)
+  spore msg list-approvals [-dir D] [-state-dir D] -print-commands [-identity F] [-pinned-sig HEX]   (print ready-to-run requester send commands for SIGNED approvals)
   spore msg escrow claim -hash HEX -preimage HEX -to ADDR -session HEX ...   (close a funded HTLC with the preimage; announces in-thread)
   spore msg escrow refund -hash HEX -to ADDR -session HEX ...                (refund an expired HTLC; announces in-thread)
   spore msg dex swap|wrap|unwrap [-ta T -tb T -min-out N | -amount Ndero] -to ADDR -session HEX ...  (relay-dex settlement; announces in-thread; SPORE_SAP_* env)

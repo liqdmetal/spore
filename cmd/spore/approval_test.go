@@ -1279,3 +1279,93 @@ func TestMsgApproveBatchSkipsSpentNonces(t *testing.T) {
 		t.Fatalf("spent request without -state-dir must still be signed, got: %+v", results)
 	}
 }
+
+func TestMsgListApprovalsPrintCommands(t *testing.T) {
+	captureOutput := func(fn func()) string {
+		origStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		outC := make(chan string)
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		fn()
+		_ = w.Close()
+		os.Stdout = origStdout
+		return <-outC
+	}
+
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	envelopeSigned, _, _ := approvalFixture(t) // DERO signed, valid
+	signedPath := filepath.Join(dir, "1_dero_signed.json")
+	writeApprovalTestFile(t, signedPath, envelopeSigned)
+
+	requesterPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPrivate, err := secure.SigKeypairOf(bytes.Repeat([]byte{0x52}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approverPublic := approverPrivate.Public().(ed25519.PublicKey)
+	var sessionID [8]byte
+	copy(sessionID[:], []byte("prntcmd1"))
+	pointer := ratchetwire.PointerPayload{Version: ratchetwire.PointerV1, BurnDeadline: uint64(time.Now().Add(time.Hour).Unix())}.MarshalBinary()
+	pending, err := newCapabilityEnvelope("dero", derosim.ZeroAddress, derosim.ZeroAddress, 7_500, pointer, sessionID, requesterPrivate, approverPublic, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := filepath.Join(dir, "2_dero_pending.json")
+	writeApprovalTestFile(t, pendingPath, pending)
+
+	// 1. Placeholders: -identity/-pinned-sig omitted -> IDENTITY/PINNED_SIG.
+	out := captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir, "-print-commands"})
+	})
+	if !strings.Contains(out, "spore msg send-e2 -chain dero -to "+envelopeSigned.Recipient) ||
+		!strings.Contains(out, "-approval-file "+signedPath) ||
+		!strings.Contains(out, "-require-approval "+envelopeSigned.Approver) ||
+		!strings.Contains(out, "-identity IDENTITY") ||
+		!strings.Contains(out, "-pinned-sig PINNED_SIG") {
+		t.Errorf("expected ready-to-run command with placeholders, got:\n%s", out)
+	}
+	if !strings.Contains(out, "# 1 PENDING (not ready to send)") || strings.Contains(out, pendingPath) {
+		t.Errorf("pending envelopes must be counted, never emitted as commands, got:\n%s", out)
+	}
+	if strings.Contains(out, "no SIGNED approvals") {
+		t.Errorf("unexpected empty notice when a signed envelope exists:\n%s", out)
+	}
+
+	// 2. Embedded identity and pinned sig land in the command verbatim.
+	pinned := hex.EncodeToString(bytes.Repeat([]byte{0xAB}, 32))
+	out = captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir, "-print-commands", "-identity", "req.key", "-pinned-sig", pinned})
+	})
+	if !strings.Contains(out, "-identity req.key") || !strings.Contains(out, "-pinned-sig "+pinned) {
+		t.Errorf("expected embedded identity and pinned sig, got:\n%s", out)
+	}
+
+	// 3. -status signed selects exactly the signed envelope (no pending line).
+	out = captureOutput(func() {
+		msgListApprovals([]string{"-dir", dir, "-state-dir", stateDir, "-print-commands", "-status", "signed"})
+	})
+	if !strings.Contains(out, "-approval-file "+signedPath) || strings.Contains(out, "PENDING") {
+		t.Errorf("-status signed must emit only the signed command, got:\n%s", out)
+	}
+
+	// 4. -json and -print-commands are mutually exclusive.
+	if err := validateListApprovalsFlags(true, true); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected mutual-exclusion error, got: %v", err)
+	}
+	if err := validateListApprovalsFlags(true, false); err != nil {
+		t.Errorf("unexpected error for -print-commands alone: %v", err)
+	}
+}
