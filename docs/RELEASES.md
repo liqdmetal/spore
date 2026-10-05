@@ -3,7 +3,11 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
-## Unreleased
+## v0.8.3 — the station watches itself (2026-10-05)
+
+Two items on top of v0.8.2: the queue watcher degrades gracefully through
+filesystem races instead of crying failure, and an always-on station reports
+its own pipeline health on a schedule.
 
 - Watcher filesystem races are handled quietly: a request deleted between
   the directory scan and its read is skipped (`request vanished mid-scan`)
