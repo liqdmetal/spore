@@ -3,7 +3,12 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
-## Unreleased
+## v0.8.2 — operator visibility for the approval pipeline (2026-10-04)
+
+Four hardening-and-visibility items on top of v0.8.1: the approval pipeline
+now shows its live contention, the replay guard is proven on every chain,
+the TTL has teeth at its worst moment, and a closing window announces
+itself.
 
 - `approval-metrics` gains a live lock view: the `locks` section reports how
   many signing locks are live in the queue right now, with each holder
