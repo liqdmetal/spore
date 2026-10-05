@@ -801,7 +801,7 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 //	spore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
 //	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
 //	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
-//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -watch [-every 30s] [-state-dir D]
+//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -watch [-every 30s] [-metrics-every 10m] [-state-dir D]
 func msgApprove(args []string) {
 	fs := flag.NewFlagSet("msg approve", flag.ExitOnError)
 	request := fs.String("request", "", "approval request JSON file(s) to review and sign (comma-separated list for batch)")
@@ -814,12 +814,13 @@ func msgApprove(args []string) {
 	stateDir := fs.String("state-dir", "", "batch mode: encrypted endpoint session state directory whose approval-spent ledger marks already-consumed nonces")
 	watch := fs.Bool("watch", false, "batch mode: keep rescanning -request-dir and signing new requests until interrupted (always-on approver station)")
 	every := fs.Duration("every", 30*time.Second, "watch mode: queue rescan interval (e.g. 10s, 1m)")
+	metricsEvery := fs.Duration("metrics-every", 10*time.Minute, "watch mode: print the station's own approval-metrics summary this often (0 disables)")
 	_ = fs.Parse(args)
 	if *identity == "" {
 		check(errors.New("approve requires -identity"))
 	}
 	if *watch {
-		check(validateApproveWatchFlags(*requestDir, *request, *confirm, *asJSON, *every))
+		check(validateApproveWatchFlags(*requestDir, *request, *confirm, *asJSON, *every, *metricsEvery))
 	}
 	batch := *watch || *requestDir != "" || *outDir != "" || strings.Contains(*request, ",")
 	if !batch {
@@ -854,7 +855,7 @@ func msgApprove(args []string) {
 	if *watch {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		runApprovalWatchLoop(ctx, *requestDir, *identity, *outDir, *stateDir, *every)
+		runApprovalWatchLoop(ctx, *requestDir, *identity, *outDir, *stateDir, *every, *metricsEvery)
 		return
 	}
 	var requestPaths []string
@@ -1244,7 +1245,7 @@ func renderApprovalBatchReport(results []approvalBatchResult, asJSON bool) {
 // needs the same explicit -confirm as a one-shot batch, JSON reports are a
 // one-shot feature (the signed files are the watch artifacts), and the rescan
 // interval must be positive.
-func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool, every time.Duration) error {
+func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool, every, metricsEvery time.Duration) error {
 	if requestDir == "" {
 		return errors.New("approve: -watch requires -request-dir (a queue directory to rescan)")
 	}
@@ -1260,6 +1261,9 @@ func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool,
 	if every <= 0 {
 		return errors.New("approve: -every must be a positive duration (e.g. 10s, 1m)")
 	}
+	if metricsEvery < 0 {
+		return errors.New("approve: -metrics-every must be a positive duration or 0 to disable")
+	}
 	return nil
 }
 
@@ -1267,12 +1271,18 @@ func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool,
 // every interval, sign new pending requests, and stay quiet about files whose
 // status has not changed since the previous cycle. A transient scan failure
 // (queue dir briefly missing, permissions) is logged and retried on the next
-// tick — it must not kill the station. Returns when ctx is cancelled
-// (SIGINT/SIGTERM via signal.NotifyContext at the call site).
-func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir, stateDir string, every time.Duration) {
+// tick — it must not kill the station. When metricsEvery is positive, the
+// station prints its own approval-metrics summary once per period so an
+// always-on station shows its pipeline health without a second terminal.
+// Returns when ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext at
+// the call site).
+func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir, stateDir string, every, metricsEvery time.Duration) {
 	seen := make(map[string]string)
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
+	// First self-metrics after one full period: a freshly started station has
+	// nothing to report beyond what the startup log already says.
+	nextMetrics := time.Now().Add(metricsEvery)
 	log.Printf("approve: watching %s every %s; signing to %s as requests arrive (Ctrl-C to stop)", requestDir, every, outDir)
 	for cycle := 1; ; cycle++ {
 		signed, failed, err := runApprovalWatchCycle(requestDir, identityPath, outDir, stateDir, true, seen)
@@ -1281,6 +1291,9 @@ func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir,
 		} else if signed > 0 || failed > 0 {
 			log.Printf("approve: cycle %d: %d signed, %d failed", cycle, signed, failed)
 		}
+		if watchMetricsDue(&nextMetrics, metricsEvery, time.Now()) {
+			watchMetricsReport(requestDir, outDir, stateDir, time.Now())
+		}
 		select {
 		case <-ctx.Done():
 			log.Printf("approve: watch stopped after %d cycle(s)", cycle)
@@ -1288,6 +1301,40 @@ func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir,
 		case <-ticker.C:
 		}
 	}
+}
+
+// watchMetricsDue reports whether the self-metrics heartbeat should fire now
+// and advances the schedule by one period. metricsEvery <= 0 disables it.
+func watchMetricsDue(next *time.Time, metricsEvery time.Duration, now time.Time) bool {
+	if metricsEvery <= 0 {
+		return false
+	}
+	if now.Before(*next) {
+		return false
+	}
+	*next = now.Add(metricsEvery)
+	return true
+}
+
+// watchMetricsReport prints the station's self-metrics heartbeat on stdout:
+// the exact summary `msg approval-metrics` renders, so a long-running
+// station shows its own queue, outbox, ledger, and lock state without a
+// second terminal. Read-only; a metrics failure is reported and the station
+// keeps running.
+func watchMetricsReport(queueDir, outDir, stateDir string, now time.Time) {
+	if outDir != "" {
+		// The station creates its outbox lazily on the first signature; the
+		// heartbeat must render before that too (same directory the batch
+		// core would create).
+		_ = os.MkdirAll(outDir, 0o755)
+	}
+	m, err := buildApprovalMetrics(queueDir, outDir, stateDir, now)
+	if err != nil {
+		log.Printf("approve: self-metrics: %v", err)
+		return
+	}
+	fmt.Printf("approve: self-metrics at %s\n", now.UTC().Format(time.RFC3339))
+	renderApprovalMetrics(m)
 }
 
 // runApprovalWatchCycle performs one watch iteration: rescan requestDir, sign

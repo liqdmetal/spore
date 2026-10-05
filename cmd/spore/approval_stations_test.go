@@ -22,6 +22,69 @@ import (
 	"time"
 )
 
+// TestWatchStationSelfMetricsLive drives the REAL binary as a -watch station
+// with -metrics-every and proves the self-metrics heartbeat reaches stdout
+// through the actual CLI: build once, run over an empty queue for a few
+// fast periods, then read the log. Skips when the go tool is unavailable.
+func TestWatchStationSelfMetricsLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-binary watch smoke skipped in -short mode")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go tool unavailable; skipping real-binary watch smoke")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "spore-smoke.exe")
+	build := exec.Command("go", "build", "-o", exe, ".")
+	build.Env = os.Environ()
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build spore: %v\n%s", err, out)
+	}
+	queue := filepath.Join(dir, "queue")
+	if err := os.MkdirAll(queue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(dir, "approver.key")
+	if err := os.WriteFile(identityPath, []byte(strings.Repeat("52", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "station.log")
+	logf, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logf.Close()
+	cmd := exec.Command(exe, "msg", "approve",
+		"-request-dir", queue, "-identity", identityPath,
+		"-out-dir", filepath.Join(dir, "out"), "-state-dir", filepath.Join(dir, "state"),
+		"-watch", "-confirm", "-every", "500ms", "-metrics-every", "500ms")
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+	time.Sleep(2200 * time.Millisecond)
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logBytes)
+	if !strings.Contains(logText, "approve: watching") {
+		t.Fatalf("station log missing startup line:\n%s", logText)
+	}
+	if got := strings.Count(logText, "self-metrics at"); got < 2 {
+		t.Fatalf("want >=2 self-metrics heartbeats in ~2s of 500ms periods, got %d:\n%s", got, logText)
+	}
+	if !strings.Contains(logText, "queue: 0 request(s)") {
+		t.Fatalf("heartbeat missing the queue line:\n%s", logText)
+	}
+}
+
 // stationDrillEnv marks a re-exec'd test binary as a drill station process.
 const stationDrillEnv = "SPORE_STATION_DRILL"
 

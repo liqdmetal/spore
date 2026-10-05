@@ -3,6 +3,13 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## Unreleased
+
+- A `-watch` approver station can self-report: `-metrics-every 10m` prints
+  the full `approval-metrics` summary on stdout once per period (`0`
+  disables), so an always-on station shows its own queue, ledger, locks, and
+  outbox latencies without a second terminal.
+
 ## v0.8.2 — operator visibility for the approval pipeline (2026-10-04)
 
 Four hardening-and-visibility items on top of v0.8.1: the approval pipeline

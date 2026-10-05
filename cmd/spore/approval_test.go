@@ -958,6 +958,50 @@ func TestApprovedCapabilityWarnsOnShortTTLHeadroom(t *testing.T) {
 	}
 }
 
+// TestWatchMetricsDueAndReport pins the -watch station's self-metrics: the
+// heartbeat fires once per period (never inside it, never when disabled),
+// and the report renders the same summary the metrics command does over the
+// station's live artifacts.
+func TestWatchMetricsDueAndReport(t *testing.T) {
+	var next time.Time
+	now := time.Unix(1_000_000, 0)
+	if watchMetricsDue(&next, 0, now) {
+		t.Fatal("metrics-every=0 must disable the heartbeat")
+	}
+	// The loop schedules the first heartbeat one full period out.
+	next = now.Add(10 * time.Minute)
+	if watchMetricsDue(&next, 10*time.Minute, now.Add(time.Minute)) {
+		t.Fatal("heartbeat must not fire inside the period")
+	}
+	if !watchMetricsDue(&next, 10*time.Minute, now.Add(10*time.Minute)) {
+		t.Fatal("heartbeat must fire at the period boundary")
+	}
+	if !next.Equal(now.Add(20 * time.Minute)) {
+		t.Fatalf("schedule must advance by one period, got %v", next)
+	}
+
+	// Report over live artifacts: one pending request, no outbox, no ledger.
+	queueDir, _ := lockTestRequest(t, t.TempDir(), "selfmet", time.Now())
+	queueDir = filepath.Dir(queueDir)
+	outDir := filepath.Join(t.TempDir(), "outbox")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	out := captureApprovalTestOutput(t, func() {
+		watchMetricsReport(queueDir, outDir, stateDir, time.Now())
+	})
+	for _, want := range []string{
+		"approve: self-metrics at ",
+		"queue: 1 request(s)",
+		"status: PENDING=1",
+		"locks: 0 live",
+		"ledger: 0 spent nonce(s)",                         // fresh station: empty ledger
+		"outbox: 0 signed output(s), 0 signed-but-unspent", // fresh station: outbox exists, empty
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("self-metrics report missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, approvalPath, approver string) *flag.FlagSet {
 	t.Helper()
 	fs := flag.NewFlagSet("approved-send", flag.ContinueOnError)
@@ -1771,24 +1815,27 @@ func TestMsgApproveBatchCLI(t *testing.T) {
 
 func TestValidateApproveWatchFlags(t *testing.T) {
 	cases := []struct {
-		name       string
-		requestDir string
-		request    string
-		confirm    bool
-		asJSON     bool
-		every      time.Duration
-		wantErr    string
+		name         string
+		requestDir   string
+		request      string
+		confirm      bool
+		asJSON       bool
+		every        time.Duration
+		metricsEvery time.Duration
+		wantErr      string
 	}{
-		{"valid", "queue", "", true, false, 30 * time.Second, ""},
-		{"missing request-dir", "", "", true, false, 30 * time.Second, "-watch requires -request-dir"},
-		{"-request rejected", "queue", "a.json", true, false, 30 * time.Second, "use -request-dir instead of -request"},
-		{"-confirm required", "queue", "", false, false, 30 * time.Second, "pass -confirm"},
-		{"-json rejected", "queue", "", true, true, 30 * time.Second, "-json is not supported in -watch mode"},
-		{"zero interval", "queue", "", true, false, 0, "-every must be a positive duration"},
-		{"negative interval", "queue", "", true, false, -time.Second, "-every must be a positive duration"},
+		{"valid", "queue", "", true, false, 30 * time.Second, 10 * time.Minute, ""},
+		{"missing request-dir", "", "", true, false, 30 * time.Second, 10 * time.Minute, "-watch requires -request-dir"},
+		{"-request rejected", "queue", "a.json", true, false, 30 * time.Second, 10 * time.Minute, "use -request-dir instead of -request"},
+		{"-confirm required", "queue", "", false, false, 30 * time.Second, 10 * time.Minute, "pass -confirm"},
+		{"-json rejected", "queue", "", true, true, 30 * time.Second, 10 * time.Minute, "-json is not supported in -watch mode"},
+		{"zero interval", "queue", "", true, false, 0, 10 * time.Minute, "-every must be a positive duration"},
+		{"negative interval", "queue", "", true, false, -time.Second, 10 * time.Minute, "-every must be a positive duration"},
+		{"disabled metrics-every", "queue", "", true, false, 30 * time.Second, 0, ""},
+		{"negative metrics-every", "queue", "", true, false, 30 * time.Second, -time.Minute, "-metrics-every must be a positive duration or 0"},
 	}
 	for _, tc := range cases {
-		err := validateApproveWatchFlags(tc.requestDir, tc.request, tc.confirm, tc.asJSON, tc.every)
+		err := validateApproveWatchFlags(tc.requestDir, tc.request, tc.confirm, tc.asJSON, tc.every, tc.metricsEvery)
 		if tc.wantErr == "" {
 			if err != nil {
 				t.Errorf("%s: unexpected error: %v", tc.name, err)

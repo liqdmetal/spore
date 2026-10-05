@@ -153,6 +153,11 @@ spore msg approve -request-dir ~/approval-queue \
 - A request consumed by the requester's send still resurfaces as
   `nonce already consumed; replay refused` unless you pass `-state-dir` — pass
   it; the ledger is what keeps a re-scanned queue from re-signing.
+- `-metrics-every 10m` makes the station print its own `approval-metrics`
+  summary on stdout once per period (`0` disables) — queue volumes, ledger,
+  locks, and outbox latencies from the station's own artifacts, so an
+  always-on station shows its pipeline health without a second terminal.
+  The first report lands after one full period.
 
 ## 4. Requester side: post and verify
 
