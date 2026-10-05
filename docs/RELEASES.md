@@ -3,6 +3,33 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.8.5 — the heartbeat names its station, and the log gets a health gate (2026-10-05)
+
+Everything an operator needs to scrape and gate an always-on approver
+station from one JSONL file, on top of v0.8.4.
+
+- `-metrics-json` heartbeat mode: `spore msg approve -watch -metrics-every 1m
+  -metrics-json` emits each self-metrics report as **one compact JSON line**
+  on stdout — the exact `approval-metrics -json` object per line, scrapeable
+  by log dashboards.
+- Every heartbeat carries `station`: the emitting station's hostname (the
+  same tag its signing locks name as holder) and PID, so several stations
+  teeing into one aggregated JSONL stream stay distinguishable. Pre-v0.8.5
+  lines have no `station` object; parsers must tolerate its absence.
+- `spore msg approval-metrics -envelope` emits the exact same compact
+  heartbeat line, one shot with no `-watch`, so a cron scrape appends to the
+  file the live station already writes. `-json` and `-envelope` are
+  alternative output formats; passing both is refused with exit 2.
+- `scripts/station-health.sh` turns the JSONL log into a pass/fail gate:
+  non-zero exit on orphaned signing locks, lock ages at/over the 60 s
+  stale-break line, pending requests at/over the 15-minute approval expiry,
+  malformed heartbeat lines, or a log with no heartbeats at all. Wire it
+  after the `tee` (runbook §3.2).
+- The audited spore-peer contract pin advanced to `2918e2b62088` (spore-peer
+  main; nine fuzzing-infrastructure commits, no wire-format change) after
+  the contract suite ran green against it — release and interop artifacts
+  build at that pin.
+
 ## v0.8.4 — idempotent batch approve (2026-10-05)
 
 One fix that un-reddens the release pipeline: batch approve is idempotent
