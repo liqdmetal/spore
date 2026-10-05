@@ -93,13 +93,19 @@ type approvalMetrics struct {
 // metrics summary out of files the workflow already produces.
 //
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] [-json]
+//	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] -envelope
 func msgApprovalMetrics(args []string) {
 	fs := flag.NewFlagSet("msg approval-metrics", flag.ExitOnError)
 	dir := fs.String("dir", "", "approval request queue directory to summarize (defaults to -state-dir or the current dir)")
 	outDir := fs.String("out-dir", "", "signed-approval outbox directory to include (enables the approval/post latency summaries)")
 	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory whose approval-spent ledger marks consumed nonces")
 	asJSON := fs.Bool("json", false, "emit metrics in machine-readable JSON format")
+	envelope := fs.Bool("envelope", false, "emit one compact JSON heartbeat line (the -watch -metrics-json format: at, station, metrics) instead of a summary")
 	_ = fs.Parse(args)
+	if err := validateApprovalMetricsOutputFlags(*asJSON, *envelope); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
 	if *stateDir == "" {
 		_ = loadConfigForFlags(fs)
 		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
@@ -116,6 +122,14 @@ func msgApprovalMetrics(args []string) {
 	}
 	m, err := buildApprovalMetrics(queueDir, *outDir, *stateDir, time.Now())
 	check(err)
+	if *envelope {
+		// One compact line, shape-identical to a -watch -metrics-json
+		// heartbeat, so a cron scrape appends to the same JSONL file the
+		// live station tees into and one parser serves both.
+		enc := json.NewEncoder(os.Stdout)
+		check(enc.Encode(newWatchMetricsEnvelope(time.Now(), m)))
+		return
+	}
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -123,6 +137,17 @@ func msgApprovalMetrics(args []string) {
 		return
 	}
 	renderApprovalMetrics(m)
+}
+
+// validateApprovalMetricsOutputFlags refuses contradictory output-format
+// selections: -json (indented raw metrics) and -envelope (one compact
+// heartbeat line) are alternative renderings of the same summary, not
+// layers that compose.
+func validateApprovalMetricsOutputFlags(asJSON, envelope bool) error {
+	if asJSON && envelope {
+		return errors.New("approval-metrics: -json and -envelope are alternative output formats; choose one (-envelope wraps the metrics in the watch heartbeat shape)")
+	}
+	return nil
 }
 
 // buildApprovalLockMetrics reports the per-request signing locks currently

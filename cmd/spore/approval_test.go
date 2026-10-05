@@ -1029,6 +1029,12 @@ func TestWatchMetricsReportJSONLine(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, heartbeat.At); err != nil {
 		t.Fatalf("heartbeat at must be RFC3339: %v (%q)", err, heartbeat.At)
 	}
+	// The station identity comes from the same source the signing locks are
+	// tagged with: the hostname a lock holder names, plus this process's PID.
+	if heartbeat.Station.Host != approvalLockHostname || heartbeat.Station.PID != os.Getpid() {
+		t.Fatalf("heartbeat station must identify the emitting process (host %q, pid %d), got %+v",
+			approvalLockHostname, os.Getpid(), heartbeat.Station)
+	}
 	m := heartbeat.Metrics
 	if m == nil {
 		t.Fatal("heartbeat must embed the metrics object")

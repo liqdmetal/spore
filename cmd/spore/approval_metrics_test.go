@@ -275,6 +275,62 @@ func setTestMtime(t *testing.T, path string, at time.Time) {
 // TestApprovalMetricsMarksOrphanedLocks pins the ghost-lock annotation: a
 // lock whose guarded request file is gone is flagged orphaned in both the
 // JSON entry and the text render — residue a TTL stale-break will clear.
+// TestApprovalMetricsEnvelopeOneShot pins `msg approval-metrics -envelope`:
+// exactly one compact stdout line in the watch heartbeat shape (at, station,
+// metrics) describing the same artifacts the summary renders.
+func TestApprovalMetricsEnvelopeOneShot(t *testing.T) {
+	queueDir, _ := lockTestRequest(t, t.TempDir(), "oneshotenv", time.Now())
+	queueDir = filepath.Dir(queueDir)
+	stateDir := filepath.Join(t.TempDir(), "state")
+	out := captureApprovalTestOutput(t, func() {
+		msgApprovalMetrics([]string{"-dir", queueDir, "-state-dir", stateDir, "-envelope"})
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("envelope mode must be exactly one stdout line, got %d:\n%s", len(lines), out)
+	}
+	if !strings.HasPrefix(lines[0], `{"at":`) {
+		t.Fatalf("envelope line must start with the at field, got: %s", lines[0])
+	}
+	var heartbeat watchMetricsEnvelope
+	if err := json.Unmarshal([]byte(lines[0]), &heartbeat); err != nil {
+		t.Fatalf("envelope line must parse: %v\nraw: %s", err, lines[0])
+	}
+	if _, err := time.Parse(time.RFC3339, heartbeat.At); err != nil {
+		t.Fatalf("envelope at must be RFC3339: %v (%q)", err, heartbeat.At)
+	}
+	if heartbeat.Station.Host != approvalLockHostname || heartbeat.Station.PID != os.Getpid() {
+		t.Fatalf("envelope station must identify this process (host %q, pid %d), got %+v",
+			approvalLockHostname, os.Getpid(), heartbeat.Station)
+	}
+	m := heartbeat.Metrics
+	if m == nil || m.QueueDir != queueDir || m.Requests != 1 || m.Status["PENDING"] != 1 {
+		t.Fatalf("envelope metrics do not describe the queue: %+v", m)
+	}
+}
+
+// TestValidateApprovalMetricsOutputFlags pins the -json/-envelope rule: the
+// two machine-readable renderings are alternatives, never layers.
+func TestValidateApprovalMetricsOutputFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		asJSON   bool
+		envelope bool
+	}{
+		{"summary", false, false},
+		{"json only", true, false},
+		{"envelope only", false, true},
+	} {
+		if err := validateApprovalMetricsOutputFlags(tc.asJSON, tc.envelope); err != nil {
+			t.Errorf("%s: unexpected error: %v", tc.name, err)
+		}
+	}
+	err := validateApprovalMetricsOutputFlags(true, true)
+	if err == nil || !strings.Contains(err.Error(), "-json and -envelope") {
+		t.Fatalf("both output flags must be refused, got: %v", err)
+	}
+}
+
 func TestApprovalMetricsMarksOrphanedLocks(t *testing.T) {
 	queueDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(queueDir, "ghost.json.lock"), []byte("web1 4242\n"), 0o600); err != nil {

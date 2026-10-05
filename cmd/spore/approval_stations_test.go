@@ -120,6 +120,14 @@ func watchStationSelfMetricsSmoke(t *testing.T, exe string, metricsJSON bool) {
 			if hb.Metrics == nil || hb.Metrics.QueueDir != queue {
 				t.Fatalf("heartbeat metrics must describe this station's queue (%s): %+v", queue, hb.Metrics)
 			}
+			// The station field must name the real OS process that emitted
+			// the line: the re-exec'd binary's PID, and a non-empty host.
+			if hb.Station.PID != cmd.Process.Pid {
+				t.Fatalf("heartbeat station pid must be the station process (want %d): %+v", cmd.Process.Pid, hb.Station)
+			}
+			if hb.Station.Host == "" {
+				t.Fatalf("heartbeat station host must name the station host: %+v", hb.Station)
+			}
 		}
 		if heartbeats < 2 {
 			t.Fatalf("want >=2 JSON heartbeats in ~2s of 500ms periods, got %d:\n%s", heartbeats, logText)

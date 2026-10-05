@@ -1294,12 +1294,36 @@ func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool,
 	return nil
 }
 
+// watchStation identifies the station that emitted a heartbeat: the same
+// hostname tag the signing locks carry (approvalLockHostname, omitted when
+// the hostname is unknown) plus the emitting process's PID. Several stations
+// teeing into one aggregated JSONL stream stay distinguishable, and a
+// dashboard can correlate a heartbeat with the locks it reports holding.
+type watchStation struct {
+	Host string `json:"host,omitempty"`
+	PID  int    `json:"pid"`
+}
+
 // watchMetricsEnvelope is one self-metrics heartbeat line in -metrics-json
-// mode: a scrapeable timestamp plus the same approvalMetrics shape that
-// `msg approval-metrics -json` emits.
+// mode: a scrapeable timestamp, the emitting station, and the same
+// approvalMetrics shape that `msg approval-metrics -json` emits. The one-shot
+// `msg approval-metrics -envelope` reuses this exact shape.
 type watchMetricsEnvelope struct {
 	At      string           `json:"at"`
+	Station watchStation     `json:"station"`
 	Metrics *approvalMetrics `json:"metrics"`
+}
+
+// newWatchMetricsEnvelope builds the heartbeat envelope a station emits. The
+// station identity comes from the same source the signing locks are tagged
+// with, so a heartbeat's station is the same name its lock entries name as
+// holder.
+func newWatchMetricsEnvelope(now time.Time, m *approvalMetrics) watchMetricsEnvelope {
+	return watchMetricsEnvelope{
+		At:      now.UTC().Format(time.RFC3339),
+		Station: watchStation{Host: approvalLockHostname, PID: os.Getpid()},
+		Metrics: m,
+	}
 }
 
 // runApprovalWatchLoop is the always-on approver station: rescan the queue
@@ -1374,7 +1398,7 @@ func watchMetricsReport(queueDir, outDir, stateDir string, now time.Time, metric
 		// stderr; a failed encode must not corrupt the stream with a
 		// partial line.
 		enc := json.NewEncoder(os.Stdout)
-		if err := enc.Encode(watchMetricsEnvelope{At: now.UTC().Format(time.RFC3339), Metrics: m}); err != nil {
+		if err := enc.Encode(newWatchMetricsEnvelope(now, m)); err != nil {
 			log.Printf("approve: self-metrics: encode: %v", err)
 		}
 		return
