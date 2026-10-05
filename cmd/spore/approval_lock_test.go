@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -260,6 +261,30 @@ func TestApprovalBatchSkipsOnLiveForeignLock(t *testing.T) {
 	// And the one-shot CLI path refuses the same way (no lock file left).
 	if err := approveCapabilityFile(requestPath, identityPath, filepath.Join(dir, "manual.signed.json"), true); err == nil || !strings.Contains(err.Error(), "pid "+pidForTest()) {
 		t.Fatalf("one-shot approve must refuse a live foreign lock, got: %v", err)
+	}
+}
+
+// TestApprovalBatchSkipsRequestVanishedMidScan pins the filesystem race: a
+// request present at scan time but deleted before its read is a quiet skip
+// the next scan re-checks — never a failure, never a signature.
+func TestApprovalBatchSkipsRequestVanishedMidScan(t *testing.T) {
+	requestPath, identityPath := lockTestRequest(t, t.TempDir(), "vanished", time.Now())
+	outDir := filepath.Join(t.TempDir(), "outbox")
+	if err := os.Remove(requestPath); err != nil {
+		t.Fatal(err)
+	}
+	results := runApprovalBatch([]string{requestPath}, identityPath, outDir, "", true)
+	if len(results) != 1 || results[0].Status != approvalBatchSkipped || !strings.Contains(results[0].Reason, "request vanished mid-scan") {
+		t.Fatalf("vanished request must be a quiet skip, got: %+v", results)
+	}
+	// The outbox is created lazily on the first signature; a full-skip batch
+	// never creates it, and a missing dir holds zero signatures.
+	entries, err := os.ReadDir(outDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("no signature may be written for a vanished request, got %v", entries)
 	}
 }
 

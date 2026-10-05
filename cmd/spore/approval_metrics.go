@@ -52,6 +52,10 @@ type approvalLockEntry struct {
 	HolderHost string  `json:"holder_host,omitempty"`
 	HolderPID  string  `json:"holder_pid"`
 	AgeSeconds float64 `json:"age_seconds"`
+	// Orphaned: the request file the lock guards no longer exists — the
+	// holder crashed (or the request was cleaned up) and the lock is residue
+	// until the TTL stale-break.
+	Orphaned bool `json:"orphaned,omitempty"`
 }
 
 // approvalLockMetrics covers the per-request signing locks currently visible
@@ -150,11 +154,17 @@ func buildApprovalLockMetrics(queueDir string, now time.Time) *approvalLockMetri
 		if age > m.OldestAge {
 			m.OldestAge = age
 		}
+		request := strings.TrimSuffix(entry.Name(), ".lock")
+		orphaned := false
+		if _, serr := os.Stat(filepath.Join(queueDir, request)); serr != nil {
+			orphaned = true // the guarded request file is gone: residue
+		}
 		m.Entries = append(m.Entries, approvalLockEntry{
-			Request:    strings.TrimSuffix(entry.Name(), ".lock"),
+			Request:    request,
 			HolderHost: host,
 			HolderPID:  pid,
 			AgeSeconds: age,
+			Orphaned:   orphaned,
 		})
 	}
 	return m
@@ -367,7 +377,11 @@ func renderApprovalMetrics(m *approvalMetrics) {
 			if e.HolderHost != "" {
 				holder = e.HolderHost + "/" + e.HolderPID
 			}
-			fmt.Printf("    %s: held by %s for %ds\n", e.Request, holder, int(e.AgeSeconds+0.5))
+			line := fmt.Sprintf("    %s: held by %s for %ds", e.Request, holder, int(e.AgeSeconds+0.5))
+			if e.Orphaned {
+				line += " (request gone)"
+			}
+			fmt.Println(line)
 		}
 	}
 	if o := m.Outbox; o != nil {

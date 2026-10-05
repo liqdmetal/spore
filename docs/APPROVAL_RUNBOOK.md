@@ -104,6 +104,9 @@ Batch rules:
   - `signing lock held by another approver (pid N)` — a second station on the
     same queue reached the request first; it is a skip, and the next scan
     re-classifies the request as `already signed`
+  - `request vanished mid-scan; re-check on the next scan` — the file was
+    deleted between the directory scan and its read (cleanup racing a watch
+    station); filesystem housekeeping, not an approval problem
 - Signing takes a per-request sibling lock (`<request>.lock`) — batch and
   one-shot `approve -request` alike — so two approver stations racing the same
   queue can never double-sign one nonce, no matter how their `-out-dir`s differ.

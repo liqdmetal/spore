@@ -159,7 +159,7 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 		t.Fatalf("locks = %+v, want exactly 1 live (broken markers are residue, not locks)", m.Locks)
 	}
 	lk := m.Locks.Entries[0]
-	if !strings.HasSuffix(lk.Request, "p.json") || lk.HolderHost != "web1" || lk.HolderPID != "4242" {
+	if !strings.HasSuffix(lk.Request, "p.json") || lk.HolderHost != "web1" || lk.HolderPID != "4242" || lk.Orphaned {
 		t.Fatalf("lock entry = %+v, want p.json held by web1/4242", lk)
 	}
 	if lk.AgeSeconds < 25 || lk.AgeSeconds > 35 {
@@ -269,5 +269,31 @@ func setTestMtime(t *testing.T, path string, at time.Time) {
 	t.Helper()
 	if err := os.Chtimes(path, at, at); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestApprovalMetricsMarksOrphanedLocks pins the ghost-lock annotation: a
+// lock whose guarded request file is gone is flagged orphaned in both the
+// JSON entry and the text render — residue a TTL stale-break will clear.
+func TestApprovalMetricsMarksOrphanedLocks(t *testing.T) {
+	queueDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(queueDir, "ghost.json.lock"), []byte("web1 4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := buildApprovalMetrics(queueDir, "", "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Locks == nil || m.Locks.Live != 1 || len(m.Locks.Entries) != 1 {
+		t.Fatalf("orphaned lock must still count as live, got %+v", m.Locks)
+	}
+	if !m.Locks.Entries[0].Orphaned || m.Locks.Entries[0].Request != "ghost.json" {
+		t.Fatalf("lock entry = %+v, want ghost.json marked orphaned", m.Locks.Entries[0])
+	}
+	out := captureApprovalTestOutput(t, func() {
+		renderApprovalMetrics(m)
+	})
+	if !strings.Contains(out, "ghost.json: held by web1/4242 for ") || !strings.Contains(out, "(request gone)") {
+		t.Fatalf("orphaned lock not annotated in text output:\n%s", out)
 	}
 }

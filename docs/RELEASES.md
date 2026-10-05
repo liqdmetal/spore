@@ -5,6 +5,10 @@ Release notes per tag, newest first. Binaries are stamped with
 
 ## Unreleased
 
+- Watcher filesystem races are handled quietly: a request deleted between
+  the directory scan and its read is skipped (`request vanished mid-scan`)
+  instead of failed, and the metrics lock view flags orphaned locks — a lock
+  whose guarded request file is gone — as `(request gone)` residue.
 - A `-watch` approver station can self-report: `-metrics-every 10m` prints
   the full `approval-metrics` summary on stdout once per period (`0`
   disables), so an always-on station shows its own queue, ledger, locks, and

@@ -1115,6 +1115,16 @@ func runApprovalBatch(requestPaths []string, identityPath, outDir, stateDir stri
 		result := approvalBatchResult{Request: requestPath, Status: approvalBatchFailed}
 		e, err := decodeCapabilityFile(requestPath)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// The request vanished between the scan and this read (watch
+				// rescan racing a cleanup, or the requester pulling the file
+				// back): a filesystem race, not an approval problem — skip
+				// quietly and let the next scan re-check.
+				result.Status = approvalBatchSkipped
+				result.Reason = "request vanished mid-scan; re-check on the next scan"
+				results = append(results, result)
+				continue
+			}
 			result.Reason = err.Error()
 			results = append(results, result)
 			continue
