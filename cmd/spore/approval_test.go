@@ -838,6 +838,59 @@ func TestApprovedCapabilityRejectsAmountRecipientAndWalletMismatchBeforePost(t *
 	}
 }
 
+// TestApprovedCapabilityExpiredMidFlightRefusedBeforeBroadcast pins the
+// 15-minute TTL at its worst moment: an approval that was valid when signed
+// but expired before the requester's send rerun must be refused by envelope
+// validation — before the nonce burn and before any broadcast.
+func TestApprovedCapabilityExpiredMidFlightRefusedBeforeBroadcast(t *testing.T) {
+	envelope, _, approver := approvalFixture(t)
+	sim := derosim.New("htlc", "dex", "wdero")
+	sim.AddWallet("sender")
+	sim.AddWallet("recipient")
+	server := httptest.NewServer(sim.Handler())
+	defer server.Close()
+	identitySeed := bytes.Repeat([]byte{0x31}, 32)
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelope.SenderAddress = sim.Address("sender")
+	envelope.Recipient = sim.Address("recipient")
+	// Mid-flight expiry: the window was well inside the TTL when signed, but
+	// the rerun happens one second after ExpiresAt. CreatedAt stays inside
+	// the future-creation tolerance.
+	envelope.CreatedAt = time.Now().Add(-10 * time.Minute).Unix()
+	envelope.ExpiresAt = time.Now().Add(-1 * time.Second).Unix()
+	signRequesterForTest(t, &envelope)
+	transcript, err := capabilityTranscript(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private := approvalFixtureKeys(t)
+	envelope.Signature = hex.EncodeToString(ed25519.Sign(private, transcript))
+	approvalPath := filepath.Join(t.TempDir(), "approved.json")
+	writeApprovalTestFile(t, approvalPath, envelope)
+	stateKeyPath := filepath.Join(t.TempDir(), "state.key")
+	if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := newSendApprovalFlags(t, server.URL+"/w/sender", identityPath, t.TempDir(), stateKeyPath, approvalPath, hex.EncodeToString(approver))
+	balance := sim.Balance("sender")
+	if err := postApprovedCapability(fs, envelope.Recipient, "0.25dero", approvalPath); err == nil || !strings.Contains(err.Error(), "approval envelope: expired") {
+		t.Fatalf("expired approval must be refused before broadcast, got: %v", err)
+	}
+	if got := sim.Balance("sender"); got != balance {
+		t.Fatalf("expired approval moved funds: %d -> %d", balance, got)
+	}
+	entries, err := dero.NewClient(server.URL+"/w/recipient", "", "").GetTransfers(context.Background(), dero.GetTransfersParams{In: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expired approval must not broadcast, recipient got %d transfer(s)", len(entries))
+	}
+}
+
 func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, approvalPath, approver string) *flag.FlagSet {
 	t.Helper()
 	fs := flag.NewFlagSet("approved-send", flag.ContinueOnError)

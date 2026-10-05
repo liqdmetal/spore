@@ -9,6 +9,13 @@ Release notes per tag, newest first. Binaries are stamped with
   many signing locks are live in the queue right now, with each holder
   (`host/pid`) and age — operator-visible contention and crash recovery, in
   both text and `-json`.
+- The requester-side replay guard is now proven end-to-end in the two-device
+  loops for every chain: DERO reruns the send with the same approval (refused,
+  no second transfer), Solana retries after an ambiguous broadcast (refused,
+  exactly one `sendTransaction` ever reached the node).
+- The 15-minute TTL is proven at its worst moment: an approval that expires
+  between signing and the send rerun is refused before the nonce burn and
+  before any broadcast.
 
 ## v0.8.1 — second-device capability approvals, concurrent-station hardening (2026-10-04)
 
