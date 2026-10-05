@@ -176,7 +176,7 @@ spore msg approve -request-dir ~/approval-queue \
   Each line parses standalone:
 
 ```json
-{"at":"2026-10-05T12:00:00Z","metrics":{"queue_dir":"...","requests":3,"status_counts":{"PENDING":1,"SIGNED":2},"skip_reasons":{},"chains":{"dero":3},"actions":{},"spent_nonces":2,"locks":{"live":0,"oldest_age_seconds":0},"outbox":{"signed_outputs":2,"signed_unspent":0}}}
+{"at":"2026-10-05T12:00:00Z","station":{"host":"station-a","pid":4242},"metrics":{"queue_dir":"...","requests":3,"status_counts":{"PENDING":1,"SIGNED":2},"skip_reasons":{},"chains":{"dero":3},"actions":{},"spent_nonces":2,"locks":{"live":0,"oldest_age_seconds":0},"outbox":{"signed_outputs":2,"signed_unspent":0}}}
 ```
 
   `at` is RFC3339 UTC and `metrics` is the exact object
@@ -187,6 +187,42 @@ spore msg approve -request-dir ~/approval-queue \
   station's startup line and cycle log lines go to stderr (Go `log`), so a
   stdout pipeline sees nothing but JSON heartbeat lines. Requires
   `-metrics-every > 0`; refused otherwise.
+
+  Each line also carries `station`: the emitting station's hostname (the
+  same tag its signing locks name as holder) and PID — so several stations
+  teeing into one aggregated JSONL stream stay distinguishable, and a
+  dashboard can correlate a heartbeat with the locks it reports holding.
+  Heartbeats from spore < v0.8.5 have no `station` object; parsers written
+  for the new shape must tolerate its absence.
+
+  The one-shot summary can emit the exact same heartbeat line, so a cron
+  scrape appends to the same file the live station writes:
+
+```bash
+spore msg approval-metrics -dir ~/approval-queue -state-dir ~/state -envelope >> station.jsonl
+```
+
+  `-envelope` and `-json` are alternative output formats; passing both is
+  refused (exit 2).
+
+### 3.2 Health-gating the log
+
+`scripts/station-health.sh` turns the JSONL log into a pass/fail gate for a
+cron job or the last stage of the pipeline — non-zero exit when the station
+is not healthy:
+
+```bash
+spore msg approve ... -watch -every 30s -metrics-every 1m -metrics-json | tee -a station.jsonl
+bash scripts/station-health.sh -f station.jsonl
+```
+
+It fails on: orphaned signing locks (guarded request file gone), lock ages
+at/over the 60 s TTL stale-break line (default `--max-lock-age 60`), pending
+requests at/over the 15-minute approval expiry (default `--max-pending-age
+900` — past it the request can never be signed), malformed heartbeat lines,
+or a log with no heartbeat lines at all. Exit codes: `0` healthy, `1`
+health violation, `2` malformed input, `3` empty log. Thresholds are flags;
+see the script header.
 
 ## 4. Requester side: post and verify
 
@@ -245,7 +281,12 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
 
 - Reads only files the workflow already produces (queue, outbox,
   `approval-spent` ledger), so it needs no new state and always agrees with
-  what `approve` would do next. `-json` carries the same numbers for dashboards.
+  what `approve` would do next. `-json` carries the same numbers for
+  dashboards; `-envelope` instead emits one compact watch heartbeat line for
+  the same JSONL file a live station writes (§3.2).
+- Gate the JSONL log with `bash scripts/station-health.sh -f station.jsonl`:
+  non-zero exit on orphaned locks, stale-break-aged locks, requests past the
+  approval TTL, malformed lines, or an empty log. See §3.2.
 - Approval latency (request created -> approval signed) is bounded by the
   15-minute TTL; post latency (approval signed -> nonce burned) is the
   requester's remaining window. p95 creeping toward 15m means requests are
