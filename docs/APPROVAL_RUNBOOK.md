@@ -46,6 +46,11 @@ The request file lands in the requester's `-state-dir` as
 folder, USB, whatever you trust); the envelope is public data — its security is
 the signature chain, not secrecy.
 
+The send rerun warns on stderr when the approval is inside its final two
+minutes of TTL: it is still valid and still broadcasts, but a stalled handoff
+will hit expiry instead of the chain — broadcast now, or re-request with a
+fresh nonce.
+
 ## 2. Approver side: review the queue
 
 ```bash

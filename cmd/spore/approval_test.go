@@ -891,6 +891,73 @@ func TestApprovedCapabilityExpiredMidFlightRefusedBeforeBroadcast(t *testing.T) 
 	}
 }
 
+// TestApprovedCapabilityWarnsOnShortTTLHeadroom pins the operator warning:
+// an approval inside its final two minutes still broadcasts, but the send
+// rerun says so on stderr; a comfortable approval stays quiet.
+func TestApprovedCapabilityWarnsOnShortTTLHeadroom(t *testing.T) {
+	sim := derosim.New("htlc", "dex", "wdero")
+	sim.AddWallet("sender")
+	sim.AddWallet("recipient")
+	server := httptest.NewServer(sim.Handler())
+	defer server.Close()
+	identitySeed := bytes.Repeat([]byte{0x31}, 32)
+	identityPath := filepath.Join(t.TempDir(), "sender.key")
+	if err := os.WriteFile(identityPath, []byte(hex.EncodeToString(identitySeed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		headroom    time.Duration
+		wantWarning bool
+	}{
+		{"short", 90 * time.Second, true},
+		{"comfortable", 13 * time.Minute, false},
+	} {
+		envelope, _, approver := approvalFixture(t)
+		envelope.SenderAddress = sim.Address("sender")
+		envelope.Recipient = sim.Address("recipient")
+		// A 14-minute window: comfortably inside the 15-minute TTL cap.
+		envelope.CreatedAt = time.Now().Add(-1 * time.Minute).Unix()
+		envelope.ExpiresAt = time.Now().Add(tc.headroom).Unix()
+		signRequesterForTest(t, &envelope)
+		transcript, err := capabilityTranscript(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, private := approvalFixtureKeys(t)
+		envelope.Signature = hex.EncodeToString(ed25519.Sign(private, transcript))
+		approvalPath := filepath.Join(t.TempDir(), "approved-"+tc.name+".json")
+		writeApprovalTestFile(t, approvalPath, envelope)
+		stateKeyPath := filepath.Join(t.TempDir(), "state-"+tc.name+".key")
+		if err := os.WriteFile(stateKeyPath, []byte(hex.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fs := newSendApprovalFlags(t, server.URL+"/w/sender", identityPath, t.TempDir(), stateKeyPath, approvalPath, hex.EncodeToString(approver))
+		outC := make(chan string)
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(r)
+			outC <- b.String()
+		}()
+		origStderr := os.Stderr
+		os.Stderr = w
+		postErr := postApprovedCapability(fs, envelope.Recipient, "0.25dero", approvalPath)
+		_ = w.Close()
+		os.Stderr = origStderr
+		warning := <-outC
+		if postErr != nil {
+			t.Fatalf("%s: approved post failed: %v", tc.name, postErr)
+		}
+		if got := strings.Contains(warning, "expires in"); got != tc.wantWarning {
+			t.Fatalf("%s: stderr warning = %v (want %v), stderr:\n%s", tc.name, got, tc.wantWarning, warning)
+		}
+	}
+}
+
 func newSendApprovalFlags(t *testing.T, rpc, identity, stateDir, stateKey, approvalPath, approver string) *flag.FlagSet {
 	t.Helper()
 	fs := flag.NewFlagSet("approved-send", flag.ContinueOnError)

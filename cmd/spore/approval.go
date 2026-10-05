@@ -34,7 +34,11 @@ import (
 )
 
 const (
-	ApprovalTTL             = 15 * time.Minute
+	ApprovalTTL = 15 * time.Minute
+	// approvalTTLHeadroomWarn: the send rerun warns the operator when an
+	// approval is inside this much of its remaining TTL — still valid, but a
+	// stalled handoff will hit expiry instead of the chain.
+	approvalTTLHeadroomWarn = 2 * time.Minute
 	capabilityProtocol      = "spore.capability-approval"
 	capabilityVersion       = 1
 	capabilityDeroTransfer  = "dero.transfer-with-pointer"
@@ -673,6 +677,13 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 	}
 	if envelope.Recipient != canonicalRecipient || envelope.AmountAtomic != atomic {
 		return errors.New("signed capability does not match this recipient and amount")
+	}
+	// Operator heads-up: inside the final stretch of the TTL the approval is
+	// still valid, but a stalled handoff will hit expiry instead of the
+	// chain — say so before burning the nonce. Validation above already
+	// refused expired approvals, so remaining here is strictly positive.
+	if remaining := time.Until(time.Unix(envelope.ExpiresAt, 0)); remaining < approvalTTLHeadroomWarn {
+		fmt.Fprintf(os.Stderr, "warning: approved %s capability expires in %s — broadcast now or re-request with a fresh nonce\n", strings.ToUpper(chain), remaining.Round(time.Second))
 	}
 	identityPath := flagValueOr(fs, "identity", "")
 	if identityPath == "" {

@@ -16,6 +16,9 @@ Release notes per tag, newest first. Binaries are stamped with
 - The 15-minute TTL is proven at its worst moment: an approval that expires
   between signing and the send rerun is refused before the nonce burn and
   before any broadcast.
+- The send rerun warns on stderr when an approval has under two minutes of
+  TTL headroom left — it still broadcasts, but a stalled handoff announces
+  itself before it becomes an expiry.
 
 ## v0.8.1 — second-device capability approvals, concurrent-station hardening (2026-10-04)
 
