@@ -99,8 +99,11 @@ Batch rules:
   - `approval envelope: expired` (or any other validation error)
   - `named for a different approver key` — a mixed-device queue; this device
     only takes requests addressed to its key
-  - `approval file: create ...: file exists` — outputs are exclusive-create, so
-    a rerun never overwrites an existing approval
+  - `approval file: create ...: file exists` — the output path holds a file
+    that is NOT this request's approval (a name collision or corrupt file);
+    outputs are exclusive-create, so a rerun never overwrites one. Its own
+    valid approval skips as `already signed` instead — the batch is
+    idempotent over its own output.
   - `signing lock held by another approver (pid N)` — a second station on the
     same queue reached the request first; it is a skip, and the next scan
     re-classifies the request as `already signed`

@@ -3,6 +3,15 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## Unreleased
+
+- Batch approve is idempotent over its own output: a rerun that finds its
+  own valid approval at the output path (a race loser arriving just after
+  the winner released the lock, or a plain rerun) skips as `already signed`
+  instead of failing on exclusive-create; a foreign or corrupt file at that
+  path keeps the loud failure, so a rerun never overwrites one. This makes
+  the Linux CI race suite deterministic — and main green again.
+
 ## v0.8.3 — the station watches itself (2026-10-05)
 
 Two items on top of v0.8.2: the queue watcher degrades gracefully through

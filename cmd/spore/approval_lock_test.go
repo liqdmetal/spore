@@ -117,12 +117,12 @@ func TestApprovalBatchConcurrentStationsNeverDoubleSign(t *testing.T) {
 	if len(locks) != 0 {
 		t.Fatalf("lock files leaked: %v", locks)
 	}
-	// A follow-up batch run (no watch-mode pre-filter) must refuse to re-sign:
-	// the documented exclusive-create backstop fails the request on the
-	// existing output, and the outbox still holds exactly the winner's approval.
+	// A follow-up batch run (no watch-mode pre-filter) is idempotent over its
+	// own output: it skips as already signed via the same under-lock check the
+	// race losers hit, and the outbox still holds exactly one approval.
 	follow := runApprovalBatch([]string{requestPath}, identityPath, outDir, "", true)
-	if len(follow) != 1 || follow[0].Status != approvalBatchFailed || !strings.Contains(follow[0].Reason, "file exists") {
-		t.Fatalf("follow-up run must hit the exclusive-create backstop, got: %+v", follow)
+	if len(follow) != 1 || follow[0].Status != approvalBatchSkipped || follow[0].Reason != "already signed" {
+		t.Fatalf("follow-up run must skip as already signed, got: %+v", follow)
 	}
 	entries, err = os.ReadDir(outDir)
 	if err != nil {
@@ -285,6 +285,47 @@ func TestApprovalBatchSkipsRequestVanishedMidScan(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("no signature may be written for a vanished request, got %v", entries)
+	}
+}
+
+// TestApprovalBatchRerunIsIdempotentOnOwnOutput pins the under-lock output
+// check: a rerun that finds its own valid approval at the output path skips
+// as already signed (the race-loser case on Linux CI), while a foreign or
+// corrupt file at that path keeps the loud exclusive-create backstop.
+func TestApprovalBatchRerunIsIdempotentOnOwnOutput(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "outbox")
+	requestPath, identityPath := lockTestRequest(t, dir, "rerun", time.Now())
+	first := runApprovalBatch([]string{requestPath}, identityPath, outDir, "", true)
+	if len(first) != 1 || first[0].Status != approvalBatchSigned {
+		t.Fatalf("first run must sign, got: %+v", first)
+	}
+	second := runApprovalBatch([]string{requestPath}, identityPath, outDir, "", true)
+	if len(second) != 1 || second[0].Status != approvalBatchSkipped || second[0].Reason != "already signed" {
+		t.Fatalf("rerun over own output must skip as already signed, got: %+v", second)
+	}
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("rerun must not write a second output, got %v", entries)
+	}
+
+	// A foreign file squatting on the output path keeps the loud backstop:
+	// it is not this request's approval, and the rerun must fail, not skip.
+	collidePath, collideIdentity := lockTestRequest(t, dir, "collide", time.Now())
+	collideOut := filepath.Join(dir, "outbox2")
+	if err := os.MkdirAll(collideOut, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	squat := filepath.Join(collideOut, "collide.signed.json")
+	if err := os.WriteFile(squat, []byte(`{"not":"an approval"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third := runApprovalBatch([]string{collidePath}, collideIdentity, collideOut, "", true)
+	if len(third) != 1 || third[0].Status != approvalBatchFailed || !strings.Contains(third[0].Reason, "file exists") {
+		t.Fatalf("foreign squatter must keep the exclusive-create failure, got: %+v", third)
 	}
 }
 

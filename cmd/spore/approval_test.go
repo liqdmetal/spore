@@ -1664,10 +1664,16 @@ func TestMsgApproveBatch(t *testing.T) {
 		t.Fatalf("expected 4 capability envelopes in scan, got %d: %v", len(scanned), scanned)
 	}
 
-	// 4. Rerun: exclusive-create outputs turn into per-file failures, not overwrites.
+	// 4. Rerun: the batch is idempotent over its own outputs — each skips as
+	// already signed (under-lock check), never a failure, never an overwrite.
 	results = runApprovalBatch([]string{pendingA, pendingB}, identityPath, outDir, "", true)
-	if countStatus(results, "failed") != 2 {
-		t.Fatalf("rerun over existing outputs must fail per file, got: %+v", results)
+	if len(results) != 2 || countStatus(results, "skipped") != 2 || countStatus(results, "failed") != 0 {
+		t.Fatalf("rerun over existing outputs must skip as already signed, got: %+v", results)
+	}
+	for _, r := range results {
+		if r.Reason != "already signed" {
+			t.Fatalf("rerun reason = %q, want already signed: %+v", r.Reason, r)
+		}
 	}
 
 	// 5. JSON report matches the results.
@@ -1698,7 +1704,7 @@ func TestMsgApproveBatch(t *testing.T) {
 	if err := json.Unmarshal([]byte(outJSON), &report); err != nil {
 		t.Fatalf("unmarshal batch json: %v; raw:\n%s", err, outJSON)
 	}
-	if report.Signed != 0 || report.Skipped != 0 || report.Failed != 2 || len(report.Results) != 2 {
+	if report.Signed != 0 || report.Skipped != 2 || report.Failed != 0 || len(report.Results) != 2 {
 		t.Fatalf("unexpected batch report: %+v", report)
 	}
 	for _, r := range report.Results {

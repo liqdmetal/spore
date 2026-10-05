@@ -1095,8 +1095,9 @@ func holderIsDeadLocal(host, pid string) bool {
 // aborting on the first bad file. Already-signed, invalid, expired, spent
 // (nonce burned in stateDir's approval-spent ledger), and other-approver
 // requests are skipped with a reason; without -confirm nothing is signed
-// (dry run). Outputs are exclusive-create, so a rerun never overwrites an
-// existing approval.
+// (dry run). A rerun that finds its own valid approval at the output path
+// skips as already signed; any other pre-existing output file keeps the
+// exclusive-create failure, so a rerun never overwrites a foreign output.
 func runApprovalBatch(requestPaths []string, identityPath, outDir, stateDir string, confirm bool) []approvalBatchResult {
 	results := make([]approvalBatchResult, 0, len(requestPaths))
 	if len(requestPaths) == 0 {
@@ -1195,6 +1196,18 @@ func runApprovalBatch(requestPaths []string, identityPath, outDir, stateDir stri
 		}
 		outputPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(requestPath), ".json")+".signed.json")
 		result.Output = outputPath
+		// The lock serializes signing, so a pre-existing output that decodes as
+		// a valid approval FOR THIS NONCE was written by an earlier run of this
+		// same request while holding the lock: skip idempotently as already
+		// signed. Any other pre-existing file (name collision, corrupt) keeps
+		// the loud exclusive-create failure — a rerun never overwrites.
+		if prev, derr := decodeCapabilityFile(outputPath); derr == nil && prev.Nonce == e.Nonce && prev.Signature != "" {
+			release()
+			result.Status = approvalBatchSkipped
+			result.Reason = "already signed"
+			results = append(results, result)
+			continue
+		}
 		err = approveCapabilityEnvelope(e, identityPath, outputPath, true)
 		release()
 		if err != nil {
