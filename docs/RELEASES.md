@@ -9,7 +9,7 @@ Release notes per tag, newest first. Binaries are stamped with
 chain, recipient, amount, and pointer must be countersigned by a second
 device holding a different key, and the nonce can broadcast at most once.
 
-30 commits, 31 files, +7,800/−159 vs `v0.8.0`.
+29 commits, 31 files, +7,800/−159 vs `v0.8.0`.
 
 ### The model
 
