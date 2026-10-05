@@ -369,6 +369,20 @@ func TestTwoDeviceApprovalLoopEndToEnd(t *testing.T) {
 		t.Fatalf("posted pointer=%x, want exact approved pointer %x", gotPointer.MarshalBinary(), wantPointer)
 	}
 
+	// Requester-side replay guard: rerunning the send with the SAME approval
+	// must be refused by the spent ledger before any broadcast — the
+	// recipient still holds exactly the one transfer posted above.
+	if err := postApprovedCapability(fs, recipientAddress, "0.6dero", approvedPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+		t.Fatalf("same DERO approval replay must be refused by the spent ledger, got: %v", err)
+	}
+	entries, err = dero.NewClient(recipientRPC, "", "").GetTransfers(context.Background(), dero.GetTransfersParams{In: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("replayed post must not broadcast: recipient has %d transfer entries, want 1", len(entries))
+	}
+
 	// The nonce burned at post time. Re-offering the same request to the
 	// approver (a re-scanned queue, or -watch rescanning forever) is refused
 	// with the replay reason — the loop is closed and idempotent.
@@ -659,6 +673,7 @@ func TestTwoDeviceApprovalLoopEndToEndSolana(t *testing.T) {
 
 	// Mock Solana RPC: satisfy getLatestBlockhash, capture sendTransaction.
 	var sentTxPayload string
+	var sendTxCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     any    `json:"id"`
@@ -676,6 +691,7 @@ func TestTwoDeviceApprovalLoopEndToEndSolana(t *testing.T) {
 				},
 			})
 		case "sendTransaction":
+			sendTxCount++
 			// Decode the base64 wire tx and capture its message bytes so the
 			// assertion can prove the approved recipient's inbox PDA rides in
 			// the account keys (the mock's error path also mirrors a real
@@ -727,6 +743,12 @@ func TestTwoDeviceApprovalLoopEndToEndSolana(t *testing.T) {
 		if !strings.Contains(err.Error(), "broadcast result is ambiguous") {
 			t.Fatalf("expected ambiguous-broadcast burn on mock rejection, got: %v", err)
 		}
+		// The retry after the ambiguous broadcast must be refused by the
+		// spent ledger: the nonce was burned even though the RPC result was
+		// never confirmed — the at-most-once promise in its adversarial form.
+		if err := postApprovedCapability(fs, to, "", approvalPath); err == nil || !strings.Contains(err.Error(), "replay refused") {
+			t.Fatalf("retry after ambiguous Solana broadcast must be replay-refused, got: %v", err)
+		}
 	}
 	buildFlags := func(t *testing.T, _, identityPath, stateDir, stateKeyPath, approvalPath, approver string) *flag.FlagSet {
 		t.Helper()
@@ -763,6 +785,12 @@ func TestTwoDeviceApprovalLoopEndToEndSolana(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(sentTxPayload), senderKey.PublicKey().Bytes()) {
 		t.Fatalf("submitted tx was not signed by the -keyfile payer %s", senderKey.PublicKey())
+	}
+	// Exactly ONE sendTransaction ever reached the node — the ambiguous
+	// first attempt. The retry was refused by the spent ledger before any
+	// broadcast could be constructed.
+	if sendTxCount != 1 {
+		t.Fatalf("sendTransaction reached the node %d times, want exactly 1", sendTxCount)
 	}
 }
 
