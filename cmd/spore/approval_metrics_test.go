@@ -110,12 +110,25 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Live signing lock on the oldest pending request: held by station
+	// web1/4242 for ~30s. The stale-break marker next to it is residue from
+	// a past break and must never count as a live lock (it does count as
+	// ignored-file hygiene noise).
+	lockPath := filepath.Join(queueDir, "p.json.lock")
+	if err := os.WriteFile(lockPath, []byte("web1 4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setTestMtime(t, lockPath, base.Add(-30*time.Second))
+	if err := os.WriteFile(filepath.Join(queueDir, "p.json.lock.broken-777-42"), []byte("999 4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	m, err := buildApprovalMetrics(queueDir, outDir, stateDir, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Requests != 5 || m.IgnoredFiles != 2 {
-		t.Fatalf("volumes: requests=%d ignored=%d, want 5/2", m.Requests, m.IgnoredFiles)
+	if m.Requests != 5 || m.IgnoredFiles != 3 {
+		t.Fatalf("volumes: requests=%d ignored=%d, want 5/3 (the broken lock marker is hygiene noise)", m.Requests, m.IgnoredFiles)
 	}
 	wantStatus := map[string]int{"SPENT": 2, "PENDING": 1, "EXPIRED": 1, "SIGNED": 1}
 	for status, want := range wantStatus {
@@ -141,6 +154,19 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 	}
 	if m.SpentNonces != 2 {
 		t.Fatalf("spent nonces = %d, want 2", m.SpentNonces)
+	}
+	if m.Locks == nil || m.Locks.Live != 1 || len(m.Locks.Entries) != 1 {
+		t.Fatalf("locks = %+v, want exactly 1 live (broken markers are residue, not locks)", m.Locks)
+	}
+	lk := m.Locks.Entries[0]
+	if !strings.HasSuffix(lk.Request, "p.json") || lk.HolderHost != "web1" || lk.HolderPID != "4242" {
+		t.Fatalf("lock entry = %+v, want p.json held by web1/4242", lk)
+	}
+	if lk.AgeSeconds < 25 || lk.AgeSeconds > 35 {
+		t.Fatalf("lock age = %v, want ~30s", lk.AgeSeconds)
+	}
+	if m.Locks.OldestAge < 25 || m.Locks.OldestAge > 35 {
+		t.Fatalf("oldest lock age = %v, want ~30s", m.Locks.OldestAge)
 	}
 	if m.OldestPending == nil || !strings.HasSuffix(m.OldestPending.Path, "p.json") {
 		t.Fatalf("oldest pending = %+v, want p.json", m.OldestPending)
@@ -174,6 +200,9 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 	if jm.Requests != 5 || jm.Status["SPENT"] != 2 || jm.Outbox == nil || jm.Outbox.SignLatency == nil || jm.Outbox.SignLatency.P95 != 480 {
 		t.Fatalf("json metrics mismatch: %+v", jm)
 	}
+	if jm.Locks == nil || jm.Locks.Live != 1 || len(jm.Locks.Entries) != 1 || jm.Locks.Entries[0].HolderPID != "4242" {
+		t.Fatalf("json locks mismatch: %+v", jm.Locks)
+	}
 
 	// Text surface: deterministic ordering (skip reasons by count desc) and
 	// duration formatting.
@@ -182,7 +211,7 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 	})
 	for _, want := range []string{
 		"approval metrics (queue ",
-		"queue: 5 request(s), 2 ignored file(s)",
+		"queue: 5 request(s), 3 ignored file(s)",
 		"status: EXPIRED=1 PENDING=1 SIGNED=1 SPENT=2",
 		"2 x nonce already consumed; replay refused",
 		"1 x approval envelope: expired",
@@ -191,6 +220,8 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 		"outbox: 2 signed output(s), 0 signed-but-unspent",
 		"approval latency (request -> signed), 2 matched: min 2m0s  p50 2m0s  p95 8m0s  max 8m0s  mean 5m0s",
 		"post latency (signed -> spent), 2 matched: min 2m0s  p50 2m0s  p95 3m0s  max 3m0s  mean 2m30s",
+		"locks: 1 live",
+		"p.json: held by web1/4242 for ",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text output missing %q, got:\n%s", want, text)

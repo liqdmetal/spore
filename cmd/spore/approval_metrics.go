@@ -46,6 +46,24 @@ type approvalOutboxMetrics struct {
 	PostLatency     *approvalMetricsLatency `json:"post_latency,omitempty"`
 }
 
+// approvalLockEntry is one live signing lock in the queue dir.
+type approvalLockEntry struct {
+	Request    string  `json:"request"`
+	HolderHost string  `json:"holder_host,omitempty"`
+	HolderPID  string  `json:"holder_pid"`
+	AgeSeconds float64 `json:"age_seconds"`
+}
+
+// approvalLockMetrics covers the per-request signing locks currently visible
+// in the queue: how many stations are mid-sign right now, who holds what,
+// and the oldest age — an age approaching approvalLockTTL means the holder
+// crashed and the next scan breaks the lock.
+type approvalLockMetrics struct {
+	Live      int                 `json:"live"`
+	OldestAge float64             `json:"oldest_age_seconds"`
+	Entries   []approvalLockEntry `json:"entries,omitempty"`
+}
+
 // approvalMetrics is the full operator summary.
 type approvalMetrics struct {
 	QueueDir      string                 `json:"queue_dir"`
@@ -59,6 +77,7 @@ type approvalMetrics struct {
 	Actions       map[string]int         `json:"actions"`
 	OldestPending *approvalOldestPending `json:"oldest_pending,omitempty"`
 	SpentNonces   int                    `json:"spent_nonces"`
+	Locks         *approvalLockMetrics   `json:"locks"`
 	Outbox        *approvalOutboxMetrics `json:"outbox,omitempty"`
 }
 
@@ -100,6 +119,45 @@ func msgApprovalMetrics(args []string) {
 		return
 	}
 	renderApprovalMetrics(m)
+}
+
+// buildApprovalLockMetrics reports the per-request signing locks currently
+// visible in the queue dir: live count, oldest age, and per-holder entries
+// (os.ReadDir order, so the output is deterministic). Only files ending in
+// ".lock" count — stale-break markers end in the breaker pid/nanos and are
+// residue, never live locks.
+func buildApprovalLockMetrics(queueDir string, now time.Time) *approvalLockMetrics {
+	m := &approvalLockMetrics{Entries: []approvalLockEntry{}}
+	entries, err := os.ReadDir(queueDir)
+	if err != nil {
+		// The queue walk already surfaced the real error; report no locks.
+		return m
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".lock") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		host, pid := parseLockOwner(filepath.Join(queueDir, entry.Name()))
+		age := now.Sub(info.ModTime()).Seconds()
+		if age < 0 {
+			age = 0 // clock skew: never report a future lock as negative age
+		}
+		m.Live++
+		if age > m.OldestAge {
+			m.OldestAge = age
+		}
+		m.Entries = append(m.Entries, approvalLockEntry{
+			Request:    strings.TrimSuffix(entry.Name(), ".lock"),
+			HolderHost: host,
+			HolderPID:  pid,
+			AgeSeconds: age,
+		})
+	}
+	return m
 }
 
 // buildApprovalMetrics walks the pipeline artifacts and assembles the
@@ -146,6 +204,10 @@ func buildApprovalMetrics(queueDir, outDir, stateDir string, now time.Time) (*ap
 		m.SpentNonces = len(spentAt)
 	}
 
+	// Locks section: live signing locks are active pipeline state, not
+	// hygiene noise, so they are reported separately from ignored files.
+	m.Locks = buildApprovalLockMetrics(queueDir, now)
+
 	// Queue walk: classify every capability envelope; everything else in the
 	// dir is queue hygiene noise worth counting.
 	type queueEntry struct {
@@ -159,6 +221,9 @@ func buildApprovalMetrics(queueDir, outDir, stateDir string, now time.Time) (*ap
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".lock") {
+			continue // active signing plumbing, reported in the locks section
 		}
 		path := filepath.Join(queueDir, entry.Name())
 		e, err := decodeCapabilityFile(path)
@@ -294,6 +359,16 @@ func renderApprovalMetrics(m *approvalMetrics) {
 	}
 	if m.StateDir != "" {
 		fmt.Printf("  ledger: %d spent nonce(s)\n", m.SpentNonces)
+	}
+	if l := m.Locks; l != nil {
+		fmt.Printf("  locks: %d live\n", l.Live)
+		for _, e := range l.Entries {
+			holder := e.HolderPID
+			if e.HolderHost != "" {
+				holder = e.HolderHost + "/" + e.HolderPID
+			}
+			fmt.Printf("    %s: held by %s for %ds\n", e.Request, holder, int(e.AgeSeconds+0.5))
+		}
 	}
 	if o := m.Outbox; o != nil {
 		fmt.Printf("  outbox: %d signed output(s), %d signed-but-unspent\n", o.SignedOutputs, o.UnspentSigned)

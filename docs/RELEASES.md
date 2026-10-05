@@ -3,6 +3,13 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## Unreleased
+
+- `approval-metrics` gains a live lock view: the `locks` section reports how
+  many signing locks are live in the queue right now, with each holder
+  (`host/pid`) and age — operator-visible contention and crash recovery, in
+  both text and `-json`.
+
 ## v0.8.1 — second-device capability approvals, concurrent-station hardening (2026-10-04)
 
 **One line:** a `spore` send no longer moves value on its own — the exact

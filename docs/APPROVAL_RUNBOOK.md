@@ -197,6 +197,8 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
 #     8 x nonce already consumed; replay refused
 #     1 x approval envelope: expired
 #   ledger: 8 spent nonce(s)
+#   locks: 1 live
+#     d_dero_3000.json: held by approver-station/4242 for 3s
 #   outbox: 8 signed output(s), 0 signed-but-unspent
 #   approval latency (request -> signed), 8 matched: min 12s  p50 1m5s  p95 9m30s  max 13m40s  mean 2m1s
 #   post latency (signed -> spent), 8 matched: min 5s  p50 40s  p95 3m0s  max 4m10s  mean 55s
@@ -213,6 +215,11 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
 - `signed-but-unspent` approvals in the outbox are waiting on the requester's
   send; a growing count with a rising post latency means the handoff (not the
   approval) is the bottleneck.
+- The `locks` section is the live contention view: every `<request>.lock`
+  currently in the queue, with its holder and age. Ages of a few seconds are
+  stations mid-sign; an age creeping toward the 60 s TTL is a crashed holder
+  that the next scan will break. Live locks are never counted as hygiene
+  noise — `ignored file(s)` only picks up stale-break residue.
 
 ## 6. Operating notes
 
