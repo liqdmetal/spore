@@ -164,6 +164,29 @@ spore msg approve -request-dir ~/approval-queue \
   locks, and outbox latencies from the station's own artifacts, so an
   always-on station shows its pipeline health without a second terminal.
   The first report lands after one full period.
+- Add `-metrics-json` to emit each heartbeat as **one compact JSON line** on
+  stdout instead of the human summary, for log dashboards:
+
+```bash
+spore msg approve -request-dir ~/approval-queue \
+  -identity ~/keys/approver.key -out-dir ~/outbox -state-dir ~/state \
+  -watch -every 30s -metrics-every 1m -metrics-json | tee -a station.jsonl
+```
+
+  Each line parses standalone:
+
+```json
+{"at":"2026-10-05T12:00:00Z","metrics":{"queue_dir":"...","requests":3,"status_counts":{"PENDING":1,"SIGNED":2},"skip_reasons":{},"chains":{"dero":3},"actions":{},"spent_nonces":2,"locks":{"live":0,"oldest_age_seconds":0},"outbox":{"signed_outputs":2,"signed_unspent":0}}}
+```
+
+  `at` is RFC3339 UTC and `metrics` is the exact object
+  `spore msg approval-metrics -json` emits (same field names), so a
+  dashboard can reuse one parser for both. The JSON line is written only
+  when the whole object encodes, so a failed encode never leaves a torn
+  line in the stream; heartbeat errors still go to stderr. Note the
+  station's startup line and cycle log lines go to stderr (Go `log`), so a
+  stdout pipeline sees nothing but JSON heartbeat lines. Requires
+  `-metrics-every > 0`; refused otherwise.
 
 ## 4. Requester side: post and verify
 

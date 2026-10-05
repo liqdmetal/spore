@@ -986,7 +986,7 @@ func TestWatchMetricsDueAndReport(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "outbox")
 	stateDir := filepath.Join(t.TempDir(), "state")
 	out := captureApprovalTestOutput(t, func() {
-		watchMetricsReport(queueDir, outDir, stateDir, time.Now())
+		watchMetricsReport(queueDir, outDir, stateDir, time.Now(), false)
 	})
 	for _, want := range []string{
 		"approve: self-metrics at ",
@@ -999,6 +999,60 @@ func TestWatchMetricsDueAndReport(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("self-metrics report missing %q, got:\n%s", want, out)
 		}
+	}
+}
+
+// TestWatchMetricsReportJSONLine pins -metrics-json: each heartbeat is one
+// compact JSON line embedding the same approvalMetrics shape that
+// `msg approval-metrics -json` emits, so a log dashboard can scrape station
+// health line by line. The `at` timestamp is RFC3339 UTC.
+func TestWatchMetricsReportJSONLine(t *testing.T) {
+	queueDir, _ := lockTestRequest(t, t.TempDir(), "selfmetjs", time.Now())
+	queueDir = filepath.Dir(queueDir)
+	outDir := filepath.Join(t.TempDir(), "outbox")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	now := time.Now()
+	out := captureApprovalTestOutput(t, func() {
+		watchMetricsReport(queueDir, outDir, stateDir, now, true)
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("json heartbeat must be exactly one stdout line, got %d:\n%s", len(lines), out)
+	}
+	if !strings.HasPrefix(lines[0], `{"at":`) {
+		t.Fatalf("json heartbeat must start with the at field, got: %s", lines[0])
+	}
+	var heartbeat watchMetricsEnvelope
+	if err := json.Unmarshal([]byte(lines[0]), &heartbeat); err != nil {
+		t.Fatalf("json heartbeat must parse: %v\nraw: %s", err, lines[0])
+	}
+	if _, err := time.Parse(time.RFC3339, heartbeat.At); err != nil {
+		t.Fatalf("heartbeat at must be RFC3339: %v (%q)", err, heartbeat.At)
+	}
+	m := heartbeat.Metrics
+	if m == nil {
+		t.Fatal("heartbeat must embed the metrics object")
+	}
+	if m.QueueDir != queueDir || m.Requests != 1 || m.Status["PENDING"] != 1 {
+		t.Fatalf("embedded metrics do not describe the station artifacts: %+v", m)
+	}
+	if m.Locks == nil || m.Locks.Live != 0 {
+		t.Fatalf("embedded metrics must include the locks section: %+v", m.Locks)
+	}
+	if m.Outbox == nil {
+		t.Fatal("outbox dir given: embedded metrics must include the outbox section")
+	}
+}
+
+// TestValidateApproveWatchFlagsMetricsJSONOrder pins the flag-order rule:
+// -metrics-json only means something when the heartbeat is enabled.
+func TestValidateApproveWatchFlagsMetricsJSONOrder(t *testing.T) {
+	err := validateApproveWatchFlags("queue", "", true, false, 30*time.Second, 0, true)
+	if err == nil || !strings.Contains(err.Error(), "-metrics-json requires -metrics-every") {
+		t.Fatalf("-metrics-json with -metrics-every 0 must be refused, got: %v", err)
+	}
+	if err := validateApproveWatchFlags("queue", "", true, false, 30*time.Second, 10*time.Minute, false); err != nil {
+		t.Fatalf("-metrics-every > 0 must stay valid: %v", err)
 	}
 }
 
@@ -1828,20 +1882,23 @@ func TestValidateApproveWatchFlags(t *testing.T) {
 		asJSON       bool
 		every        time.Duration
 		metricsEvery time.Duration
+		metricsJSON  bool
 		wantErr      string
 	}{
-		{"valid", "queue", "", true, false, 30 * time.Second, 10 * time.Minute, ""},
-		{"missing request-dir", "", "", true, false, 30 * time.Second, 10 * time.Minute, "-watch requires -request-dir"},
-		{"-request rejected", "queue", "a.json", true, false, 30 * time.Second, 10 * time.Minute, "use -request-dir instead of -request"},
-		{"-confirm required", "queue", "", false, false, 30 * time.Second, 10 * time.Minute, "pass -confirm"},
-		{"-json rejected", "queue", "", true, true, 30 * time.Second, 10 * time.Minute, "-json is not supported in -watch mode"},
-		{"zero interval", "queue", "", true, false, 0, 10 * time.Minute, "-every must be a positive duration"},
-		{"negative interval", "queue", "", true, false, -time.Second, 10 * time.Minute, "-every must be a positive duration"},
-		{"disabled metrics-every", "queue", "", true, false, 30 * time.Second, 0, ""},
-		{"negative metrics-every", "queue", "", true, false, 30 * time.Second, -time.Minute, "-metrics-every must be a positive duration or 0"},
+		{"valid", "queue", "", true, false, 30 * time.Second, 10 * time.Minute, false, ""},
+		{"missing request-dir", "", "", true, false, 30 * time.Second, 10 * time.Minute, false, "-watch requires -request-dir"},
+		{"-request rejected", "queue", "a.json", true, false, 30 * time.Second, 10 * time.Minute, false, "use -request-dir instead of -request"},
+		{"-confirm required", "queue", "", false, false, 30 * time.Second, 10 * time.Minute, false, "pass -confirm"},
+		{"-json rejected", "queue", "", true, true, 30 * time.Second, 10 * time.Minute, false, "-json is not supported in -watch mode"},
+		{"zero interval", "queue", "", true, false, 0, 10 * time.Minute, false, "-every must be a positive duration"},
+		{"negative interval", "queue", "", true, false, -time.Second, 10 * time.Minute, false, "-every must be a positive duration"},
+		{"disabled metrics-every", "queue", "", true, false, 30 * time.Second, 0, false, ""},
+		{"negative metrics-every", "queue", "", true, false, 30 * time.Second, -time.Minute, false, "-metrics-every must be a positive duration or 0"},
+		{"metrics-json with heartbeat", "queue", "", true, false, 30 * time.Second, 10 * time.Minute, true, ""},
+		{"metrics-json without heartbeat", "queue", "", true, false, 30 * time.Second, 0, true, "-metrics-json requires -metrics-every"},
 	}
 	for _, tc := range cases {
-		err := validateApproveWatchFlags(tc.requestDir, tc.request, tc.confirm, tc.asJSON, tc.every, tc.metricsEvery)
+		err := validateApproveWatchFlags(tc.requestDir, tc.request, tc.confirm, tc.asJSON, tc.every, tc.metricsEvery, tc.metricsJSON)
 		if tc.wantErr == "" {
 			if err != nil {
 				t.Errorf("%s: unexpected error: %v", tc.name, err)

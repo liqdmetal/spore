@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,8 +25,10 @@ import (
 
 // TestWatchStationSelfMetricsLive drives the REAL binary as a -watch station
 // with -metrics-every and proves the self-metrics heartbeat reaches stdout
-// through the actual CLI: build once, run over an empty queue for a few
-// fast periods, then read the log. Skips when the go tool is unavailable.
+// through the actual CLI in both render modes: the human summary and the
+// -metrics-json JSON-lines mode. Build once, run over an empty queue for a
+// few fast periods per mode, then read the logs. Skips when the go tool is
+// unavailable.
 func TestWatchStationSelfMetricsLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-binary watch smoke skipped in -short mode")
@@ -33,13 +36,27 @@ func TestWatchStationSelfMetricsLive(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go tool unavailable; skipping real-binary watch smoke")
 	}
-	dir := t.TempDir()
-	exe := filepath.Join(dir, "spore-smoke.exe")
+	exe := filepath.Join(t.TempDir(), "spore-smoke.exe")
 	build := exec.Command("go", "build", "-o", exe, ".")
 	build.Env = os.Environ()
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build spore: %v\n%s", err, out)
 	}
+	for _, tc := range []struct {
+		name        string
+		metricsJSON bool
+	}{{"text", false}, {"json", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			watchStationSelfMetricsSmoke(t, exe, tc.metricsJSON)
+		})
+	}
+}
+
+// watchStationSelfMetricsSmoke runs one real station for a couple of
+// heartbeat periods and asserts on its log according to the render mode.
+func watchStationSelfMetricsSmoke(t *testing.T, exe string, metricsJSON bool) {
+	t.Helper()
+	dir := t.TempDir()
 	queue := filepath.Join(dir, "queue")
 	if err := os.MkdirAll(queue, 0o755); err != nil {
 		t.Fatal(err)
@@ -48,16 +65,20 @@ func TestWatchStationSelfMetricsLive(t *testing.T) {
 	if err := os.WriteFile(identityPath, []byte(strings.Repeat("52", 32)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	args := []string{"msg", "approve",
+		"-request-dir", queue, "-identity", identityPath,
+		"-out-dir", filepath.Join(dir, "out"), "-state-dir", filepath.Join(dir, "state"),
+		"-watch", "-confirm", "-every", "500ms", "-metrics-every", "500ms"}
+	if metricsJSON {
+		args = append(args, "-metrics-json")
+	}
 	logPath := filepath.Join(dir, "station.log")
 	logf, err := os.Create(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer logf.Close()
-	cmd := exec.Command(exe, "msg", "approve",
-		"-request-dir", queue, "-identity", identityPath,
-		"-out-dir", filepath.Join(dir, "out"), "-state-dir", filepath.Join(dir, "state"),
-		"-watch", "-confirm", "-every", "500ms", "-metrics-every", "500ms")
+	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -76,6 +97,34 @@ func TestWatchStationSelfMetricsLive(t *testing.T) {
 	logText := string(logBytes)
 	if !strings.Contains(logText, "approve: watching") {
 		t.Fatalf("station log missing startup line:\n%s", logText)
+	}
+	if metricsJSON {
+		// Every heartbeat is one scrapeable JSON line; the human summary
+		// must be entirely absent from stdout.
+		if got := strings.Count(logText, "self-metrics at"); got != 0 {
+			t.Fatalf("-metrics-json must silence the human summary, got %d text heartbeats:\n%s", got, logText)
+		}
+		var heartbeats int
+		for _, line := range strings.Split(logText, "\n") {
+			if !strings.HasPrefix(line, `{"at":`) {
+				continue
+			}
+			heartbeats++
+			var hb watchMetricsEnvelope
+			if err := json.Unmarshal([]byte(line), &hb); err != nil {
+				t.Fatalf("heartbeat line must parse as JSON: %v\nraw: %s", err, line)
+			}
+			if _, err := time.Parse(time.RFC3339, hb.At); err != nil {
+				t.Fatalf("heartbeat at must be RFC3339: %v (%q)", err, hb.At)
+			}
+			if hb.Metrics == nil || hb.Metrics.QueueDir != queue {
+				t.Fatalf("heartbeat metrics must describe this station's queue (%s): %+v", queue, hb.Metrics)
+			}
+		}
+		if heartbeats < 2 {
+			t.Fatalf("want >=2 JSON heartbeats in ~2s of 500ms periods, got %d:\n%s", heartbeats, logText)
+		}
+		return
 	}
 	if got := strings.Count(logText, "self-metrics at"); got < 2 {
 		t.Fatalf("want >=2 self-metrics heartbeats in ~2s of 500ms periods, got %d:\n%s", got, logText)

@@ -801,7 +801,7 @@ func postApprovedCapability(fs *flag.FlagSet, recipient, amount, approvalPath st
 //	spore msg approve -request REQUEST.json -identity KEY -out SIGNED.json -confirm
 //	spore msg approve -request A.json,B.json -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
 //	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -confirm [-json] [-state-dir D]
-//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -watch [-every 30s] [-metrics-every 10m] [-state-dir D]
+//	spore msg approve -request-dir QUEUE -identity KEY -out-dir DIR -watch [-every 30s] [-metrics-every 10m] [-metrics-json] [-state-dir D]
 func msgApprove(args []string) {
 	fs := flag.NewFlagSet("msg approve", flag.ExitOnError)
 	request := fs.String("request", "", "approval request JSON file(s) to review and sign (comma-separated list for batch)")
@@ -815,12 +815,13 @@ func msgApprove(args []string) {
 	watch := fs.Bool("watch", false, "batch mode: keep rescanning -request-dir and signing new requests until interrupted (always-on approver station)")
 	every := fs.Duration("every", 30*time.Second, "watch mode: queue rescan interval (e.g. 10s, 1m)")
 	metricsEvery := fs.Duration("metrics-every", 10*time.Minute, "watch mode: print the station's own approval-metrics summary this often (0 disables)")
+	metricsJSON := fs.Bool("metrics-json", false, "watch mode: with -metrics-every, emit each self-metrics heartbeat as one compact JSON line (scrapeable by log dashboards) instead of the human summary")
 	_ = fs.Parse(args)
 	if *identity == "" {
 		check(errors.New("approve requires -identity"))
 	}
 	if *watch {
-		check(validateApproveWatchFlags(*requestDir, *request, *confirm, *asJSON, *every, *metricsEvery))
+		check(validateApproveWatchFlags(*requestDir, *request, *confirm, *asJSON, *every, *metricsEvery, *metricsJSON))
 	}
 	batch := *watch || *requestDir != "" || *outDir != "" || strings.Contains(*request, ",")
 	if !batch {
@@ -855,7 +856,7 @@ func msgApprove(args []string) {
 	if *watch {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		runApprovalWatchLoop(ctx, *requestDir, *identity, *outDir, *stateDir, *every, *metricsEvery)
+		runApprovalWatchLoop(ctx, *requestDir, *identity, *outDir, *stateDir, *every, *metricsEvery, *metricsJSON)
 		return
 	}
 	var requestPaths []string
@@ -1268,7 +1269,7 @@ func renderApprovalBatchReport(results []approvalBatchResult, asJSON bool) {
 // needs the same explicit -confirm as a one-shot batch, JSON reports are a
 // one-shot feature (the signed files are the watch artifacts), and the rescan
 // interval must be positive.
-func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool, every, metricsEvery time.Duration) error {
+func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool, every, metricsEvery time.Duration, metricsJSON bool) error {
 	if requestDir == "" {
 		return errors.New("approve: -watch requires -request-dir (a queue directory to rescan)")
 	}
@@ -1287,7 +1288,18 @@ func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool,
 	if metricsEvery < 0 {
 		return errors.New("approve: -metrics-every must be a positive duration or 0 to disable")
 	}
+	if metricsJSON && metricsEvery <= 0 {
+		return errors.New("approve: -metrics-json requires -metrics-every > 0 (the flag formats the heartbeat; there is nothing to format when it is disabled)")
+	}
 	return nil
+}
+
+// watchMetricsEnvelope is one self-metrics heartbeat line in -metrics-json
+// mode: a scrapeable timestamp plus the same approvalMetrics shape that
+// `msg approval-metrics -json` emits.
+type watchMetricsEnvelope struct {
+	At      string           `json:"at"`
+	Metrics *approvalMetrics `json:"metrics"`
 }
 
 // runApprovalWatchLoop is the always-on approver station: rescan the queue
@@ -1299,7 +1311,7 @@ func validateApproveWatchFlags(requestDir, request string, confirm, asJSON bool,
 // always-on station shows its pipeline health without a second terminal.
 // Returns when ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext at
 // the call site).
-func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir, stateDir string, every, metricsEvery time.Duration) {
+func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir, stateDir string, every, metricsEvery time.Duration, metricsJSON bool) {
 	seen := make(map[string]string)
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -1315,7 +1327,7 @@ func runApprovalWatchLoop(ctx context.Context, requestDir, identityPath, outDir,
 			log.Printf("approve: cycle %d: %d signed, %d failed", cycle, signed, failed)
 		}
 		if watchMetricsDue(&nextMetrics, metricsEvery, time.Now()) {
-			watchMetricsReport(requestDir, outDir, stateDir, time.Now())
+			watchMetricsReport(requestDir, outDir, stateDir, time.Now(), metricsJSON)
 		}
 		select {
 		case <-ctx.Done():
@@ -1340,11 +1352,11 @@ func watchMetricsDue(next *time.Time, metricsEvery time.Duration, now time.Time)
 }
 
 // watchMetricsReport prints the station's self-metrics heartbeat on stdout:
-// the exact summary `msg approval-metrics` renders, so a long-running
-// station shows its own queue, outbox, ledger, and lock state without a
-// second terminal. Read-only; a metrics failure is reported and the station
-// keeps running.
-func watchMetricsReport(queueDir, outDir, stateDir string, now time.Time) {
+// either the human summary (the exact output `msg approval-metrics` renders)
+// or — with metricsJSON — one compact JSON line per heartbeat, scrapeable by
+// log dashboards. Read-only; a metrics failure is logged to stderr and the
+// station keeps running.
+func watchMetricsReport(queueDir, outDir, stateDir string, now time.Time, metricsJSON bool) {
 	if outDir != "" {
 		// The station creates its outbox lazily on the first signature; the
 		// heartbeat must render before that too (same directory the batch
@@ -1354,6 +1366,17 @@ func watchMetricsReport(queueDir, outDir, stateDir string, now time.Time) {
 	m, err := buildApprovalMetrics(queueDir, outDir, stateDir, now)
 	if err != nil {
 		log.Printf("approve: self-metrics: %v", err)
+		return
+	}
+	if metricsJSON {
+		// One JSON object per heartbeat: no indent, no extra output on
+		// stdout, so a log pipeline can parse line by line. Errors go to
+		// stderr; a failed encode must not corrupt the stream with a
+		// partial line.
+		enc := json.NewEncoder(os.Stdout)
+		if err := enc.Encode(watchMetricsEnvelope{At: now.UTC().Format(time.RFC3339), Metrics: m}); err != nil {
+			log.Printf("approve: self-metrics: encode: %v", err)
+		}
 		return
 	}
 	fmt.Printf("approve: self-metrics at %s\n", now.UTC().Format(time.RFC3339))
