@@ -13,6 +13,8 @@
 //	eth_sendTransaction        (the recipient-signed burn path)
 //	eth_getLogs                (Inbox(to=us) discovery)
 //	eth_call                   (read() and length() simulation)
+//	eth_getTransactionByHash   (reading a mined tx back off the chain)
+//	eth_getBlockByNumber       (the scan window; always full transactions)
 //
 // Signing interop: spore signs legacy EIP-155 transactions with btcec's
 // SignCompact — <recid+27><r><s> — and this stub recovers the signer with
@@ -34,6 +36,11 @@
 //   - every accepted tx mines into a fresh block, so a deliver's Inbox log
 //     always sits ABOVE the head the script captures before sending — the
 //     -min-height/eth_getLogs fromBlock contract the rehearsal relies on.
+//   - every accepted tx is retrievable by hash and by block, because the E2
+//     receive path's burn is deliberately unlogged: scripts/evm-burn-txid.sh
+//     reads it back off the chain, and the rehearsal now runs that step, so
+//     the surface it needs has to exist here or the offline rehearsal stops
+//     mirroring the real one.
 //
 // Not simulated, on purpose: gas accounting, signatures other than legacy
 // EIP-155, nonzero-value txs, and any contract other than the mailbox.
@@ -109,6 +116,7 @@ type msgEntry struct {
 type stubChain struct {
 	mu       sync.Mutex
 	txByHash map[string]*stubTx
+	order    []*stubTx         // mined txs, oldest first (block queries)
 	nonce    map[string]uint64 // per-signer accepted-tx count
 	codeAt   map[string]bool   // addresses holding contract code
 	contract string            // the created MyceliumMailbox address
@@ -293,6 +301,7 @@ func (c *stubChain) applyTx(tx *stubTx) string {
 	tx.Block = c.height
 	tx.Hash = txHashFor(c.height)
 	c.txByHash[tx.Hash] = tx
+	c.order = append(c.order, tx)
 	if tx.To == "" {
 		addr := createAddress(tx.From, c.nonce[tx.From])
 		tx.Created = addr
@@ -399,6 +408,42 @@ func txHashFor(block uint64) string {
 	return "0x" + hex.EncodeToString(out)
 }
 
+// txObject renders a mined tx the way eth_getTransactionByHash does, carrying
+// the fields the burn reader needs: from, to (null on a creation), input, and
+// the block it landed in.
+func txObject(tx *stubTx) map[string]interface{} {
+	obj := map[string]interface{}{
+		"hash":        tx.Hash,
+		"from":        tx.From,
+		"input":       "0x" + hex.EncodeToString(tx.Data),
+		"blockNumber": "0x" + strconv.FormatUint(tx.Block, 16),
+	}
+	if tx.To == "" {
+		obj["to"] = nil
+		obj["contractAddress"] = tx.Created
+	} else {
+		obj["to"] = tx.To
+	}
+	return obj
+}
+
+// blockObject summarizes a block with its transactions, oldest first. A real
+// node's block carries a hash, and a reader that fetches it as a tx must get
+// null back rather than a false match — so this hash is never a txid.
+func (c *stubChain) blockObject(n uint64) map[string]interface{} {
+	txs := []map[string]interface{}{}
+	for _, tx := range c.order {
+		if tx.Block == n {
+			txs = append(txs, txObject(tx))
+		}
+	}
+	return map[string]interface{}{
+		"number":       "0x" + strconv.FormatUint(n, 16),
+		"hash":         "0x" + hex.EncodeToString(keccak256([]byte("sepoliastub-block-"+strconv.FormatUint(n, 10)))),
+		"transactions": txs,
+	}
+}
+
 // createAddress is keccak256(rlp([sender, nonce]))[12:] — the same creation
 // formula internal/evm/contract.go derives locally, so the stub's mined
 // address must equal the deploy command's printed one or CI fails loudly.
@@ -479,6 +524,32 @@ func (c *stubChain) dispatch(method, rawParams string) (result interface{}, rpcE
 			return codeHex, ""
 		}
 		return "0x", ""
+	case "eth_getTransactionByHash":
+		// nil is the JSON-RPC null a real node answers for an unknown hash.
+		tx, ok := c.txByHash[strings.ToLower(arg(0))]
+		if !ok {
+			return nil, ""
+		}
+		return txObject(tx), ""
+	case "eth_getBlockByNumber":
+		tag := strings.ToLower(arg(0))
+		var n uint64
+		switch tag {
+		case "earliest":
+			n = 0
+		case "", "latest", "pending", "safe", "finalized":
+			n = c.height
+		default:
+			parsed, err := strconv.ParseUint(strings.TrimPrefix(tag, "0x"), 16, 64)
+			if err != nil {
+				return nil, "unsupported block tag " + tag
+			}
+			n = parsed
+		}
+		if n > c.height {
+			return nil, "" // null: that block does not exist yet
+		}
+		return c.blockObject(n), ""
 	case "eth_estimateGas":
 		// A simulation must never advance state — the burn-estimate branch
 		// is the regression this guard exists for (an estimate that burned
