@@ -174,7 +174,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Rehearse the release-day flip
+      - name: Assert the release surfaces carry no rehearsal marker
+        # Both patches are full of markers by design (the dry run's synthetic
+        # receipt, the unfilled fee numbers, its placeholder address). A leaked
+        # one satisfies every other gate, so check the tree directly too.
+        run: bash scripts/release-placeholders.sh
+      - name: Rehearse the release-day passes (flip, then fees)
         run: bash scripts/release-day-rehearsal.sh
 
   fuzz-smoke:

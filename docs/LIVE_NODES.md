@@ -488,13 +488,24 @@ status claims to match the published chain status —
 `TestReleasePrepProseDrainedAfterFlip` enforces that drain once the registry
 entry from step 4 exists.
 
-The flip is executable, and rehearsed long before release day.
-`release-designs/v0.9.0-doc-flips.patch` is the frozen apply-ready form of the
-patches above, and `scripts/release-day-rehearsal.sh` applies it to a throwaway
+The flip and the fee pass are executable, and rehearsed long before release
+day. `release-designs/v0.9.0-doc-flips.patch` and
+`release-designs/v0.9.0-fee-notes.patch` are the frozen apply-ready forms of
+the passes above, in that order (the fee patch's base is the tree the flip
+produces), and `scripts/release-day-rehearsal.sh` applies both to a throwaway
 tree and runs the referee there — then removes the registry entry and requires
 the same run to fail, so a gate that accepts every tree cannot pass as a green
 rehearsal. It runs on every push; the deployment-day commit is the only run
 whose address is real.
+
+Because both patches carry markers until the deployment produces the numbers,
+`scripts/release-placeholders.sh` is the last check before the tag: it derives
+the release surfaces from the patches themselves and sweeps them for the dry
+run's synthetic receipt values, its placeholder mailbox address, and any
+unfilled measured number. The receipt gate cannot substitute for it — a
+placeholder address is still `0x` + 40 hex and is still cited in §3, so a
+forgotten one would ship as the default mailbox for every user. Run it after
+filling; it must exit 0.
 
 ### Post-launch: the compost watchdog (the red signal)
 

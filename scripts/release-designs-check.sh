@@ -39,15 +39,17 @@ STATUS=0
 
 # The complete release-day input: the flip patch is useless without the
 # checklist, the fee notes, the tag message, and the landing copy the runbook
-# walks through in order. v0.9.0-doc-flips.patch is the executable form of the
-# .md proposal — release day runs `git apply` on it, so losing it means
-# re-deriving the flip by hand.
+# walks through in order. The two .patch files are the executable forms of the
+# .md proposals — release day runs `git apply` on them, in order (flip first;
+# the fee patch's base is the tree the flip produces), so losing either one
+# means re-deriving that pass by hand.
 EXPECTED=(
   README.md
   v0.9.0-pretag-checklist.md
   v0.9.0-doc-flips.md
   v0.9.0-doc-flips.patch
   v0.9.0-fee-notes.md
+  v0.9.0-fee-notes.patch
   v0.9.0-tag-message.txt
   v0.9.0-landing-card.md
 )

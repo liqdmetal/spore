@@ -17,7 +17,8 @@ deployment-day commit described in
 | [`v0.9.0-pretag-checklist.md`](v0.9.0-pretag-checklist.md) | The release-day orchestrator — the ordered steps (decide → gates → flip → fee notes → version → tag → push → verify). | Read first, top to bottom. |
 | [`v0.9.0-doc-flips.md`](v0.9.0-doc-flips.md) | The receipt-backed flip patches: the registry entry, the four operator-facing rows, and the narrative/status drain across 14 files. | Read it to understand the flip. Carries an inline provenance header and the line-wrap invariants the dry-run rehearsal found. |
 | [`v0.9.0-doc-flips.patch`](v0.9.0-doc-flips.patch) | The same flip in its **executable** form: the byte-exact `git apply` artifact, frozen from the dry-run commit and machine-checked against the gate. | The flip commit — apply it, don't retype it. |
-| [`v0.9.0-fee-notes.md`](v0.9.0-fee-notes.md) | The measured fee + limit notes: per-chain gas reality and the not-payable contract path. | The release-prep pass, **after** the real numbers exist. |
+| [`v0.9.0-fee-notes.md`](v0.9.0-fee-notes.md) | The measured fee + limit notes: per-chain gas reality and the not-payable contract path. | Read it to understand the pass. |
+| [`v0.9.0-fee-notes.patch`](v0.9.0-fee-notes.patch) | The same pass in **executable** form. Its base is the tree the flip patch produces, so it can only land second. | The release-prep pass, **after** the real numbers exist. |
 | [`v0.9.0-tag-message.txt`](v0.9.0-tag-message.txt) | The signed-tag message draft, with `<<FILL:…>>` fields and a strip marker. | Last: fill → strip into `v0.9.0-tag-message-final.txt` → `git tag -s`. |
 | [`v0.9.0-landing-card.md`](v0.9.0-landing-card.md) | The release narrative / landing copy: what landed, the done-bar, the first move. | With the announcement. |
 
@@ -50,13 +51,22 @@ deployment-day commit described in
   the right file — so a claim the patch wraps across two lines fails here in a
   second, with `WRAPPED`, instead of failing the gate mid-apply. It also fails
   if the patch edits a file no gate covers (a silent claim).
-- **`scripts/release-day-rehearsal.sh`** is the end-to-end proof: it extracts
-  HEAD into a scratch tree, applies the frozen patch, runs the referee, and
-  then un-does **only** the registry entry and requires the referee to fail.
+- **`TestReleaseFeeNotesPatchStaysOffTheGatedLines`** guards the second pass,
+  whose entire safety argument is "these fee patches touch only *different*
+  lines of the same files". It fails if the fee patch reintroduces a claim the
+  flip removed, or edits README (whose EVM cell the gate pins to the flipped
+  string; the draft keeps fee text in LIVE_NODES §3).
+- **`scripts/release-day-rehearsal.sh`** is the end-to-end proof of the pair,
+  in order: it extracts HEAD into a scratch tree, applies the flip, applies the
+  fees on top, runs the referee, then un-does **only** the registry entry and
+  requires the referee to fail. It also lists every marker release day still
+  has to fill, read out of the applied tree, and asserts the sweep below is not
+  blind.
 
   ```bash
-  bash scripts/release-day-rehearsal.sh            # flip green + negative control red
-  bash scripts/release-day-rehearsal.sh --check    # only: the patch still applies
+  bash scripts/release-day-rehearsal.sh            # flip + fees green, negative control red
+  bash scripts/release-day-rehearsal.sh --check    # only: both passes still apply in order
+  bash scripts/release-day-rehearsal.sh --flip-only
   bash scripts/release-designs-check.sh --status   # what is still unfilled
   ```
 
@@ -65,6 +75,19 @@ deployment-day commit described in
   Windows box with `core.autocrlf=true`, git would otherwise rewrite the docs
   to CRLF and the fee-notes claim — which needs a literal newline plus exactly
   three spaces — would fail an otherwise perfect flip.
+- **`scripts/release-placeholders.sh`** is the last check before the tag, and
+  the one nothing else replaces. Both patches ship *markers* (the dry run's
+  synthetic receipt values and its `0x000…8453` address; the unfilled measured
+  numbers) because they must be appliable before the deployment exists. A
+  forgotten placeholder address still satisfies the receipt gate — it is `0x` +
+  40 hex, and the flip still cites it in LIVE_NODES §3 — so it would ship as the
+  default mailbox for every user. The sweep derives its file list from the
+  patches, passes on a clean tree, and exits 1 while any marker remains; it runs
+  in `gates.sh` and in CI, which is what makes "replace them first" a command
+  rather than an instruction. The rehearsal asserts the failing direction, so
+  the sweep cannot quietly go blind. `<release>` is deliberately not swept — the
+  docs name that marker in their own instructions, and the receipt gate already
+  owns it.
 - **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
   when a draft is missing or a tracked file points at a `release-designs/`
   artifact that does not exist.
@@ -78,3 +101,9 @@ wrap-constraint annotations from that run; the other four are unmodified copies.
 `v0.9.0-doc-flips.patch` is the committed diff of that rehearsal commit, so it
 is the *verified* shape rather than a retyped one — the only thing release day
 changes is the placeholder address and the receipt values it fills in first.
+`v0.9.0-fee-notes.patch` has no such ancestry: it is the draft's patches 1a,
+1b, 2, 3, 4a and 4b applied by hand to a flipped tree and frozen, and its
+header records the four judgement calls that took (the conditional stub
+footnote is not carried; 1a and 1b target the same bullet; 4b's quoted anchor
+was replaced by the flip, so its sentence lands on the post-flip item 4; and
+4a's box text is byte-exact from the flip).

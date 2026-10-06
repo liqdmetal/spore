@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
 # release-day-rehearsal.sh — prove TODAY that release day is executable.
 #
-# Release day applies release-designs/v0.9.0-doc-flips.patch to this tree and
-# then runs the receipt gate. Nothing in the test suite applies that patch, so
-# until now the apply itself was rehearsed exactly once, by hand, on a
-# throwaway branch. This script turns that one-off into a command: it extracts
-# HEAD into a scratch directory, applies the frozen patch there, and runs the
-# referee. If the docs drift, the patch stops applying or stops satisfying the
-# gate, and this fails — long before the deployment exists.
+# Release day is two ordered passes, and no test applies either of them:
 #
-# Then it proves the check has teeth. Drugging the rehearsal (undoing ONLY the
-# registry-entry file after the flip) must make the gate fail: a gate that
-# passes on both a flipped and an unflipped tree would prove nothing.
+#   1. the flip  (release-designs/v0.9.0-doc-flips.patch)  — receipt, registry
+#      entry, the four operator-facing rows, and the narrative prose drain.
+#   2. the fees  (release-designs/v0.9.0-fee-notes.patch)  — measured fee and
+#      limit notes, whose base is the tree pass 1 produced.
+#
+# This script runs both against a scratch tree and then runs the referee. The
+# second patch's base IS the first patch's output, so the pair can only be
+# rehearsed in order — and that order, plus the fact that the fee wording does
+# not eat a line the receipt gate checks, is exactly what nobody had proven
+# together.
+#
+# Then it proves the check has teeth: undoing ONLY the registry entry (so the
+# docs claim a live deployment the registry does not back) must make the gate
+# fail. A gate that passes on both a released and an unreleased tree would
+# prove nothing.
 #
 #   bash scripts/release-day-rehearsal.sh              # full rehearsal
-#   bash scripts/release-day-rehearsal.sh --check      # patch applies cleanly, nothing run
-#   bash scripts/release-day-rehearsal.sh --sabotage-only   # only the negative phase
-#   bash scripts/release-day-rehearsal.sh -s           # self-skip when go is absent (CI/dev without Go)
+#   bash scripts/release-day-rehearsal.sh --check      # both passes apply in order, nothing run
+#   bash scripts/release-day-rehearsal.sh --flip-only  # rehearse pass 1 alone
+#   bash scripts/release-day-rehearsal.sh --sabotage-only
+#   bash scripts/release-day-rehearsal.sh -s           # self-skip when go is absent
 #   bash scripts/release-day-rehearsal.sh --keep       # leave the scratch tree for inspection
 #
 # Exit codes: 0 green (or already applied / self-skipped), 1 the rehearsal
 # failed, 2 cannot check (missing tool or patch), 3 usage, 130 interrupted.
 #
-# Line endings are forced to LF for BOTH the extraction and the apply. On a
+# Line endings are forced to LF for BOTH the extraction and the applies. On a
 # Windows box whose system gitconfig sets core.autocrlf=true, git would
 # otherwise rewrite every doc to CRLF, and the gate's fee-notes claim — which
 # requires a literal newline followed by exactly three spaces — would fail on
@@ -35,18 +42,21 @@ top=$(git rev-parse --show-toplevel 2>/dev/null) || {
 }
 cd "$top"
 
-PATCH="release-designs/v0.9.0-doc-flips.patch"
+PATCH_FLIP="release-designs/v0.9.0-doc-flips.patch"
+PATCH_FEE="release-designs/v0.9.0-fee-notes.patch"
 
 CHECK_ONLY=0
 SABOTAGE_ONLY=0
+FLIP_ONLY=0
 SELF_SKIP=0
 KEEP=0
 usage() {
   cat <<'USAGE'
-usage: bash scripts/release-day-rehearsal.sh [--check] [--sabotage-only] [-s] [--keep]
+usage: bash scripts/release-day-rehearsal.sh [--check] [--flip-only] [--sabotage-only] [-s] [--keep]
 
-  --check          only confirm the frozen patch still applies to HEAD
-  --sabotage-only  only run the negative phase (flip minus the registry entry)
+  --check          only confirm the flip and the fee patches still apply, in order
+  --flip-only      rehearse the flip pass alone (skip the fee pass)
+  --sabotage-only  only run the negative phase (flip + fees minus the registry entry)
   -s               self-skip (exit 0) when the Go toolchain is unavailable
   --keep           keep the scratch tree and print its path
   -h, --help       this message
@@ -55,6 +65,7 @@ USAGE
 for a in "$@"; do
   case "$a" in
     --check) CHECK_ONLY=1 ;;
+    --flip-only) FLIP_ONLY=1 ;;
     --sabotage-only) SABOTAGE_ONLY=1 ;;
     -s | --self-skip) SELF_SKIP=1 ;;
     --keep) KEEP=1 ;;
@@ -69,6 +80,10 @@ for a in "$@"; do
       ;;
   esac
 done
+if ((FLIP_ONLY)) && ((SABOTAGE_ONLY)); then
+  echo "release-day-rehearsal: --flip-only and --sabotage-only are contradictory" >&2
+  exit 3
+fi
 
 # ---- preconditions ---------------------------------------------------------
 for tool in git tar mktemp; do
@@ -82,29 +97,32 @@ if ! command -v go >/dev/null 2>&1; then
     echo "SKIP release-day rehearsal: the Go toolchain is not on PATH (self-skip)"
     exit 0
   fi
-  echo "release-day-rehearsal: go not found — pass -s to self-skip" >&2
+  echo "release-day-rehearsal: go not found - pass -s to self-skip" >&2
   exit 2
 fi
-[ -f "$PATCH" ] || {
-  echo "release-day-rehearsal: $PATCH is missing — release day has no executable flip" >&2
-  exit 2
-}
+for p in "$PATCH_FLIP" "$PATCH_FEE"; do
+  [ -f "$p" ] || {
+    echo "release-day-rehearsal: $p is missing — release day has no executable pass" >&2
+    exit 2
+  }
+done
 
-# gitx pins line endings on every git call: the repository is stored LF, and
-# the rehearsal must see the same bytes CI sees, whatever core.autocrlf says.
+# gitx pins line endings on every git call: the repository is stored LF, and the
+# rehearsal must see the same bytes CI sees, whatever core.autocrlf says.
 gitx() { git -c core.autocrlf=false -c core.eol=lf "$@"; }
 
 # The flip already being in this tree is the release-day state, not a failure:
 # there is nothing left to rehearse.
-if gitx apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+if gitx apply --reverse --check "$PATCH_FLIP" >/dev/null 2>&1; then
   echo "release-day-rehearsal: the flip is already applied to this tree — nothing to rehearse"
   exit 0
 fi
 
 sha=$(git rev-parse --short HEAD 2>/dev/null || echo '?')
-echo "== release-day rehearsal: v0.9.0 flip, applied to a throwaway tree =="
-echo "patch: $PATCH"
-echo "tree:  HEAD $sha (committed state; the working tree is not used)"
+echo "== release-day rehearsal: v0.9.0 flip + fees, applied to a throwaway tree =="
+echo "pass 1: $PATCH_FLIP"
+echo "pass 2: $PATCH_FEE"
+echo "tree:   HEAD $sha (committed state; the working tree is not used)"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/spore-release-rehearsal.XXXXXX")
 cleanup() {
@@ -127,54 +145,106 @@ git init -q "$work"
 cd "$work"
 
 echo
-echo "-- patch still applies to HEAD"
-if ! gitx apply --check "$top/$PATCH" 2>"$tmp/apply.log"; then
-  echo "REHEARSAL FAILED: the frozen patch no longer applies to HEAD." >&2
-  echo "The docs moved under the patch. Re-derive release-designs/v0.9.0-doc-flips.patch" >&2
+echo "-- pass 1: the flip still applies to HEAD"
+if ! gitx apply --check "$top/$PATCH_FLIP" 2>"$tmp/apply.log"; then
+  echo "REHEARSAL FAILED: the frozen flip no longer applies to HEAD." >&2
+  echo "The docs moved under it. Re-derive release-designs/v0.9.0-doc-flips.patch" >&2
   echo "from the current tree (see the provenance header) and re-run." >&2
   sed 's/^/  /' "$tmp/apply.log" >&2
   exit 1
 fi
+gitx apply "$top/$PATCH_FLIP"
 echo "   ok"
+
+if ((FLIP_ONLY == 0)); then
+  echo
+  echo "-- pass 2: the fee notes still apply on top of the flip"
+  # The fee patch's base IS the flipped tree, so this also asserts the pass
+  # order: against unflipped HEAD it does not apply at all.
+  if ! gitx apply --check "$top/$PATCH_FEE" 2>"$tmp/apply2.log"; then
+    echo "REHEARSAL FAILED: the fee-notes patch does not apply on top of the flip." >&2
+    echo "Either the flip moved a line the fee patches anchor on, or the fee patch" >&2
+    echo "was re-derived against a different base." >&2
+    sed 's/^/  /' "$tmp/apply2.log" >&2
+    exit 1
+  fi
+  gitx apply "$top/$PATCH_FEE"
+  echo "   ok"
+fi
+
+# ---- the fill list: what release day still has to type in ------------------
+# Both patches are shape, not content: the receipt values and the measured fee
+# numbers stay as markers until the deployment produces them. Report them from
+# the APPLIED tree so the list cannot drift from the artifacts.
+passes="$top/$PATCH_FLIP"
+((FLIP_ONLY)) || passes="$passes $top/$PATCH_FEE"
+touched=$(gitx apply --numstat $passes | awk '{print $3}' | sort -u)
+markers=$(grep -ohE '<<[A-Za-z0-9 -]*>>|<release>|<DRYRUN-[A-Za-z -]*>' $touched 2>/dev/null | sort | uniq -c | sort -rn || true)
+if [ -n "$markers" ]; then
+  echo
+  echo "-- outstanding on release day (fill from the section-3 receipt + the saved estimator output):"
+  printf '%s\n' "$markers" | sed 's/^ *\([0-9]*\) */     \1 x /'
+fi
 
 if ((CHECK_ONLY)); then
   echo
-  echo "RELEASE-DAY REHEARSAL GREEN (check only) — the patch applies to HEAD $sha"
+  echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $sha"
   exit 0
 fi
 
-run_gate() { # run_gate LOGFILE -> writes output, returns the gate's status
+run_gate() { # run_gate LOGFILE -> runs the referee, returns its status
   go test ./internal/evm ./cmd/spore -count=1 >"$1" 2>&1
 }
 
-# ---- phase 1: apply the flip, the gate must pass ---------------------------
+# The filler cannot be verified here — the rehearsal IS the pre-fill state. What
+# must be verified is that the sweep which guards it is not blind, or release
+# day would ship a placeholder address that satisfies every other gate.
+echo
+echo "-- placeholder sweep (must flag THIS tree, which is the unfilled shape)"
+if [ ! -f scripts/release-placeholders.sh ]; then
+  echo "REHEARSAL FAILED: scripts/release-placeholders.sh is not in the rehearsed tree." >&2
+  echo "Rehearsing the committed tree means the sweep must be committed too — without" >&2
+  echo "it nothing in CI would notice a shipped placeholder address." >&2
+  exit 1
+fi
+if bash scripts/release-placeholders.sh --quiet; then
+  echo "REHEARSAL FAILED: the marker sweep reported a clean tree, but this tree is" >&2
+  echo "full of rehearsal markers — it would let a placeholder ship." >&2
+  exit 1
+fi
+# Take the count from the sweep's own summary line rather than counting lines of
+# its output, or the message text inflates the number.
+n=$(bash scripts/release-placeholders.sh | sed -n 's/^release-placeholders: \([0-9]*\) marker.*/\1/p' || true)
+echo "   flagged, as it must be — ${n:-?} marker line(s) in the rehearsed tree (see the fill list above)"
+
+# ---- phase 1: flip + fees, the gate must pass ------------------------------
 # (skipped under --sabotage-only, which exists to show the negative alone)
 if ((SABOTAGE_ONLY == 0)); then
-  gitx apply "$top/$PATCH"
   addr=$(grep -oE '"0x[0-9a-fA-F]{40}"' internal/evm/mailboxdefaults.go | head -1 | tr -d '"' || true)
   echo
-  echo "-- flip applied (registry address ${addr:-unknown}: a placeholder, not a real claim)"
+  echo "-- registry address ${addr:-unknown} (a placeholder, not a real claim)"
   t0=$SECONDS
-  if run_gate "$tmp/gate-flipped.log"; then
-    echo "-- receipt gate on the flipped tree ......... GREEN ($((SECONDS - t0))s) [go test ./internal/evm ./cmd/spore]"
+  if run_gate "$tmp/gate-released.log"; then
+    echo "-- receipt gate on the released tree ..... GREEN ($((SECONDS - t0))s) [go test ./internal/evm ./cmd/spore]"
   else
-    echo "-- receipt gate on the flipped tree ......... RED" >&2
-    echo "REHEARSAL FAILED: the flip applied but the receipt gate rejects it." >&2
-    grep -E '^(---|    )' "$tmp/gate-flipped.log" | head -30 >&2
+    echo "-- receipt gate on the released tree ..... RED" >&2
+    echo "REHEARSAL FAILED: the passes applied but the receipt gate rejects the result." >&2
+    grep -E '^(---|    )' "$tmp/gate-released.log" | head -30 >&2
     exit 1
   fi
 fi
 
-# ---- phase 2: same flip minus the registry entry, the gate must fail -------
+# ---- phase 2: same tree minus the registry entry, the gate must fail -------
 # Undo ONLY internal/evm/mailboxdefaults.go: the docs keep claiming a live Base
-# deployment while the registry says none shipped. That is exactly the release
-# -day mistake the gate exists to catch, so the gate must reject it.
+# deployment while the registry says none shipped. That is exactly the
+# release-day mistake the gate exists to catch, so the gate must reject it.
 if ((SABOTAGE_ONLY)); then
-  gitx apply "$top/$PATCH"
+  gitx apply "$top/$PATCH_FLIP"
+  ((FLIP_ONLY)) || gitx apply "$top/$PATCH_FEE"
 fi
 echo
-echo "-- negative control: flip minus the registry entry"
-if ! gitx apply --reverse --include='internal/evm/mailboxdefaults.go' "$top/$PATCH"; then
+echo "-- negative control: the released tree minus the registry entry"
+if ! gitx apply --reverse --include='internal/evm/mailboxdefaults.go' "$top/$PATCH_FLIP"; then
   echo "REHEARSAL FAILED: could not undo the registry entry for the negative control" >&2
   exit 1
 fi
@@ -183,7 +253,7 @@ t0=$SECONDS
 rc=0
 run_gate "$tmp/gate-sabotaged.log" || rc=$?
 if ((rc == 0)); then
-  echo "   gate stayed GREEN — the gate cannot tell a flipped tree from an unflipped one" >&2
+  echo "   gate stayed GREEN — it cannot tell a released tree from an unreleased one" >&2
   echo "REHEARSAL FAILED: the receipt gate has no teeth; a doc-only flip would pass." >&2
   exit 1
 fi
@@ -193,8 +263,12 @@ if ! grep -qE '^--- FAIL: (TestShippedMailboxDefaultsCarryReceipts|TestDocClaims
   echo "REHEARSAL FAILED: unexpected failure mode under sabotage." >&2
   exit 1
 fi
-echo "-- negative control ......................... RED as required ($((SECONDS - t0))s)"
+echo "-- negative control ...................... RED as required ($((SECONDS - t0))s)"
 grep -E '^--- FAIL: Test' "$tmp/gate-sabotaged.log" | sed 's/^/   /'
 
 echo
-echo "RELEASE-DAY REHEARSAL GREEN — the flip applies to HEAD $sha and the receipt gate both passes it and rejects a doc-only flip"
+if ((FLIP_ONLY)); then
+  echo "RELEASE-DAY REHEARSAL GREEN — the flip applies to HEAD $sha and the receipt gate both passes it and rejects a doc-only flip (fee pass not rehearsed)"
+else
+  echo "RELEASE-DAY REHEARSAL GREEN — flip + fees apply in order to HEAD $sha and the receipt gate both passes them and rejects a doc-only flip"
+fi

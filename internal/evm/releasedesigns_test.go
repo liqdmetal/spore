@@ -88,6 +88,7 @@ func TestReleaseDesignsSetIsComplete(t *testing.T) {
 		"v0.9.0-doc-flips.md",
 		"v0.9.0-doc-flips.patch",
 		"v0.9.0-fee-notes.md",
+		"v0.9.0-fee-notes.patch",
 		"v0.9.0-tag-message.txt",
 		"v0.9.0-landing-card.md",
 	} {
@@ -103,7 +104,10 @@ func TestReleaseDesignsSetIsComplete(t *testing.T) {
 // claims somewhere — which it would also do if the claim appeared only in its
 // own commentary. This one proves the claims are in the patch's added text for
 // the right file, matched raw, exactly as the gate matches it.
-const releaseDesignsPatchFile = "../../release-designs/v0.9.0-doc-flips.patch"
+const (
+	releaseDesignsPatchFile  = "../../release-designs/v0.9.0-doc-flips.patch"
+	releaseFeeNotesPatchFile = "../../release-designs/v0.9.0-fee-notes.patch"
+)
 
 // patchNewRegions returns, per target file, the post-apply text of every hunk's
 // changed region, in order: context and added lines kept, removed lines
@@ -111,7 +115,12 @@ const releaseDesignsPatchFile = "../../release-designs/v0.9.0-doc-flips.patch"
 // occurs here occurs in the flipped doc too.
 func patchNewRegions(t *testing.T) map[string]string {
 	t.Helper()
-	raw, err := os.ReadFile(releaseDesignsPatchFile)
+	return patchNewRegionsFrom(t, releaseDesignsPatchFile)
+}
+
+func patchNewRegionsFrom(t *testing.T, file string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatalf("the executable flip patch is unreadable (%v) — release day would have nothing to apply", err)
 	}
@@ -143,6 +152,61 @@ func patchNewRegions(t *testing.T) map[string]string {
 	}
 	flush()
 	return regions
+}
+
+// TestReleaseFeeNotesPatchStaysOffTheGatedLines guards the second release-day
+// pass, whose whole safety argument is "these fee patches touch only DIFFERENT
+// lines of the same files". The receipt gate cannot check that promise by
+// itself: it only sees the tree after both passes. So check the promise
+// directly — the fee wording may not introduce a claim the gate forbids, may
+// not be aimed at a file the gate pins that the draft deliberately excludes,
+// and must be the four files the draft names, in the draft's order.
+func TestReleaseFeeNotesPatchStaysOffTheGatedLines(t *testing.T) {
+	regions := patchNewRegionsFrom(t, releaseFeeNotesPatchFile)
+
+	// The draft rules the README cell out by name: the gate pins it to the
+	// exact flipped string, so fee text belongs in LIVE_NODES §3.
+	if _, ok := regions["README.md"]; ok {
+		t.Errorf("the fee-notes patch edits README.md, whose EVM cell the receipt gate pins to the flipped string — the draft keeps fee text in LIVE_NODES §3")
+	}
+
+	gated := map[string]bool{}
+	for rel := range deploymentDayDocClaims {
+		gated[rel] = true
+	}
+	for _, d := range releasePrepDrain {
+		gated[d.rel] = true
+	}
+	for _, want := range []string{"docs/LIVE_NODES.md", "docs/CARRIER_MATRIX.md", "docs/ONBOARDING.md", "ROADMAP.md"} {
+		if _, ok := regions[want]; !ok {
+			t.Errorf("the fee-notes patch does not touch %s, which the draft's patch list names", want)
+		}
+	}
+	for rel := range regions {
+		if !gated[rel] {
+			t.Errorf("%s :: the fee-notes patch edits a file no gate in this package covers", rel)
+		}
+	}
+
+	// A forbidden token in the added text is a claim the flip just removed
+	// coming back in the release-prep pass; no fee edit legitimately needs one.
+	for _, d := range releasePrepDrain {
+		region, ok := regions[d.rel]
+		if !ok {
+			continue
+		}
+		lower := strings.ToLower(region)
+		for _, tok := range d.forbidden {
+			if strings.Contains(region, tok) {
+				t.Errorf("%s :: the fee-notes patch reintroduces the stale claim %q, which the flip removed", d.rel, tok)
+			}
+		}
+		for _, tok := range d.forbiddenLower {
+			if strings.Contains(lower, tok) {
+				t.Errorf("%s :: the fee-notes patch reintroduces the stale claim %q (case-insensitive)", d.rel, tok)
+			}
+		}
+	}
 }
 
 // TestReleaseDesignsExecutablePatchDeliversGateClaims is the drift guard on the

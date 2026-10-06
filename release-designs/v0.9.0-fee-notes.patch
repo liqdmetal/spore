@@ -1,0 +1,143 @@
+Executor form of v0.9.0-fee-notes.md — the release-prep pass, apply-ready.
+
+Base: the tree AFTER release-designs/v0.9.0-doc-flips.patch is applied. The
+fee block cites the §3 receipt address, so it cannot land before the flip.
+Apply with:   git apply release-designs/v0.9.0-fee-notes.patch
+Rehearse with: bash scripts/release-day-rehearsal.sh
+Carries Patches 1a, 1b, 2, 3, 4a, and 4b of the draft, in that file's wording.
+
+Four things the executable form had to resolve, because the draft is prose:
+
+1. Patch 1c (the stub-chain footnote) is NOT carried. It is conditional on the
+   Sepolia rehearsal not having run — a claim about the world that no artifact
+   in this repository can verify, and one the runbook keeps or deletes by hand.
+
+2. Patches 1a and 1b target the SAME §3 bullet: 1b rewrites it, while 1a's
+   instruction ("insert after ... or use the direct calldata path.") quotes the
+   pre-1b text. They compose as 1b's rewrite followed by 1a's two new bullets —
+   the only reading under which both instructions hold.
+
+3. Patch 4b quotes "…rather than silently underpaying." That phrase lived in
+   the pre-flip "v0.9.0 must do" item 4, which doc-flips Patch 6h.7 replaced, so
+   the sentence lands at the end of the post-flip item 4. The residual tense
+   mismatch ("a separate release-prep deliverable" immediately followed by
+   "Landed in v0.9.0") is left VISIBLE for the human: item 4 is not a
+   gate-checked line, and inventing replacement prose is not this file's job.
+
+4. Patch 4a replaces doc-flips 6h.7's unchecked fee box verbatim; the checked
+   block is the draft's, unchanged.
+
+Placeholders remain by design: <<EST-*>> (measured numbers, from the
+deployment-day `spore contract estimate` output) plus <<ADDR>> and <<DEPLOYER>>
+(the flip's receipt values). Fill them from the receipt and the saved estimator
+output BEFORE applying; this file is the shape, not the measurement.
+
+The drafts' own completion criterion (`grep -n 'FILL' docs/LIVE_NODES.md ...`
+returns no hits) is already non-zero on the pre-flip tree — LIVE_NODES §3's tag
+instructions read "search for the FILL markers" — so key on the placeholder
+SHAPE (`<<EST-`, `<<ADDR>>`, `<<DEPLOYER>>`, `<release>`) instead. The
+rehearsal reports the outstanding ones.
+diff --git a/ROADMAP.md b/ROADMAP.md
+index f8a39f3..d662b62 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -229,7 +229,10 @@ Fee and limit notes are documented separately in
+    the receipt-backed Base default; the explicit opt-out remains available.
+ 4. **Honest fee + limit notes:** a separate release-prep deliverable;
+    publish only after measurement with `spore contract estimate` and
+-   record the results in LIVE_NODES §3.
++   record the results in LIVE_NODES §3. Landed in v0.9.0: the refusal is
++   enforced in `msg send-e2`/`msg pay` (a7da3e0), the per-chain fee reality
++   is measured in LIVE_NODES §3, and the CARRIER_MATRIX value-carriage row
++   cites it.
+ 5. **(Stretch, not shipped)** pay-with-message through the contract path;
+    this remains outside the deployment done-bar.
+ 
+@@ -242,8 +245,11 @@ Fee and limit notes are documented separately in
+ - [x] Default `-mailbox` address wired into per-chain config defaults.
+ - [x] CARRIER_MATRIX + README EVM rows updated to "live" with the same
+       honesty standard as the DERO/Solana rows.
+-- [ ] Honest fee + limit notes measured and published from the deployment-day
+-      estimator output; check only after the fee-notes patch lands.
++- [x] Honest fee + limit notes: per-chain gas reality for deliver/burn in
++      LIVE_NODES §3 ("Fee and limit reality"), the measure-don't-assume rule
++      as a shipped command (`spore contract estimate`), and the
++      value-carriage rule as-is — calldata payable, contract path refuses
++      `-amount` rather than silently underpaying (a7da3e0).
+ 
+ Deliberately **not** in v0.9.0: cross-chain identity proof (item #10 below).
+ EVM delivery here is DERO-independent — the recipient is an EVM address and
+diff --git a/docs/CARRIER_MATRIX.md b/docs/CARRIER_MATRIX.md
+index c079558..e2d0f0a 100644
+--- a/docs/CARRIER_MATRIX.md
++++ b/docs/CARRIER_MATRIX.md
+@@ -84,7 +84,7 @@ Hostile-relay defenses, all tested: served bytes must hash to the requested CID
+ | Carrier | `-amount` | Mechanism |
+ |---|---|---|
+ | DERO | ✅ supported | `PostPayloadAmount` (atomic units; 1 DERO = 100000). Wire-tested. |
+-| EVM | ✅ supported (calldata path) | tx `value` in wei. The mailbox-contract path is NOT payable: `(msg send-e2|msg pay) -amount` is refused there rather than silently dropping the value; the E2 carrier uses the calldata path. |
++| EVM | ✅ supported (calldata path) | tx `value` in wei, atomic with the pointer. `(msg send-e2|msg pay) -amount` is REFUSED on the mailbox-contract path (deliver() is not payable — refusal beats silent underpayment); measured fee reality: LIVE_NODES §3 "Fee and limit reality". |
+ | Bitcoin | ❌ refused | backend discards the hint (dust-output value wiring not done) — the CLI refuses `-amount` rather than silently underpaying |
+ | TON | ❌ refused | backend discards the hint (value-bearing message not wired) |
+ | Nostr / Cosmos / Solana / XMR | ❌ refused | relays hold no value / memo seam / program mailbox / no E2 |
+diff --git a/docs/LIVE_NODES.md b/docs/LIVE_NODES.md
+index 0131618..19d40ab 100644
+--- a/docs/LIVE_NODES.md
++++ b/docs/LIVE_NODES.md
+@@ -599,12 +599,37 @@ exits. That is the same polarity the local proof asserts.
+   the local Anvil proof above asserts the erased slot, which is how the gap
+   was found.
+ - Value carriage on EVM: the calldata path (no mailbox configured) is
+-  payable — `-amount` rides the same tx as the pointer. The mailbox-contract
+-  path is NOT payable: `deliver()` is not a payable function, so `msg
+-  send-e2` and `msg pay` REFUSE `-amount` when a mailbox is set (explicit
+-  `-mailbox` or the config `evm_mailbox` default) instead of silently
+-  dropping the money. Settle separately with `msg pay` against a
+-  calldata-path config, or use the direct calldata path.
++  payable — `-amount` rides the same tx as the pointer, atomic with it
++  (money and message land or neither does). The mailbox-contract path is
++  NOT payable: `deliver()` is not a payable function, so `msg send-e2` and
++  `msg pay` REFUSE `-amount` when a mailbox is set (explicit `-mailbox` or
++  the config `evm_mailbox` default) instead of silently dropping the
++  money — refusal beats an underpaid payment. DERO carries value natively
++  on every E2 pointer; on EVM, pay-with-message is calldata-path only
++  (stretch goal for the contract path: a payable deliver variant).
++- **Fee and limit reality (Base, measured <<EST-DATE>>):** one command
++  measures it — `spore contract estimate -rpc https://mainnet.base.org
++  -mailbox <<ADDR>> -from <<DEPLOYER>>` (run before deploying with just
++  `-from` for the deploy row). At the then-live gas price of
++  <<EST-GAS-PRICE>> wei: deploy ≈ <<EST-DEPLOY-GAS>> gas
++  (<<EST-DEPLOY-ETH>>); deliver (116-byte E2 pointer) ≈ <<EST-DELIVER-GAS>>
++  gas (<<EST-DELIVER-ETH>>); burn ≈ <<EST-BURN-GAS>> gas
++  (<<EST-BURN-ETH>> — the labeled conservative fallback when the node
++  refuses an empty-slot estimate; real burns are typically cheaper as
++  clearing a slot refunds). One message round (deliver + recipient burn) ≈
++  <<EST-ROUND-ETH>>. Funding total for deploy + <<EST-N-ROUNDS>> rounds ≈
++  <<EST-FUNDING-TOTAL>>. Cents per message at 2026 fee levels — but these
++  are a snapshot: L2 gas prices move, so **re-run the estimate at deploy
++  time; never fund from a stale number, including this one.**
++- **Honest limits of the Base deployment:** the receiver pays the burn —
++  compost is the recipient's gas per message, unlike DERO's native expiry.
++  Public-RPC `eth_getLogs` range/rate limits may apply on mainnet.base.org;
++  the backend's Inbox query is `fromBlock`-bounded, and a paid endpoint or
++  your own node removes the ceiling. EVM here means EVM-equivalent chains:
++  the pinned solc bytecode is why zk rollups are ruled out (not full-EVM),
++  and Polygon PoS / Ethereum L1 were ruled out on security-story and
++  dollars-per-message grounds respectively — the runbook rule is measure
++  with the estimate command at run time on whatever chain you pick.
+ - Default `-mailbox` shipped as the config `evm_mailbox` seam (init
+   `-mailbox-contract` writes it; explicit flags always win; it never leaks
+   into the URL-flavored `-mailbox` of prekeybatch/invite — applied only in
+diff --git a/docs/ONBOARDING.md b/docs/ONBOARDING.md
+index b9d59f5..1bee95e 100644
+--- a/docs/ONBOARDING.md
++++ b/docs/ONBOARDING.md
+@@ -343,7 +343,7 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
+ |---|---|---|
+ | DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
+ | Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
+-| EVM | ✅ live on Base (deployment receipt: LIVE_NODES.md §3) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); `spore init -chain evm` now writes the shipped default contract address (opt out with `-mailbox-contract=`); pay-with-message on calldata path |
++| EVM | ✅ live on Base (deployment receipt: LIVE_NODES.md §3) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); `spore init -chain evm` writes the shipped default contract address (opt out with `-mailbox-contract=`); pay-with-message on calldata path only (refused on the contract path); fees ≈ cents per message — measure with `spore contract estimate`, never a doc number (LIVE_NODES §3) |
+ | Nostr | 🧪 carrier impl | relay URLs + a Nostr key |
+ | Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
+ | Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
