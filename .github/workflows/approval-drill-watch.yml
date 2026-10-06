@@ -176,7 +176,9 @@ jobs:
       # CI, no tags fire from it). Anyone can tail the history with
       #   curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/metrics/drill.jsonl
       # and grep for the last verdict. Red runs append too — history should
-      # show them. The step is continue-on-error so a history failure never
+      # show them. Retention: every run truncates the file to its LAST 1000
+      # lines (append-then-tail), so the JSONL never grows unbounded and an
+      # oversized file self-heals on the next run. The step is continue-on-error so a history failure never
       # flips the drill's verdict (the issue above is the flag), but the
       # failure is announced with a ::error:: annotation — the first version
       # of this step failed silently that way (init path had no origin
@@ -208,6 +210,12 @@ jobs:
             "$at" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SHA" \
             "${DRILL:-skipped}" "${SMOKE:-skipped}" "${GATE:-skipped}" "${VERDICT}")
           printf '%s\n' "$line" >> "$repo_dir/drill.jsonl"
+          # Retention cap: keep only the last 1000 heartbeats. Through a
+          # temp file — `tail file > file` in place would truncate it to
+          # nothing. Runs after the cap keep the file at exactly 1000; a
+          # larger file (from before the cap) shrinks here too.
+          tail -n 1000 "$repo_dir/drill.jsonl" > "$repo_dir/drill.jsonl.tmp"
+          mv "$repo_dir/drill.jsonl.tmp" "$repo_dir/drill.jsonl"
           git -C "$repo_dir" add drill.jsonl
           git -C "$repo_dir" -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \

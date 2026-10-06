@@ -436,7 +436,8 @@ What each piece buys you:
 - **The drill history is public and scrapeable**: spore's own scheduled
   sentinel (`.github/workflows/approval-drill-watch.yml`) runs the
   double-sign drill, the live smoke, and the gate every day and appends its
-  verdict as one JSON line to `drill.jsonl` on the repo's `metrics` branch:
+  verdict as one JSON line to `drill.jsonl` on the repo's `metrics` branch
+  (the last 1000 heartbeats are kept; older ones roll off):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl | tail -1
