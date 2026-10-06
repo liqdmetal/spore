@@ -123,8 +123,9 @@ func msgApprovalMetrics(args []string) {
 		return
 	}
 	queueDir := ""
+	promLabel := ""
 	if len(dirs) == 1 {
-		queueDir = dirs[0]
+		queueDir, promLabel = splitQueueDir(dirs[0])
 	}
 	if *stateDir == "" {
 		_ = loadConfigForFlags(fs)
@@ -150,6 +151,11 @@ func msgApprovalMetrics(args []string) {
 		return
 	}
 	if *prom {
+		if promLabel != "" {
+			// Friendly -dir path=name label: one queue, named series.
+			renderPrometheusMetricsLabeled(m, `queue="`+promEscapeLabel(promLabel)+`"`)
+			return
+		}
 		renderPrometheusMetrics(m)
 		return
 	}
@@ -192,11 +198,34 @@ func (d *approvalDirList) Set(v string) error {
 	return nil
 }
 
+// splitQueueDir splits a -dir value into its path and optional friendly
+// queue label: "path" -> (path, ""), "path=name" -> (path, name). The FIRST
+// '=' separates, so a path that contains '=' must carry a label. An empty
+// label ("path=") is refused by validateApprovalMetricsDirs.
+func splitQueueDir(v string) (dir, label string) {
+	if i := strings.Index(v, "="); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
+}
+
 // validateApprovalMetricsDirs pins the multi-queue rules: repeating -dir is
 // a -prometheus scraping feature; the other renderings stay single-queue,
 // and so do the outbox and ledger sections — their latencies belong to one
-// pipeline and would be misattributed across queues.
+// pipeline and would be misattributed across queues. Friendly queue labels
+// (-dir path=name) are likewise a -prometheus feature and must be non-empty.
 func validateApprovalMetricsDirs(dirs []string, outDir, stateDir string, prometheus bool) error {
+	for _, v := range dirs {
+		if !strings.Contains(v, "=") {
+			continue
+		}
+		if !prometheus {
+			return errors.New("approval-metrics: friendly queue labels (-dir path=name) are only supported with -prometheus")
+		}
+		if dir, label := splitQueueDir(v); label == "" {
+			return fmt.Errorf("approval-metrics: empty queue label in -dir %q (use -dir path=name)", dir)
+		}
+	}
 	if len(dirs) <= 1 {
 		return nil
 	}
@@ -619,13 +648,22 @@ func renderPrometheusMetrics(m *approvalMetrics) {
 	p.printTo(os.Stdout)
 }
 
+// renderPrometheusMetricsLabeled renders one pipeline under an explicit
+// queue label — the friendly -dir path=name form.
+func renderPrometheusMetricsLabeled(m *approvalMetrics, queueLabel string) {
+	var p promFamilySet
+	emitPrometheusQueue(&p, m, queueLabel)
+	p.printTo(os.Stdout)
+}
+
 // renderPrometheusMetricsMulti renders several queues into one exposition,
 // every series labeled queue="<dir>" so several stations can share one
 // textfile while staying attributable. -out-dir and -state-dir are refused
 // in this mode: outbox and ledger latencies belong to one pipeline.
 func renderPrometheusMetricsMulti(dirs []string) error {
 	var p promFamilySet
-	for _, dir := range dirs {
+	for _, v := range dirs {
+		dir, label := splitQueueDir(v)
 		if dir == "" {
 			dir = "."
 		}
@@ -633,7 +671,10 @@ func renderPrometheusMetricsMulti(dirs []string) error {
 		if err != nil {
 			return err
 		}
-		emitPrometheusQueue(&p, m, `queue="`+promEscapeLabel(dir)+`"`)
+		if label == "" {
+			label = dir
+		}
+		emitPrometheusQueue(&p, m, `queue="`+promEscapeLabel(label)+`"`)
 	}
 	p.printTo(os.Stdout)
 	return nil

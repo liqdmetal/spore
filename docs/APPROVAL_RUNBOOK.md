@@ -344,8 +344,10 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
   scrapes.
 - Several queues on one host can share one textfile: repeat `-dir` (with
   `-prometheus` only) and every series is labeled with its queue, so
-  dashboards stay attributable per station. Write to a temp file and rename
-  so the scraper never reads a half-written textfile:
+  dashboards stay attributable per station. Give a station a friendly name
+  with `-dir ~/station-a-queue=station-a` — the name replaces the raw path
+  in every series (friendly labels require `-prometheus`). Write to a temp
+  file and rename so the scraper never reads a half-written textfile:
 
 ```bash
 spore msg approval-metrics -dir ~/station-a-queue -dir ~/station-b-queue \

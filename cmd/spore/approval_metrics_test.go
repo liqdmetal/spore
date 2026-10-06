@@ -373,6 +373,17 @@ func TestApprovalMetricsMultiDirRules(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "-state-dir") {
 		t.Errorf("multi-queue with -state-dir must be refused, got: %v", err)
 	}
+	err = validateApprovalMetricsDirs([]string{"q1=station-a"}, "", "", false)
+	if err == nil || !strings.Contains(err.Error(), "-prometheus") {
+		t.Errorf("friendly label without -prometheus must be refused, got: %v", err)
+	}
+	err = validateApprovalMetricsDirs([]string{"q="}, "", "", true)
+	if err == nil || !strings.Contains(err.Error(), "empty queue label") {
+		t.Errorf("empty queue label must be refused, got: %v", err)
+	}
+	if err := validateApprovalMetricsDirs([]string{"q1=station-a", "q2"}, "", "", true); err != nil {
+		t.Errorf("friendly labels with -prometheus must be valid: %v", err)
+	}
 }
 
 // TestPromFamilySetLatencyFamily pins the latency family rendering (the
@@ -406,6 +417,61 @@ func TestPromFamilySetLatencyFamily(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), `spore_approval_post_latency_seconds{stat="p50"} 1`) {
 		t.Fatalf("single-queue latency series missing:\n%s", b.String())
+	}
+}
+
+// TestSplitQueueDir pins the -dir value syntax: the first '=' separates
+// path from optional friendly label.
+func TestSplitQueueDir(t *testing.T) {
+	for _, tc := range []struct{ in, dir, label string }{
+		{"path", "path", ""},
+		{"path=station-a", "path", "station-a"},
+		{"a=b=c", "a", "b=c"}, // first '=' separates
+		{"=station-a", "", "station-a"},
+		{"q=", "q", ""}, // empty label: refused by the validator
+	} {
+		dir, label := splitQueueDir(tc.in)
+		if dir != tc.dir || label != tc.label {
+			t.Errorf("splitQueueDir(%q) = (%q, %q), want (%q, %q)", tc.in, dir, label, tc.dir, tc.label)
+		}
+	}
+}
+
+// TestApprovalMetricsPrometheusFriendlyLabels pins -dir path=name: the
+// friendly name replaces the raw path in every series, in multi-queue mode
+// and for a single named queue.
+func TestApprovalMetricsPrometheusFriendlyLabels(t *testing.T) {
+	q1, _ := lockTestRequest(t, t.TempDir(), "promfn1", time.Now())
+	q1 = filepath.Dir(q1)
+	q2, _ := lockTestRequest(t, t.TempDir(), "promfn2", time.Now())
+	q2 = filepath.Dir(q2)
+	out := captureApprovalTestOutput(t, func() {
+		msgApprovalMetrics([]string{"-dir", q1 + "=station-a", "-dir", q2, "-prometheus"})
+	})
+	for _, want := range []string{
+		`spore_approval_queue_requests{queue="station-a"} 1`,
+		`spore_approval_requests_by_status{queue="station-a",status="PENDING"} 1`,
+		`spore_approval_queue_requests{queue="` + promEscapeLabel(q2) + `"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("friendly-label exposition missing %q, got:\n%s", want, out)
+		}
+	}
+	// The queue label must be the friendly name everywhere. (File paths
+	// inside families — oldest_pending.path — legitimately remain real
+	// filesystem paths: they point at files inside the queue.)
+	if strings.Contains(out, `{queue="`+promEscapeLabel(q1)+`"`) {
+		t.Errorf("friendly label must replace the raw path in queue labels:\n%s", out)
+	}
+	// Single named queue: labeled output through the same flag form.
+	single := captureApprovalTestOutput(t, func() {
+		msgApprovalMetrics([]string{"-dir", q1 + "=solo", "-prometheus"})
+	})
+	if !strings.Contains(single, `spore_approval_queue_requests{queue="solo"} 1`) {
+		t.Errorf("single friendly-labeled exposition missing series, got:\n%s", single)
+	}
+	if strings.Contains(single, `{queue="`+promEscapeLabel(q1)+`"`) {
+		t.Errorf("single friendly label must replace the raw path in queue labels:\n%s", single)
 	}
 }
 
