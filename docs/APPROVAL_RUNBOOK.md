@@ -233,7 +233,39 @@ while bash scripts/station-health.sh -w -f station.jsonl; do sleep 2; done
 ```
 
 Batch mode stays the historical gate (every violation, exit codes 0/1/2/3);
-watch mode follows only new heartbeats.
+watch mode follows only new heartbeats. A tail failure in watch mode (file
+vanished, permissions) also exits `2` — never a silent pass.
+
+### 3.3 Alerting on the tripwire
+
+`scripts/station-health-alert.sh` is the ready-made wrapper: it runs the
+gate in `-w` mode and POSTs a JSON notification to a webhook on the first
+violation (or malformed line, or tail failure), then resumes watching after
+a cooldown so a persistent condition pages once per cooldown, not once per
+heartbeat:
+
+```bash
+STATION_HEALTH_WEBHOOK=https://hooks.slack.com/services/... \
+  bash scripts/station-health-alert.sh -f ~/station.jsonl
+```
+
+The payload is one JSON object — `source`, `at` (RFC3339 UTC), `host`,
+`file`, `exit_code`, `text` (a Slack-friendly one-liner carrying the first
+failure), and `detail` (the gate's full output) — so it posts as-is to a
+Slack incoming webhook or any custom receiver:
+
+```json
+{"source":"spore-station-health","at":"2026-10-05T23:59:59Z","host":"station-a","file":"/home/ops/station.jsonl","exit_code":1,"text":"spore station health: /home/ops/station.jsonl tripped (exit 1): station-health: FAIL: 2026-10-05T23:59:00Z: 1 orphaned signing lock(s) ...","detail":"station-health: FAIL: ..."}
+```
+
+- `--dry-run` prints the payload instead of POSTing, so the whole path is
+  testable without a receiver. `--once` alerts and exits with the gate's
+  code (`1` violation, `2` malformed) for cron or systemd supervision, and
+  exits `4` when the alert itself could not be delivered.
+- Take the webhook from `STATION_HEALTH_WEBHOOK` so the secret stays out of
+  argv/`ps` output; the URL is never logged.
+- Gate thresholds pass through: `--max-pending-age`, `--max-lock-age`,
+  `--max-pending`.
 
 ## 4. Requester side: post and verify
 
