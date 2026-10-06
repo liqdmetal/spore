@@ -1,5 +1,0 @@
-# ClusterFuzzLite project metadata
-# (https://google.github.io/clusterfuzzlite/build-integration/#project.yaml).
-# 'go' selects the base-builder-go image so the compile_native_go_fuzzer
-# helpers used by build.sh exist in the toolchain.
-language: go
