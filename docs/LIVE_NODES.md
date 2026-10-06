@@ -484,6 +484,70 @@ status claims to match the published chain status —
 `TestReleasePrepProseDrainedAfterFlip` enforces that drain once the registry
 entry from step 4 exists.
 
+### Post-launch: the compost watchdog (the red signal)
+
+The deployment's headline claim is that a delivered message composts — the
+recipient reads it and the on-chain slot is erased. Chain state, not logs, is
+the only witness that cannot lie about it, so
+`scripts/mailbox-compost-watch.sh` watches exactly that: it reads the
+mailbox's own storage and turns red when slots stop burning.
+
+The bug that motivates it was real and silent. `msg recv-e2` once built its
+watch options without `AutoBurn`, so every delivered pointer sat in the
+mailbox forever while delivery logs looked perfectly healthy (found and fixed
+via `scripts/anvil_e2e.sh`, which now pins the empty-slot read on every run).
+A log-scraping monitor would have reported green the whole time.
+
+How it can see a recipient-only slot: `read(to, seq)` requires
+`msg.sender == to`, but `eth_call` accepts a `from`, so the watchdog simulates
+the read *as the recipient*. The payload is already E2E-encrypted — the
+contract never holds a key — so this leaks nothing, and the watchdog only ever
+inspects the DATA LENGTH, never the bytes.
+
+For each watched recipient it reads `length(to)` and inspects the most recent
+`--depth` sequence numbers. A slot with non-zero data whose delivery block is
+older than `--grace-seconds` was read and never burned: compost is broken for
+that slot.
+
+```bash
+# One-shot health check by hand (no alert; the exit code carries the verdict):
+bash scripts/mailbox-compost-watch.sh --rpc https://mainnet.base.org \
+  --mailbox <addr> --recipient 0xB…
+
+# cron/systemd: page on a stuck slot, at most once every 10 minutes:
+MAILBOX_COMPOST_WEBHOOK=https://hooks.slack.com/services/… \
+  bash scripts/mailbox-compost-watch.sh --rpc "$RPC" --mailbox <addr> \
+    --recipient 0xB… --once --grace-seconds 1800
+
+# Or leave it running and let it re-check every interval:
+bash scripts/mailbox-compost-watch.sh --rpc "$RPC" --mailbox <addr> \
+  --recipient 0xB…
+```
+
+- The webhook URL lives in `$MAILBOX_COMPOST_WEBHOOK`, never in argv, and the
+  URL itself is never put in the payload. The alert JSON carries the mailbox,
+  the stuck count, the oldest age, and a per-recipient
+  `addr:length:unburned` summary.
+- `--grace-seconds` is the honesty knob: a slot younger than the window is
+  just "not read yet", not a missed burn. Set it above how long a legitimate
+  recipient takes to come online — 900s is the default, and 1800s is
+  reasonable for a phone that is often offline.
+- Exit codes: `0` healthy, `1` a stuck slot beyond `--max-unburned` (default
+  0), `2` **cannot check** (RPC unreachable, no contract at `--mailbox`, a
+  malformed read), `3` usage error, `4` alert delivery failed (`--once`).
+  Exit `2` is never a silent pass: a watchdog that cannot see the chain must
+  not report green — wire both `1` and `2` to a page.
+- `--depth` (default 64) bounds the read cost per pass; `--json` prints one
+  machine-readable result object for a dashboard; `--dry-run` prints the alert
+  payload instead of POSTing it.
+- curl + bash only — no jq, no foundry — so the same script runs from a cron
+  box, a container, or your laptop, and it needs no signing key at all.
+
+Exercise it right after gate 5, on the deployed mailbox: with one slot burned
+and a second delivered slot left unburned, the watchdog reads green (`0`)
+while the unburned slot is inside its grace window and turns red (`1`) once it
+exits. That is the same polarity the local proof asserts.
+
 ### STATUS: MyceliumMailbox on Base — PENDING
 
 - Base Sepolia rehearsal: address `0x…`, creation tx `0x…`, date …
