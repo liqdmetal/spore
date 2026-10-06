@@ -10,10 +10,11 @@
 # assumption: a checkout root containing the `spore` repo and — optionally —
 # a `spore-peer` checkout either as a sibling or under `_review_tmp/`.)
 #
-# --quick skips the spore-peer (Rust) gates and the -race + cross-binary
-# interop run for fast inner-loop feedback; everything else (gofmt/
-# goimports, build+vet+test, doc-refs) still runs. It complements the full
-# suite — a push is still gated by the full run, never by --quick.
+# --quick skips the spore-peer (Rust) gates, the -race + cross-binary interop
+# run, and the fuzz-smoke timing itself for fast inner-loop feedback;
+# everything else (gofmt/goimports, build+vet+test, doc-refs, the
+# fuzz-smoke target list) still runs. It complements the full suite — a push
+# is still gated by the full run, never by --quick.
 #
 # Every gate prints its duration when it finishes, and a slowest-first
 # timing table prints before the final banner — slow gates are visible at
@@ -240,6 +241,20 @@ else
   echo
   echo "== go test -race (no spore-peer binary — interop tests will skip) =="
   run_gate '-race' check_race
+fi
+
+echo
+echo "== local fuzz smoke: the wirefuzz + ratchetwire targets, short -fuzztime =="
+# The fuzz targets lost their runner when the workflows (and ClusterFuzzLite)
+# were deleted, so the pre-push gate is the only place they run now. Full mode
+# fuzzes each target for a few seconds; --quick only proves the target list
+# still resolves, keeping the inner loop fast while a renamed target still
+# fails a push. TestFuzzSmokeListsEveryTarget checks the list against the code
+# in `go test ./...`, which both modes run.
+if [ "$QUICK" -eq 1 ]; then
+  run_gate 'fuzz smoke (target list)' bash scripts/fuzz-smoke.sh --check
+else
+  run_gate 'fuzz smoke' bash scripts/fuzz-smoke.sh
 fi
 
 echo

@@ -324,13 +324,11 @@ Every parser this spec defines has a libFuzzer target in
 | `messageunmarshal_fuzzer` | ratchet message envelope + header |
 | `fabricrpc2frame_fuzzer` | §8 rpc2/CBOR fabric verbs (relay-facing) |
 
-**Continuous (ClusterFuzzLite, in-repo):** PRs touching fuzzed code get a
-code-change fuzz; main gets a daily batch on a corpus that compounds
-across runs; nightly prune minimizes it and publishes coverage. The corpus
-lives on the machine-managed **`cfl-corpus` branch** (git history is the
-retention mechanism — nothing expires at 90 days), and the coverage
-dashboard is published from the **`gh-pages` branch** to
-<https://liqdmetal.github.io/spore/coverage/latest/report/index.html>.
+**Continuous (retired):** the ClusterFuzzLite pipelines that ran a
+code-change fuzz on fuzzed-code PRs and a daily batch + prune on main were
+removed together with the repository's GitHub Actions workflows, so the
+`cfl-corpus` and `gh-pages` branches they fed are now static history and no
+coverage dashboard is published.
 
 **Cross-binary:** spore-peer's Rust decoder (`src/p2p.rs`) is the second
 implementation of §5 and is fuzzed the same way on its side — its
@@ -341,10 +339,12 @@ Both decoders are pinned to the shared vectors in `docs/interop-vectors.json`,
 so neither can drift from this spec or from each other. The Rust cargo-fuzz
 target's corpus is seeded from those same vectors.
 
-**Local:** the pre-push gate (`scripts/gates.sh`) runs a short
-fuzz-smoke pass so a regression in any target fails before it can be
-pushed; the OSS-Fuzz-shaped build recipe this whole pipeline descends from
-is preserved in the `projects/spore` integration of the oss-fuzz fork.
+**Local (now the only runner):** the pre-push gate (`scripts/gates.sh`)
+calls `scripts/fuzz-smoke.sh`, which drives every `wirefuzz` and
+`ratchetwire` target for a few seconds each, so a regression in any of them
+fails before it can be pushed. The OSS-Fuzz-shaped build recipe this whole
+pipeline descends from is preserved in the `projects/spore` integration of
+the oss-fuzz fork.
 
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
