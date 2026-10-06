@@ -176,8 +176,11 @@ jobs:
       # CI, no tags fire from it). Anyone can tail the history with
       #   curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/metrics/drill.jsonl
       # and grep for the last verdict. Red runs append too — history should
-      # show them. A failed append warns but does not flip the drill red:
-      # history is a degradation, the issue above is the flag.
+      # show them. The step is continue-on-error so a history failure never
+      # flips the drill's verdict (the issue above is the flag), but the
+      # failure is announced with a ::error:: annotation — the first version
+      # of this step failed silently that way (init path had no origin
+      # remote, so the push died under set -e and the step looked green).
       - name: Append the drill heartbeat to the metrics branch
         if: always()
         continue-on-error: true
@@ -190,11 +193,15 @@ jobs:
         run: |
           set -euo pipefail
           repo_dir="$(mktemp -d)"
-          if git clone -q --depth 1 --branch metrics \
-              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$repo_dir" 2>/dev/null; then
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git clone -q --depth 1 --branch metrics "$url" "$repo_dir" 2>/dev/null; then
             touch "$repo_dir/drill.jsonl" # exists: append
           else
-            git -c init.defaultBranch=metrics init -q "$repo_dir" # first run: create the branch
+            # First run (or branch rotated away): create the data-only
+            # branch. The fresh repo has NO remote — adding it is what the
+            # first version missed, so the push silently died.
+            git -c init.defaultBranch=metrics init -q "$repo_dir"
+            git -C "$repo_dir" remote add origin "$url"
           fi
           at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           line=$(printf '{"at":"%s","source":"spore-approval-drill","run":"%s","url":"https://github.com/%s/actions/runs/%s","commit":"%s","drill":"%s","smoke":"%s","gate":"%s","verdict":"%s"}' \
@@ -205,5 +212,8 @@ jobs:
           git -C "$repo_dir" -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -qm "drill heartbeat ${GITHUB_RUN_ID} (${VERDICT})"
-          git -C "$repo_dir" push -q origin HEAD:metrics
+          if ! git -C "$repo_dir" push -q origin HEAD:metrics; then
+            echo "::error::could not append the drill heartbeat to the metrics branch (drill verdict was ${VERDICT}; the tracking issue above remains the flag for red drills)"
+            exit 1
+          fi
           echo "heartbeat appended: $line"
