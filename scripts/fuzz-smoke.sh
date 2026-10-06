@@ -95,6 +95,15 @@ command -v go >/dev/null 2>&1 || {
   exit 1
 }
 
+# The targets hand f.TempDir() a fresh directory per iteration; when a fuzz
+# worker is killed at fuzztime expiry its cleanup is skipped, so a run leaves
+# dozens of orphaned directories behind (observed: 123 across two runs). Point
+# Go's temp dir at a scratch directory this script removes, so the gate leaves
+# nothing outside the repo or in it.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/spore-fuzz-smoke.XXXXXX")"
+trap 'rm -rf "$SCRATCH"' EXIT
+export TMPDIR="$SCRATCH" TEMP="$SCRATCH" TMP="$SCRATCH"
+
 n=0
 for entry in "${TARGETS[@]}"; do
   pkg="${entry%%:*}"
