@@ -447,4 +447,16 @@ curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl
   Gate the tail the same way: the last line's `verdict` is the drill's most
   recent word. A red day appends too — history shows it, the tracking issue
   pages it.
+- **The history has a consumer**: `scripts/drill-history-gate.sh` fails on
+  a red last verdict (exit 1) or a stale one — no heartbeat for 48h means
+  the sentinel itself is dead, which verdict-gating alone can never see
+  (exit 2) — and opens/updates one `drill-history` tracking issue, closing
+  it on recovery. Spore's own sentinel runs it against this very file
+  daily; cron it against yours with a PAT:
+
+```bash
+GH_TOKEN=ghp_... bash ~/spore/scripts/drill-history-gate.sh
+# or, without API access (cron mail / CI var carries the exit code):
+bash ~/spore/scripts/drill-history-gate.sh --no-issue
+```
 

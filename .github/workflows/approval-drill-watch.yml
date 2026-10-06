@@ -125,6 +125,7 @@ jobs:
             const drill = '${{ steps.drill.outcome }}';
             const smoke = '${{ steps.smoke.outcome }}';
             const gate = '${{ steps.gate.outcome }}';
+            const history = '${{ steps.history.outcome }}';
             const runUrl = 'https://github.com/' + context.repo.owner + '/' + context.repo.repo +
                            '/actions/runs/' + context.runId;
             const row = (name, outcome) => '| ' + name + ' | ' + outcome + ' |';
@@ -136,6 +137,7 @@ jobs:
               row('two-station double-sign drill', drill),
               row('watch self-metrics live smoke', smoke),
               row('station health gate (batch + watch)', gate),
+              row('drill history gate', history),
               '',
               ok
                 ? 'All checks green. (This issue auto-closes.)'
@@ -225,3 +227,16 @@ jobs:
             exit 1
           fi
           echo "heartbeat appended: $line"
+
+      # Consume our own history: the gate that cron operators run against
+      # drill.jsonl runs here too — a red verdict or a stale history (no
+      # heartbeat for 48h) fails the run and opens the drill-history
+      # tracking issue. The raw CDN may serve the second-older heartbeat
+      # right after the push; harmless, a daily heartbeat is far inside the
+      # 48h gate. Runs only when the heartbeat actually landed.
+      - name: Consume the drill history (verdict + freshness gate)
+        id: history
+        if: always() && steps.heartbeat.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/drill-history-gate.sh --repo "$GITHUB_REPOSITORY"
