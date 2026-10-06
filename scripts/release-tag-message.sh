@@ -10,6 +10,8 @@
 # marker can move or vanish, and the filled body is the one release artifact
 # that nothing else reads: a leftover <<FILL: …>> would be signed into an
 # immutable tag, where the receipt gate cannot see it (it only reads the docs).
+# The same holds for a single-angle placeholder — <release>, <address>, <date>
+# are what the runbooks write, and git will happily sign them.
 #
 #   bash scripts/release-tag-message.sh              # structure only; safe on any tree
 #   bash scripts/release-tag-message.sh --print      # the body the tag would carry
@@ -152,6 +154,19 @@ validate_body() {
     grep -nE '<DRYRUN-|0x0{30,}' "$f" | sed 's/^/  /' >&2
     rc=1
   fi
+  # A single-angle-bracket placeholder is as unsignable as a <<FILL: …>> one, and
+  # nothing else in the repo ever reads the tag body: <release>, <address> and
+  # <date> are the exact shapes the runbooks and the frozen patches use, so one
+  # pasted line would be signed into an immutable tag. The class is lowercase
+  # words, which deliberately spares a real mail-style trailer
+  # ("Co-Authored-By: … <noreply@codebuff.com>") — the only angle-bracket token
+  # the draft's own body legitimately carries.
+  if grep -qE '<[a-z][a-z0-9 _-]*>' "$f"; then
+    echo "release-tag-message: the stripped body still carries an unfilled placeholder:" >&2
+    grep -noE '<[a-z][a-z0-9 _-]*>' "$f" | sed 's/^/  /' >&2
+    echo "  fill it from docs/LIVE_NODES.md §3, or delete the line — a tag is immutable" >&2
+    rc=1
+  fi
   # The runbook requires the tag to cite the canonical receipt; a tag that
   # carries numbers without saying where they came from is not discoverable.
   if ! grep -q 'docs/LIVE_NODES.md' "$f"; then
@@ -197,7 +212,34 @@ case "$MODE" in
       echo "RELEASE-TAG SELF-TEST FAILED: a refused draft still produced an output file" >&2
       exit 1
     fi
-    echo "release-tag self-test: ok (a filled draft strips and validates; an unfilled one is refused, and writes nothing)"
+    # 3. A placeholder that is NOT a <<FILL: …>> field must be refused too. The
+    #    runbooks write <release>, <address> and <date>, so one pasted line gets
+    #    into a draft that otherwise looks complete — and the body is the one
+    #    artifact nothing else in this repo reads.
+    placeholder="$tmp/placeholder.txt"
+    awk -v m="$MARKER" '{ print; if (index($0, m)) { print "Shipped in <release>."; print "" } }' \
+      "$tmp/filled.txt" > "$placeholder"
+    if ! grep -q '<release>' "$placeholder"; then
+      echo "RELEASE-TAG SELF-TEST FAILED: could not inject the <release> placeholder" >&2
+      exit 1
+    fi
+    if bash "$SELF" --write --in "$placeholder" --out "$tmp/placeholder-final.txt" >/dev/null 2>&1; then
+      echo "RELEASE-TAG SELF-TEST FAILED: a body carrying <release> was accepted — a placeholder" >&2
+      echo "would be signed into an immutable tag" >&2
+      exit 1
+    fi
+    # The mail-style trailer is not a placeholder: a rule that refused it would
+    # make every real draft unfillable.
+    trailer="$tmp/trailer.txt"
+    awk -v m="$MARKER" '{ print; if (index($0, m)) { print "Co-Authored-By: Codebuff <noreply@codebuff.com>"; print "" } }' \
+      "$tmp/filled.txt" > "$trailer"
+    if ! bash "$SELF" --write --in "$trailer" --out "$tmp/trailer-final.txt" >/dev/null 2>&1; then
+      echo "RELEASE-TAG SELF-TEST FAILED: a mail-style trailer was mistaken for a placeholder" >&2
+      exit 1
+    fi
+    echo "release-tag self-test: ok (a filled draft strips and validates; an unfilled one is"
+    echo "  refused and writes nothing; a <release>/<address>-style placeholder is refused; a"
+    echo "  mail-style <user@host> trailer is not)"
     exit 0
     ;;
   check)
@@ -226,7 +268,7 @@ case "$MODE" in
     fi
     # The runbook tells you to discard the dry run's fake scratch copy. If a
     # -final.txt is sitting there with markers in it, that is exactly that file.
-    if [ -f "$OUT" ] && grep -qE '<<|<DRYRUN-|0x0{30,}' "$OUT"; then
+    if [ -f "$OUT" ] && grep -qE '<<|<DRYRUN-|0x0{30,}|<[a-z][a-z0-9 _-]*>' "$OUT"; then
       echo "release-tag-message: $OUT exists and still carries markers or rehearsal values —" >&2
       echo "it is the dry run's scratch copy, not release material: delete it before tagging" >&2
       rc=1

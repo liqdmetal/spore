@@ -129,6 +129,19 @@ deployment-day commit described in
   and the draft's own title as the first line. `--self-test` proves both
   directions on a synthetically filled copy, because the draft cannot be filled
   and still be a draft. The rehearsal exercises all three directions.
+- **`scripts/release-tag-rehearsal.sh`** rehearses that tag pass end to end,
+  which is the one thing the metacharacter checks above cannot see. It fills all
+  nine `<<FILL: …>>` fields from a values file, cross-checks the six
+  receipt-shaped ones (and the funding total) against the same values file
+  `scripts/release-fill.sh` consumes, strips with the shipped `--write`, requires
+  the body to be marker-free, §3-citing and to actually carry every receipt
+  value, then creates a real signed tag in a throwaway repository and requires
+  `git verify-tag` to accept it. Its teeth are asserted, not assumed: the
+  unfilled draft, a pasted `<release>`/`<address>`, and a body without the §3
+  citation are each refused — while a body still carrying `<<FILL: …>>` signs and
+  *verifies* green, which is the whole reason the validators exist. `--self-check`
+  runs the same pass on a synthetic fixture against the real draft, and that is
+  what `gates.sh` runs on every push (the operator form takes `-in`/`-receipt`).
 - **`scripts/release-readiness.sh`** is what release day reads to answer "am I
   done?". It composes the checks above rather than re-deriving them — set
   integrity, tag-draft structure, tag fields, the marker sweep, the registry's

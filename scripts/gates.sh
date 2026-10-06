@@ -259,6 +259,17 @@ echo "== tag-message draft: strip marker intact, no stale scratch copy =="
 run_gate 'release tag-message check' bash scripts/release-tag-message.sh
 
 echo
+echo "== tag-message rehearsal: fill nine fields from a receipt, strip, sign, verify =="
+# The tag is the one release artifact nothing else reads — the receipt gate reads
+# the docs, the sweep reads the release surfaces, this reads the tag body — and a
+# tag is immutable once pushed. --self-check fills the REAL draft from a
+# deliberately synthetic receipt, strips it with the shipped pass, checks the body
+# independently, signs a throwaway tag, and requires git verify-tag to accept it.
+# No toolchain beyond git+ssh-keygen (~2s), so it runs on every push: a draft edit
+# between now and release day must fail a push, not the only run that matters.
+run_gate 'release tag-message rehearsal' bash scripts/release-tag-rehearsal.sh --self-check -s
+
+echo
 echo "== release-day rehearsal (frozen passes applied to a scratch tree) =="
 # --quick only confirms the patch still applies; the full rehearsal also runs
 # the referee twice (flipped -> green, registry removed -> red), ~1m, which is

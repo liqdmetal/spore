@@ -492,7 +492,11 @@ gone.
    the fill check and the strip in one step and **refuses while any field
    is unfilled**: the tag body is the one artifact the receipt gate never
    reads, and a tag is immutable once pushed, so a placeholder signed
-   into it would be permanent.
+   into it would be permanent. Rehearse the whole pass on a scratch tag
+   first — `scripts/release-tag-rehearsal.sh -in <values> -receipt <fill
+   values>` fills the nine fields, strips, and signs a throwaway tag — and
+   note that `git verify-tag` accepts a body still carrying `<<FILL: …>>`,
+   so the validators, not the signature, are what keep a placeholder out.
 
 Before the signed tag, the release-prep pass finishes the release's honest
 claims: the fee + limit notes are filled from the step-2 estimate outputs,
@@ -538,6 +542,20 @@ with the command that clears it, and prints the checklist steps no machine can
 decide. It is expected to be blocked until release day. It never replaces the
 tag itself: the signed tag is still the last action, and `scripts/release-tag-message.sh --write`
 prepares its message.
+
+The tag pass is rehearsed too, because it is the one artifact nothing else
+reads. `scripts/release-tag-rehearsal.sh` fills all nine fields from a values
+file, cross-checks the receipt-shaped ones against the values file
+`scripts/release-fill.sh` consumes (so the tag body, the §3 row and the
+registry entry cannot disagree), strips with the shipped `--write`, and then
+creates a real signed tag in a throwaway repository and requires
+`git verify-tag` to accept it. It refuses an unfilled draft, a pasted
+`<release>`/`<address>` placeholder, and a body that never cites §3 — and it
+demonstrates that a body still carrying `<<FILL: …>>` signs and *verifies*
+green, which is why the validators, not the signature, are the teeth.
+`--self-check` runs the same pass on a synthetic fixture against the real
+draft, which is what the pre-push gate runs on every push; the operator form
+takes `-in` and, for the one-receipt check, `-receipt`.
 
 ### Post-launch: the compost watchdog (the red signal)
 

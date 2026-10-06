@@ -24,6 +24,11 @@
 # doc edit that moves one out from under it would otherwise leave that marker
 # unreplaced on the one day it has to be replaced.
 #
+# The tag message is the same kind of artifact — a marker file that only becomes
+# content on release day — so the rehearsal runs scripts/release-tag-rehearsal.sh
+# --self-check too: fill all nine fields from a receipt, strip with the shipped
+# pass, and sign a throwaway tag that git verify-tag accepts.
+#
 #   bash scripts/release-day-rehearsal.sh              # full rehearsal
 #   bash scripts/release-day-rehearsal.sh --check      # both passes apply in order, nothing run
 #   bash scripts/release-day-rehearsal.sh --flip-only  # rehearse pass 1 alone
@@ -283,6 +288,32 @@ if ! bash scripts/release-tag-message.sh --self-test >/dev/null; then
   exit 1
 fi
 echo "   structure ok; refuses the unfilled draft; strips and validates a filled one"
+
+# Those three directions are metacharacter checks. The pass as performed is
+# longer than that — fill nine fields from a receipt, strip, and end up with
+# something signable — and a draft that grew a tenth field, or lost a citation,
+# would still pass all three. Rehearse the whole pass here, on the REAL draft,
+# with a synthetic receipt: --self-check cannot be mistaken for real values, and
+# it fails loudly if this tree's draft and this tree's pass disagree.
+if [ ! -f scripts/release-tag-rehearsal.sh ]; then
+  echo "REHEARSAL FAILED: scripts/release-tag-rehearsal.sh is not in the rehearsed tree." >&2
+  echo "Rehearsing release day means the tag pass must be rehearsed too — otherwise the" >&2
+  echo "one artifact nothing else reads is the one step still done by hand." >&2
+  exit 1
+fi
+if ! bash scripts/release-tag-rehearsal.sh --self-check -s >"$tmp/tag-rehearsal.log" 2>&1; then
+  echo "REHEARSAL FAILED: the tag rehearsal is red on this tree — the nine fields did not" >&2
+  echo "fill from a receipt, the strip refused, the body was not gate-clean, or the signed" >&2
+  echo "tag did not verify." >&2
+  grep -E 'FAIL|\./|ok:' "$tmp/tag-rehearsal.log" | sed 's/^/  /' >&2
+  exit 1
+fi
+if ! grep -q 'RELEASE-TAG REHEARSAL GREEN' "$tmp/tag-rehearsal.log"; then
+  echo "REHEARSAL FAILED: the tag rehearsal never reached its green banner." >&2
+  sed 's/^/  /' "$tmp/tag-rehearsal.log" >&2
+  exit 1
+fi
+grep -E 'RELEASE-TAG REHEARSAL GREEN' "$tmp/tag-rehearsal.log" | sed 's/^/   /'
 
 # The readiness aggregator is what release day reads to answer "am I done?".
 # It must be blocked on THIS tree — unfilled fields, an empty registry — or it
