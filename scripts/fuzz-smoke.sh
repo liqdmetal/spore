@@ -24,6 +24,12 @@
 # A crash writes its input to that target's testdata/fuzz/<Target>/ directory,
 # so a red run leaves a committed reproducer behind, not a lost seed.
 #
+# Ctrl-C is the one case that writes into the repo WITHOUT a failure: Go saves
+# the input it was executing when it was interrupted, and that input passes on
+# replay (verified). `git status` is how you tell them apart — commit what a
+# red run leaves, discard what an interrupt leaves. --deep, minutes long, is
+# the run people interrupt.
+#
 # Exit codes: 0 every target ran clean, 1 a target crashed, 2 usage error.
 set -euo pipefail
 
