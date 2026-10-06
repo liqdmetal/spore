@@ -15,7 +15,8 @@ deployment-day commit described in
 | File | What it is | When it is used |
 |---|---|---|
 | [`v0.9.0-pretag-checklist.md`](v0.9.0-pretag-checklist.md) | The release-day orchestrator — the ordered steps (decide → gates → flip → fee notes → version → tag → push → verify). | Read first, top to bottom. |
-| [`v0.9.0-doc-flips.md`](v0.9.0-doc-flips.md) | The receipt-backed flip patches: the registry entry, the four operator-facing rows, and the narrative/status drain across 14 files. | The flip commit. Carries an inline provenance header and the line-wrap invariants the dry-run rehearsal found. |
+| [`v0.9.0-doc-flips.md`](v0.9.0-doc-flips.md) | The receipt-backed flip patches: the registry entry, the four operator-facing rows, and the narrative/status drain across 14 files. | Read it to understand the flip. Carries an inline provenance header and the line-wrap invariants the dry-run rehearsal found. |
+| [`v0.9.0-doc-flips.patch`](v0.9.0-doc-flips.patch) | The same flip in its **executable** form: the byte-exact `git apply` artifact, frozen from the dry-run commit and machine-checked against the gate. | The flip commit — apply it, don't retype it. |
 | [`v0.9.0-fee-notes.md`](v0.9.0-fee-notes.md) | The measured fee + limit notes: per-chain gas reality and the not-payable contract path. | The release-prep pass, **after** the real numbers exist. |
 | [`v0.9.0-tag-message.txt`](v0.9.0-tag-message.txt) | The signed-tag message draft, with `<<FILL:…>>` fields and a strip marker. | Last: fill → strip into `v0.9.0-tag-message-final.txt` → `git tag -s`. |
 | [`v0.9.0-landing-card.md`](v0.9.0-landing-card.md) | The release narrative / landing copy: what landed, the done-bar, the first move. | With the announcement. |
@@ -43,13 +44,30 @@ deployment-day commit described in
   stated in `v0.9.0-doc-flips.md`, and the registry entry it installs must be
   documented. Change the gate's required wording without updating the patch and
   this test fails — instead of release day failing mid-apply.
-- **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
-  when a draft is missing or a tracked file points at a `release-designs/`
-  artifact that does not exist. `--status` prints what is still unfilled:
+- **`TestReleaseDesignsExecutablePatchDeliversGateClaims`** covers the artifact
+  release day actually runs. It reconstructs every hunk's post-apply text from
+  `v0.9.0-doc-flips.patch` and requires each gated claim to appear **raw** in
+  the right file — so a claim the patch wraps across two lines fails here in a
+  second, with `WRAPPED`, instead of failing the gate mid-apply. It also fails
+  if the patch edits a file no gate covers (a silent claim).
+- **`scripts/release-day-rehearsal.sh`** is the end-to-end proof: it extracts
+  HEAD into a scratch tree, applies the frozen patch, runs the referee, and
+  then un-does **only** the registry entry and requires the referee to fail.
 
   ```bash
-  bash scripts/release-designs-check.sh --status
+  bash scripts/release-day-rehearsal.sh            # flip green + negative control red
+  bash scripts/release-day-rehearsal.sh --check    # only: the patch still applies
+  bash scripts/release-designs-check.sh --status   # what is still unfilled
   ```
+
+  It runs on every push (CI job `release-rehearsal`), so doc drift breaks the
+  build weeks before the deployment. Line endings are forced to LF: on a
+  Windows box with `core.autocrlf=true`, git would otherwise rewrite the docs
+  to CRLF and the fee-notes claim — which needs a literal newline plus exactly
+  three spaces — would fail an otherwise perfect flip.
+- **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
+  when a draft is missing or a tracked file points at a `release-designs/`
+  artifact that does not exist.
 
 ## Provenance
 
@@ -57,3 +75,6 @@ Copied byte-for-byte on 2026-10-06 from the release working area one level above
 the repository root (under no version control). The flip patch was rehearsed
 green on branch `dryrun/deploy-day-publish` before vendoring and carries the
 wrap-constraint annotations from that run; the other four are unmodified copies.
+`v0.9.0-doc-flips.patch` is the committed diff of that rehearsal commit, so it
+is the *verified* shape rather than a retyped one — the only thing release day
+changes is the placeholder address and the receipt values it fills in first.

@@ -488,6 +488,14 @@ status claims to match the published chain status —
 `TestReleasePrepProseDrainedAfterFlip` enforces that drain once the registry
 entry from step 4 exists.
 
+The flip is executable, and rehearsed long before release day.
+`release-designs/v0.9.0-doc-flips.patch` is the frozen apply-ready form of the
+patches above, and `scripts/release-day-rehearsal.sh` applies it to a throwaway
+tree and runs the referee there — then removes the registry entry and requires
+the same run to fail, so a gate that accepts every tree cannot pass as a green
+rehearsal. It runs on every push; the deployment-day commit is the only run
+whose address is real.
+
 ### Post-launch: the compost watchdog (the red signal)
 
 The deployment's headline claim is that a delivered message composts — the

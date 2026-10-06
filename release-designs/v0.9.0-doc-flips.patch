@@ -1,0 +1,551 @@
+Executor form of v0.9.0-doc-flips.md — the frozen, gate-verified flip.
+Source: commit 833b51f on the local-only throwaway branch
+dryrun/deploy-day-publish (never merged), whose tree was proven green by
+`go test ./internal/evm ./cmd/spore` and `scripts/gates.sh --quick`.
+Address is the dry-run PLACEHOLDER; replace it (and the receipt lines) with
+the real §3 receipt values before this lands on release day.
+Apply with: git apply release-designs/v0.9.0-doc-flips.patch
+Rehearse with: bash scripts/release-day-rehearsal.sh
+diff --git a/README.md b/README.md
+index 7703ed7..c08a2e2 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ setup. Releases also carry SLSA keyless provenance
+ 
+ | Version | Date | Highlights |
+ |---|---|---|
+-| **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. Pointing the carrier at a real chain moves to v0.9.0. |
++| **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. At v0.8.0 release time, the Base deployment was planned for v0.9.0; the Base EVM deployment later shipped in v0.9.0 (receipt: docs/LIVE_NODES.md §3). |
+ | **[v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0)** | 2026-09-23 | First release shipping the **full stack**: `spore` (Go) for all six targets (linux/macOS/Windows × amd64/arm64) plus the Rust `spore-peer` transport for five of them, per-asset `.sha256` checksums, and SLSA keyless provenance for every binary. Installers verify before they swap anything into place. |
+ 
+ Pin the install with `SPORE_RELEASE=v0.8.0`, and verify a downloaded binary
+@@ -97,7 +97,7 @@ transaction — so Spore never pretends to. What it guarantees:
+ | Carrier | Backend | Pointer transport | Compost | Status |
+ |---|---|---|---|---|
+ | **DERO** | `internal/dero` | native encrypted tx payload carrying opaque E2 pointer | body TTL | **live, mainnet** |
+-| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (local Anvil); deployment pending |
++| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | **live on Base; deployment receipt published** (LIVE_NODES §3) |
+ | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
+ | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
+ | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
+@@ -269,7 +269,7 @@ transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
+ one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, and
+ serverless bodies over `spore-peer` (`sporepeer://` store backend, `spore
+ serve` daemon, cross-binary Go↔Rust interop tests). Next: tokenized search,
+-in-chat settlement (escrow/swap), and real-chain EVM deployment.
++in-chat settlement (escrow/swap), and documentation cleanup following the v0.9.0 Base EVM deployment (receipt: `docs/LIVE_NODES.md` §3).
+ 
+ ## License
+ 
+diff --git a/ROADMAP-PRODUCTION.md b/ROADMAP-PRODUCTION.md
+index 181e628..f256def 100644
+--- a/ROADMAP-PRODUCTION.md
++++ b/ROADMAP-PRODUCTION.md
+@@ -89,7 +89,7 @@ P2 is what lets other people use this without the author in the loop. It is also
+ These are meaningful only if P0–P2 are done. They are not part of the floor.
+ 
+ - **DERO L1 mempool catch (1–2s receive).** Nice-to-have latency improvement. Only pursue once the E2 receive path is correct on every live chain; a fast wrong answer is worse than a slow right one.
+-- **Mailbox deploy + gas-sponsored delivery.** Makes the EVM path cheaper and more usable for non-technical recipients. Dependent on the mailbox actually burning correctly (P0-3) and sender auth landing (P1-1).
++- **Gas-sponsored EVM mailbox delivery.** The Base MyceliumMailbox deployment and recipient-paid burn proof shipped in v0.9.0 (receipt: `docs/LIVE_NODES.md` §3). Sponsorship remains future work: it would make EVM delivery cheaper and more usable for non-technical recipients, and depends on sender authentication landing (P1-1).
+ - **Cross-chain identity proof.** The honest version of this is hard and gated. Do not market "cross-chain messenger" until there is a real identity proof; the current honest story is "same-chain delivery, cross-chain is future work."
+ 
+ ## 8. The gating item for sender authentication (T1)
+diff --git a/ROADMAP.md b/ROADMAP.md
+index 9c2daf2..f8a39f3 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -13,8 +13,8 @@ remaining; it does not re-state live status.*
+ - **DERO** — whisper (no-relay unicast), long bodies, rooms, browser UI.
+   Live, mainnet-verified.
+ - **EVM / Solana** — mailbox delivery + auto-burn after receipt. Solana program
+-  v3 live on mainnet; EVM verified on anvil with the in-repo deploy path ready
+-  (`spore contract deploy-mycelium`; needs a funded account + solc).
++  v3 live on mainnet; EVM live on Base with the deployment receipt published
++  (`docs/LIVE_NODES.md` §3; `spore init -chain evm` writes the shipped default).
+ - **E2 secure layer** (`internal/secure`, `0xE0` envelope) for public chains.
+ - **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`, `0xE2`):
+   forward-private, post-compromise healing, AAD-bound to the session, ratchet
+@@ -149,15 +149,15 @@ upstream gate.
+ 
+ #### v0.8.0 — shipped: the EVM carrier readied for the wire
+ 
+-The real-chain deployment below slipped to v0.9.0; v0.8.0 ships everything
+-that turns the deployment into a funded-key exercise instead of an
+-engineering project, plus the settlement and relay hardening that landed
+-alongside it:
++At v0.8.0 release time, the real-chain deployment was still planned for
++v0.9.0; the Base deployment later shipped in v0.9.0 (receipt:
++`docs/LIVE_NODES.md` §3). v0.8.0 shipped the EVM signing/config groundwork
++plus the settlement and relay hardening that landed alongside it:
+ 
+ - **EVM:** local EIP-155 tx signing, the `spore evm-proxy` loopback signing
+   proxy in front of read-only public RPCs, and the per-chain default
+-  MyceliumMailbox config seam (`evm_mailbox`) — addresses to fill in at
+-  v0.9.0 deployment time.
++  MyceliumMailbox config seam (`evm_mailbox`) —
++  the Base address later shipped in v0.9.0 (receipt in docs/LIVE_NODES.md §3).
+ - **Settlement:** the durable notice outbox — money-first settlement
+   commands queue failed counterparty notices and re-announce them, pinned
+   by kill -9 crash windows and nine derosim E2E tests.
+@@ -169,13 +169,15 @@ alongside it:
+ 
+ #### v0.9.0 — E2 pointer deployment on the EVM mailbox contract
+ 
+-**Goal:** `spore msg send-e2 -to 0x…` works end-to-end on a real EVM chain
+-through a deployed `MyceliumMailbox`, with compost-on-delivery proven on that
+-chain — turning the EVM row in the carrier matrix from "live-verified (local
+-Anvil); deployment pending" into "live, deployment receipt published".
++**Shipped on Base (chain 8453):** `spore msg send-e2 -to 0x…` works
++end-to-end through the deployed `MyceliumMailbox`, with compost-on-delivery
++proven on chain; the receipt and two-party proof are in `docs/LIVE_NODES.md`
++§3. The carrier-matrix EVM row now reads "live; Base deployment receipt
++published".
+ 
+-Everything hard about this is already built and pinned; what remains is
+-pointing it at a funded account on a real chain and publishing the evidence.
++The Base deployment, two-party proof, and receipt-backed default shipped in v0.9.0; their canonical evidence is in docs/LIVE_NODES.md §3.
++Fee and limit notes are documented separately in
++   the v0.9.0 fee-notes patch using deployment-day estimator output.
+ 
+ **Already in-repo (built, tested, pinned):**
+ 
+@@ -187,13 +189,15 @@ pointing it at a funded account on a real chain and publishing the evidence.
+   encoding, log decode, `read(to,seq)`, and `burn(to,seq)` wired through
+   `chain.Watch`'s auto-burn (burn failure never fails a delivery). Verified
+   on Anvil end-to-end, including the post-burn empty-slot compost proof.
+-  The raw-calldata path stays the default and the payable one; `-mailbox`
+-  selects the contract path.
++  The raw-calldata path remains payable when no mailbox is configured;
++  the shipped Base config default selects the non-payable mailbox-contract
++  path, where the CLI refuses `-amount` rather than underpaying.
+ - **The deploy path:** `spore contract deploy-mycelium` signs and broadcasts
+   the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum
+   dependency; signing + address derivation pinned byte-for-byte against
+   go-ethereum vectors) and verifies code before printing the `-mailbox`
+-  address. Only remaining dependency: a funded EVM account on a real chain.
++  address. Base deployment receipt and address:
++  docs/LIVE_NODES.md §3.
+ - **Pinned creation bytecode:** `tools/mycelium.bin` is real solc v0.8.26
+   output of the documented pipeline, held in place by
+   `TestPinnedMyceliumBytecode`, `TestDeployTxCarriesPinnedMyceliumCode`, and
+@@ -215,36 +219,31 @@ pointing it at a funded account on a real chain and publishing the evidence.
+   delivered pointer in the mailbox slot while the legacy `msg recv` path
+   burned correctly.
+ 
+-**v0.9.0 must do:**
++**v0.9.0 deployment status:**
+ 
+-1. **Deploy for real.** Choose the chain (a cheap L2 is the honest first
+-   target — pointer txs are small and frequent), fund a key, run
+-   `spore contract deploy-mycelium` against its RPC, and record the txid +
+-   contract address in `docs/LIVE_NODES.md` as the deployment receipt.
+-2. **Two-party E2E on the deployed mailbox.** A → B `send-e2` with
+-   `-mailbox <deployed>` and a `-store` of the test's choosing; B receives,
+-   acks, `chain.Watch` burns, and the on-chain slot is verified empty. The
+-   Anvil proof, repeated where it counts.
+-3. **Publish the addresses.** `-mailbox` is a flag today, not a default —
+-   ship default contract addresses per supported chain (config defaults /
+-   `spore init` output) so `send-e2` works without retyping it.
+-4. **Honest fee + limit notes.** Document per-chain gas reality for
+-   deliver/burn, and keep the value-carriage rule as-is: calldata is
+-   payable, the contract path is not — refuse `-amount` there rather than
+-   silently underpaying.
+-5. **(Stretch, not the gate)** pay-with-message through the contract path —
+-   needs a `payable deliver` variant or a value-forwarding pattern. Kept out
+-   of the done-bar on purpose so the core deployment is not hostage to it.
++1. **Deployed on Base (chain 8453).** `MyceliumMailbox` creation receipt
++   is in `docs/LIVE_NODES.md` §3.
++2. **Two-party E2E proven on Base.** A → B `send-e2` → receive →
++   auto-burn → empty-slot proof is recorded in §3.
++3. **Default mailbox address shipped.** `spore init -chain evm` writes
++   the receipt-backed Base default; the explicit opt-out remains available.
++4. **Honest fee + limit notes:** a separate release-prep deliverable;
++   publish only after measurement with `spore contract estimate` and
++   record the results in LIVE_NODES §3.
++5. **(Stretch, not shipped)** pay-with-message through the contract path;
++   this remains outside the deployment done-bar.
+ 
+-**Done when:**
++**Done in v0.9.0:**
+ 
+-- [ ] `MyceliumMailbox` deployed on a real EVM chain; creation txid + address
++- [x] `MyceliumMailbox` deployed on a real EVM chain; creation txid + address
+       published in `docs/LIVE_NODES.md` and reflected in the carrier matrix.
+-- [ ] Two-party `send-e2` → receive → auto-burn proven against that
++- [x] Two-party `send-e2` → receive → auto-burn proven against that
+       deployment, with the burned slot verified empty on-chain.
+-- [ ] Default `-mailbox` address wired into per-chain config defaults.
+-- [ ] CARRIER_MATRIX + README EVM rows updated to "live" with the same
++- [x] Default `-mailbox` address wired into per-chain config defaults.
++- [x] CARRIER_MATRIX + README EVM rows updated to "live" with the same
+       honesty standard as the DERO/Solana rows.
++- [ ] Honest fee + limit notes measured and published from the deployment-day
++      estimator output; check only after the fee-notes patch lands.
+ 
+ Deliberately **not** in v0.9.0: cross-chain identity proof (item #10 below).
+ EVM delivery here is DERO-independent — the recipient is an EVM address and
+@@ -255,7 +254,7 @@ the ratchet is X3DH as today; cross-chain rendezvous is its own later gate.
+ | 1 | **Finish escrow + swap UX in chat** | **HTLC close and dex settlements are both in-thread.** Escrow: `msg escrow claim/refund` (see shipped notes). Swap: `msg dex swap|wrap|unwrap` invoke RelayDEX/RelayWrappedDero and announce via `spore/dex/v1` envelopes; `msg dex fees` publishes the in-contract rake (90/10 LP/treasury, atomic swaps free) per docs/BUSINESS.md. Contract IDs now have a real config seam (`SPORE_SAP_HTLC_SC/DEX_SC/WDERO_SC` env) with local refusals — previously `sap.HTLCContractID` was never seeded, so the HTLC fund path sent an empty SCID. **Two-party soak shipped:** `spore derosim serve` (wallet-RPC simulator with honest RelayHTLC/RelayDEX/RelayWrappedDero semantics — hash-verified claims, expiry refunds, constant-product min-out, 1:1 wrap mint/burn) + `scripts/escrow_dex_soak.sh` drive real CLI processes both sides through bootstrap → fund→claim → fund→refund → swap → wrap/unwrap → receipts-ledger + web-card checks (31 green). The soak forced the swap input leg into existence: `msg dex swap -amount <n><ta-token>` (was a zero-deposit invoke that moved nothing). |
+ | 2 | **Tokenized search execution** — **shipped** | `maildb.Search` now prefilters through the inverted index (`PositionsContaining`: one vocabulary scan unions the positions of tokens containing any query term — a provable superset under substring semantics), the index is rebuilt on `Open` so search survives restart, `Purge` rebuilds it so compaction can never misalign positions, and `mail search` gained `-any`/`-not` OR/NOT flags. Exact `matchesQuery` semantics are unchanged and pinned by equivalence tests. |
+ | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
+-| 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Still gated on: a funded EVM account on a real chain. The solc creation bytecode is now **committed and pinned**: `tools/mycelium.bin` is the real solc v0.8.26 output of the documented pipeline, held in place by `TestPinnedMyceliumBytecode` (sha256 + solc-shape checks: constructor prologue, embedded-runtime size consistency, solc metadata marker), `TestDeployTxCarriesPinnedMyceliumCode` (the signed creation tx the deploy path broadcasts must embed the pinned bytes exactly), and `TestSolcRecompileMatchesPinned` (re-runs the pipeline from the repo root — solc metadata is path-sensitive — and byte-diffs; skips where solc 0.8.26 isn't installed). Regenerating artifact + pins is a deliberate paired act. **v0.9.0 target — detailed plan in the subsection above.** |
++| 4 | **Deploy `MyceliumMailbox.sol`** | The deploy path is now in-repo: `spore contract deploy-mycelium` signs and broadcasts the EIP-155 creation tx itself (hand-rolled over btcec, no go-ethereum dep; signing + address derivation pinned byte-for-byte against go-ethereum vectors, happy path stub-node-tested) and verifies code before printing the `-mailbox` address. Deployed on Base; receipt and two-party proof are in docs/LIVE_NODES.md §3. The solc creation bytecode is now **committed and pinned**: `tools/mycelium.bin` is the real solc v0.8.26 output of the documented pipeline, held in place by `TestPinnedMyceliumBytecode` (sha256 + solc-shape checks: constructor prologue, embedded-runtime size consistency, solc metadata marker), `TestDeployTxCarriesPinnedMyceliumCode` (the signed creation tx the deploy path broadcasts must embed the pinned bytes exactly), and `TestSolcRecompileMatchesPinned` (re-runs the pipeline from the repo root — solc metadata is path-sensitive — and byte-diffs; skips where solc 0.8.26 isn't installed). Regenerating artifact + pins is a deliberate paired act. **Shipped on Base (v0.9.0).** |
+ | 5 | **Solana cross-wallet delivery** | Program requires recipient to sign; client currently self-messages. Both parties must run the backend. |
+ | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
+ | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
+diff --git a/VISION.md b/VISION.md
+index 742c8d3..9106bf2 100644
+--- a/VISION.md
++++ b/VISION.md
+@@ -1,8 +1,9 @@
+ # Spore multi-chain messenger
+ 
+ *Vision / architecture note. This project was built and verified live on DERO, then
+-proven portable across the chain seam — the same core now runs on DERO, EVM and
+-Solana (live-verified), with Monero pending. This doc sketches where the
++proven portable across the chain seam — the same core now runs on DERO and
++Solana (live on mainnet), EVM (live on Base, receipt in docs/LIVE_NODES.md
++§3), with Monero pending. This doc sketches where the
+ expansion goes and what "private" means per chain.*
+ 
+ ---
+@@ -31,7 +32,7 @@ chain means one backend behind that interface — nothing above it changes.
+ | Chain | Encrypted payload | Wallet/signer | Fit |
+ |---|---|---|---|
+ | **DERO** | ✅ native (point-to-point, ring sig) | ✅ `--rpc-server` | **live, mainnet-verified** |
+-| **EVM-compatible** | ⚠️ calldata/events public → secure envelope | wallet/signer | **live-verified** (local anvil); `MyceliumMailbox.sol` for busy chains |
++| **EVM-compatible** | ⚠️ calldata/events public → secure envelope | wallet/signer | **live on Base** (receipt: docs/LIVE_NODES.md §3); `MyceliumMailbox.sol` deployed |
+ | **Solana** | ⚠️ inbox PDA public → secure envelope | signer keypair | **live on mainnet** (BPF program `GbNWrv…BraAs`) |
+ | **Monero** | ⚠️ different model (see §3) | wallet RPC | built, **mock-verified** — pending node sync |
+ | **other privacy chains** | varies | varies | same rule: needs the 2 primitives |
+@@ -113,8 +114,9 @@ addresses" — the same cross-chain-proof problem as §4.
+ 
+ 1. ✅ **The chain seam** — `internal/chain` (Chain + Watch) + `internal/whisper`
+    codec. Core has zero chain-specific dependency.
+-2. ✅ **Second + third chain** — Go `internal/evm` (live-verified on anvil) and
+-   Go `internal/solana` (live on mainnet). Proves the seam is real.
++2. ✅ **Second + third chain** — Go `internal/evm` (live on Base, deployment
++   receipt in docs/LIVE_NODES.md §3) and Go `internal/solana` (live on
++   mainnet). Proves the seam is real.
+ 3. ✅ **E2E secure envelope** — `internal/secure` seals EVM/Solana/XMR content
+    against public chains.
+ 4. ✅ **Donation rail** — per-chain address registry + `spore donate`.
+diff --git a/design.md b/design.md
+index b910133..cfe7573 100644
+--- a/design.md
++++ b/design.md
+@@ -109,9 +109,9 @@ inboxes that store envelopes; the program/contract never holds a key.
+   live, bodies survive restart (DiskStore). Whisper, rendezvous, and longmsg are
+   unit-tested green (incl. wrong-key + tamper rejection). Channel box + web chat
+   build.
+-- **EVM** — `internal/evm` **live-verified** on a local anvil node (round-trip
+-  send/recv; calldata carries the m³ envelope). `MyceliumMailbox.sol` written,
+-  not yet deployed.
++- **EVM** — `internal/evm` **live on Base** (chain 8453): `MyceliumMailbox.sol`
++  deployed and two-party proven; deployment receipt + runbook in
++  `docs/LIVE_NODES.md` §3.
+ - **Solana** — `internal/solana` + BPF mailbox program **deployed and
+   live-verified on mainnet** (program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`,
+   v2). Client self-messages; cross-wallet pending.
+@@ -120,7 +120,8 @@ inboxes that store envelopes; the program/contract never holds a key.
+   syncing (~60%) on the Hetzner node; live-verify needs a real
+   `monero-wallet-rpc`.
+ 
+-See `README.md` (authoritative chain-status table) and `WHISPER.md` (the
++See `README.md` (authoritative chain-status table), `docs/LIVE_NODES.md` §3
++(the EVM deployment receipt + runbook), and `WHISPER.md` (the
+ no-relay unicast architecture) for details.
+ 
+ ## Live carrier evidence and current send policy
+diff --git a/docs/CARRIER_MATRIX.md b/docs/CARRIER_MATRIX.md
+index aba5d5f..c079558 100644
+--- a/docs/CARRIER_MATRIX.md
++++ b/docs/CARRIER_MATRIX.md
+@@ -11,7 +11,7 @@ one-shot message.
+ | Carrier | Pointer transport | Body lifecycle | Delivery discovery | Burn/erase semantics | Status |
+ |---|---|---|---|---|---|
+ | DERO | Typed native payload | Off-chain TTL/reaping | Wallet/chain scan | Native payload is immutable; pointer remains | Live E2 path |
+-| EVM | Mailbox contract payload | Off-chain TTL/reaping | Contract mailbox | `burn(to, seq)` after delivery when enabled | Live E2 path |
++| EVM | Mailbox contract payload | Off-chain TTL/reaping | Contract mailbox | `burn(to, seq)` after delivery when enabled | live; Base deployment receipt published (LIVE_NODES §3) |
+ | Solana | Mailbox-program payload | Off-chain TTL/reaping | Inbox account scan | `burn(idx)` after delivery when enabled | Live E2 path |
+ | Monero | Existing payment-ID seam is too small | Off-chain TTL/reaping | Authenticated rendezvous required | No pointer burn in current seam | Explicitly unsupported for direct E2 pointer |
+ | Nostr | Signed event content containing pointer | Relay retention/deletion is best-effort | Relay pool + recipient tag | NIP-09 deletion request, best-effort | Carrier implementation |
+diff --git a/docs/FULL_PICTURE.md b/docs/FULL_PICTURE.md
+index 6883a6f..95ed9a9 100644
+--- a/docs/FULL_PICTURE.md
++++ b/docs/FULL_PICTURE.md
+@@ -49,10 +49,11 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
+ | **Relay fabric hop** | a community/anon relay | a relay, then to your node | relay sees ciphertext + dest, not you |
+ | **Hosted service (Model B)** | a service | the service's node/mailbox | content E2E; service sees traffic + timing |
+ 
+-## What's real and shipped (v0.3.0)
++## What's real and shipped (initially documented v0.3.0; status updated for v0.9.0)
+ - **Multi-chain** `spore msg send/recv/send-long/keygen -chain dero|evm|xmr|solana`
+-- **DERO** live mainnet · **Solana** live mainnet (v2, self-messaging) · **EVM**
+-  anvil + MyceliumMailbox contract · **XMR** mock-verified only (content off-chain, B1)
++- **DERO** live mainnet · **Solana** live mainnet (v2, self-messaging) ·
++  **EVM MyceliumMailbox is live on Base as of v0.9.0** (chain 8453; receipt in
++  `docs/LIVE_NODES.md` §3) · **XMR** mock-verified only (content off-chain, B1)
+ - **Multi-device sync**: encrypted `e2-device` export/import with a local
+   collision guard; conflicted sessions fail closed until replaced.
+ - **Home/hosted mailbox**: `spore mailbox host` — always-on shared ciphertext
+@@ -63,8 +64,9 @@ KEYPING       phone holds keys, signs/decrypts locally; your node is a blind
+   from the mailbox contract/account (`burn()`) the moment it's delivered —
+   `-auto-burn=false` to keep it instead. DERO's native message field and
+   off-chain long bodies were already ephemeral; this closes the same gap
+-  for EVM/Solana mailbox storage. Live-verified against anvil: deliver →
+-  receive → burn → re-query proves the on-chain slot is empty.
++  for EVM/Solana mailbox storage. The Base EVM delivery → receive → burn →
++  re-query proof confirms the on-chain mailbox slot is empty; two-party
++  evidence and receipt are in `docs/LIVE_NODES.md` §3.
+ - **`spore status`** — connection-health HUD
+ - **Hardened**: E2E envelope random-nonce fix, adversarial tests, 19 pkgs green
+ 
+diff --git a/docs/LIVE_NODES.md b/docs/LIVE_NODES.md
+index 7ec6b23..876224a 100644
+--- a/docs/LIVE_NODES.md
++++ b/docs/LIVE_NODES.md
+@@ -1,12 +1,14 @@
+-# Live-node spec — verify EVM + Solana + XMR for real
++# Live-chain receipt ledger — EVM, Solana, and XMR
+ 
+-m³ EVM and Solana backends are **live-verified**; XMR is still mock-verified.
+-This spec tracks the live nodes that prove each for real, on the Hetzner box
+-(YOUR-NODE-HOST) where the DERO node already lives.
++m³ EVM and Solana backends are **live** (EVM on Base — deployment receipt in
++§3; Solana program live-verified on mainnet); XMR is still mock-verified.
++This file holds the EVM deployment receipt and runbook, plus the local-node
++and Solana/XMR verification notes.
+ 
+ ## Goals / status at a glance
+-1. **EVM** — ✅ **live-verified** on a local anvil node (below); **v0.9.0 target:
+-   `MyceliumMailbox` on Base** (comparison + runbook in §3).
++1. **EVM** — ✅ **live on Base (chain 8453); deployment receipt published**
++   (§3 STATUS below; anvil arc preserved in the §3 runbook as the rehearsal
++   baseline).
+ 2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
+ 3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
+    `spore msg send/recv -chain xmr` can verify end-to-end like DERO did.
+@@ -79,15 +81,18 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
+ 
+ ---
+ 
+-### STATUS: EVM backend LIVE-VERIFIED — 2026-09-05
++### Historical evidence: local EVM backend smoke on Anvil — 2026-09-05
++
++The following raw-calldata round-trip is dated local-node evidence, not the
++MyceliumMailbox deployment proof. The Base contract deployment, two-party
++proof, and receipt are recorded in §3.
+ - anvil 1.8.1 (foundry) running on Hetzner `127.0.0.1:8545` (`/var/log/anvil.log`).
+ - `spore msg send -chain evm` → txid `0x69f8...9fa` mined in anvil block 1,
+   calldata `0x01001068692066726f...` (canonical kind 0x01 text "hi from evm live").
+ - `spore msg recv -chain evm` on recipient account decoded it:
+   `msg 0x69f8048e4b15be…: hi from evm live`.
+-- **internal/evm is now LIVE-VERIFIED** (no longer mock-only). To prove it
+-  against a real chain later, point at a funded account on a real EVM RPC —
+-  backend logic is identical.
++- This confirms the local raw-calldata backend round-trip; mailbox deployment
++  and live Base verification are evidenced only by the §3 receipt + proof.
+ 
+ ## 2. EVM node / RPC target
+ 
+@@ -107,11 +112,14 @@ locally. Options:
+ ### Recommended: anvil (foundry) dev node on Hetzner
+ `anvil` is a 10-second local EVM node that pre-funds test accounts and accepts
+ `eth_sendTransaction` for them — no faucet, no real chain, but it exercises the
+-EXACT same JSON-RPC path the backend uses. This verifies the `internal/evm`
+-backend + seam for real (round-trip send/recv) without needing Sepolia funds.
++EXACT same JSON-RPC path the backend uses. This exercises the `internal/evm`
++backend and seam against a local JSON-RPC node; it is not real-chain or
++mailbox deployment evidence.
+ 
+-Then, to prove it against a **real** EVM chain, swap in a funded account later.
+-The backend logic is identical; only the RPC endpoint + funded key change.
++This is a reproducible local dev smoke test, not a deployment prerequisite
++or mailbox receipt. The Base MyceliumMailbox deployment and two-party proof
++are published in §3. Keep the local instructions above for backend regression
++checks; any additional real-chain deployment needs its own receipt.
+ 
+ ### Steps (anvil path)
+ ```
+@@ -548,12 +556,12 @@ and a second delivered slot left unburned, the watchdog reads green (`0`)
+ while the unburned slot is inside its grace window and turns red (`1`) once it
+ exits. That is the same polarity the local proof asserts.
+ 
+-### STATUS: MyceliumMailbox on Base — PENDING
++### STATUS: MyceliumMailbox on Base — LIVE (receipt below)
+ 
+-- Base Sepolia rehearsal: address `0x…`, creation tx `0x…`, date …
+-- Base mainnet: address `0x…`, creation tx `0x…`, deployer `0x…`, date …
+-- Two-party E2E → receive → auto-burn → empty-slot proof: txids …
+-- Default `-mailbox` (config `evm_mailbox`) shipped in: <release>
++- Base Sepolia rehearsal: address `0x0000000000000000000000000000000000008e2a`, creation tx `0x<DRYRUN-TX>`, date 2026-10-06
++- Base mainnet: address `0x0000000000000000000000000000000000008453`, creation tx `0x<DRYRUN-TX>`, deployer `0x<DRYRUN-DEPLOYER>`, date 2026-10-06
++- Two-party E2E → receive → auto-burn → empty-slot proof: deliver `0x<DRYRUN-DELIVER-TX>`; burn verified by the on-chain empty-slot read (the burn tx is unlogged by design — see `0x0000000000000000000000000000000000008453`'s explorer history for the burn txid)
++- Default `-mailbox` (config `evm_mailbox`) shipped in: v0.9.0 (Base mainnet, chain 8453 — `KnownMailboxDeployments`, gated by TestShippedMailboxDefaultsCarryReceipts)
+ 
+ ### Honest notes (sender-side reality)
+ 
+@@ -612,9 +620,10 @@ exits. That is the same polarity the local proof asserts.
+    (long text needs the rendezvous work)? Or do you want the rendezvous
+    integration speced first?
+ 
+-## Not live-verified: what that means
+-EVM and Solana are live-verified (anvil / mainnet above). **`internal/xmr`
+-remains mock-verified**: correct against the seam and the RPC shape, but not
+-confirmed against a real chain. A pruned `monerod` is syncing (~60%) on the box;
+-the remaining path is a `monero-wallet-rpc` round-trip, exactly like the DERO
++## Remaining unverified backend
++EVM MyceliumMailbox is live on Base (chain 8453; deployment and two-party
++proof in §3); Solana is live-verified on mainnet. **`internal/xmr`** remains
++mock-verified: correct against the seam and RPC shape, but not confirmed
++against a real chain. A pruned `monerod` is syncing (~60%) on the box; the
++remaining path is a `monero-wallet-rpc` round-trip, exactly like the DERO
+ node did.
+diff --git a/docs/ONBOARDING.md b/docs/ONBOARDING.md
+index e1cddc4..b9d59f5 100644
+--- a/docs/ONBOARDING.md
++++ b/docs/ONBOARDING.md
+@@ -25,13 +25,16 @@ The script downloads from the
+ [releases page](https://github.com/liqdmetal/spore/releases/latest), verifies
+ each binary's checksum against the release's `.sha256` files, and only moves
+ binaries into place after verification (a failed download never clobbers an
+-existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
+-`SPORE_RELEASE=v0.8.0`, the current release (2026-09-27), which readies the
+-EVM carrier for the wire: local EIP-155 signing, the loopback `evm-proxy`,
+-and a durable settlement notice outbox. (v0.7.0 remains the first release
++existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — for example,
++`SPORE_RELEASE=v0.8.0` for the v0.8.0 release (2026-09-27), which readied
++the EVM carrier for the wire with local EIP-155 signing, the loopback
++`evm-proxy`, and a durable settlement notice outbox. (v0.7.0 remains the
++first release
+ shipping the full stack: `spore` for all six platforms and the `spore-peer`
+ transport for five of them.)
+ 
++The Base EVM deployment shipped later in v0.9.0 (receipt: `LIVE_NODES.md` §3).
++
+ <details>
+ <summary>Manual download / other platforms</summary>
+ 
+@@ -55,7 +58,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
+   --source-uri github.com/liqdmetal/spore --source-tag vTAG
+ ```
+ 
+-For the current release, `vTAG` is `v0.8.0`.
++For the v0.8.0 example above, `vTAG` is `v0.8.0`; substitute the version you're verifying.
+ 
+ </details>
+ 
+@@ -340,7 +343,7 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
+ |---|---|---|
+ | DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
+ | Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
+-| EVM | 🧪 dev (anvil-verified; mailbox contract deployment pending) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); pay-with-message on calldata path. Contract delivery + per-chain defaults: LIVE_NODES.md §3 |
++| EVM | ✅ live on Base (deployment receipt: LIVE_NODES.md §3) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); `spore init -chain evm` now writes the shipped default contract address (opt out with `-mailbox-contract=`); pay-with-message on calldata path |
+ | Nostr | 🧪 carrier impl | relay URLs + a Nostr key |
+ | Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
+ | Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
+diff --git a/docs/PEER_SETUP.md b/docs/PEER_SETUP.md
+index b854e20..48759dc 100644
+--- a/docs/PEER_SETUP.md
++++ b/docs/PEER_SETUP.md
+@@ -5,9 +5,10 @@ point**: a whisper rides a real DERO transaction, encrypted end-to-end by
+ DERO. There is no server, no box, no operator in the middle — but that means
+ **each person runs their own endpoint**. This guide is the 5-minute friend path.
+ 
+-> Honest scope: **DERO is live and mainnet-verified.** EVM and Solana are
+-> live-verified (see `README.md` chain-status table); **Monero is mock-verified
+-> only** — not yet usable for real messaging (node still syncing).
++> Honest scope: **DERO is live and mainnet-verified.** EVM MyceliumMailbox
++> is live on Base (receipt: `docs/LIVE_NODES.md` §3); Solana remains
++> live-verified on mainnet for self-messaging. **Monero is mock-verified only**
++> — not yet usable for real messaging (node still syncing).
+ 
+ ---
+ 
+@@ -25,8 +26,8 @@ DERO. There is no server, no box, no operator in the middle — but that means
+ > <chain RPC> -listen 127.0.0.1:8555` is a loopback signing proxy in front of
+ > any public RPC — it signs your txs locally and forwards everything else,
+ > so your `spore` commands point at `http://127.0.0.1:8555` instead of the
+-> chain. Contract delivery + per-chain defaults:
+-> [`LIVE_NODES.md` §3](LIVE_NODES.md).
++> chain. Contract delivery + per-chain defaults are documented in LIVE_NODES §3;
++> EVM MyceliumMailbox is live on Base (receipt in §3).
+ 
+ ## Step 1 — wallet setup (once)
+ 
+@@ -106,8 +107,9 @@ but the two of you.
+ 
+ - **Monero** is mock-verified only. Don't point real money or rely on it for
+   messaging yet — it needs live-node verification (a `monero-wallet-rpc`) once
+-  the syncing node catches up. EVM and Solana backends are live-verified; see
+-  `README.md` for their precise status.
++  the syncing node catches up. EVM MyceliumMailbox is live on Base (receipt in
++  `docs/LIVE_NODES.md` §3); Solana remains live-verified on mainnet for
++  self-messaging; see `README.md` for details.
+ - A friend must run their **own** wallet + E2 receiver (`whisper recv` with
+   the E2 kit, or `msg recv-e2`). This is the privacy model: no shared box to
+   subpoena, no operator. Bare `whisper recv` remains only for old native mail.
+diff --git a/docs/RATCHET.md b/docs/RATCHET.md
+index 32ec3b0..bbd0ac8 100644
+--- a/docs/RATCHET.md
++++ b/docs/RATCHET.md
+@@ -200,9 +200,9 @@ becomes genuinely blind, which was always the README's claim.
+    publication and consumption, durable encrypted endpoint state, TTL-bound
+    body storage, chain-agnostic pointer carriers, restart/replay/out-of-order
+    tests, and the `e2-device` encrypted state-sync commands.
+-3. **Still gated:** real-chain coverage remains carrier-specific. DERO is
+-   mainnet-verified; Solana is self-messaging mainnet-verified; EVM is local
+-   Anvil-verified with deployment pending; XMR remains mock-verified and is
++3. **Real-chain status:** DERO is mainnet-verified; Solana is self-messaging
++   mainnet-verified; EVM MyceliumMailbox is live on Base; two-party proof and
++   receipt are in `docs/LIVE_NODES.md` §3. XMR remains mock-verified and is
+    refused for E2 pointers because its native seam is only eight bytes.
+ 4. **Feature boundary:** old 0xE1/native whisper records remain
+    receive-only compatibility data and are not forward-private. The DERO
+diff --git a/docs/SPORE-FLOW.html b/docs/SPORE-FLOW.html
+index b2e6092..452ed4c 100644
+--- a/docs/SPORE-FLOW.html
++++ b/docs/SPORE-FLOW.html
+@@ -69,7 +69,7 @@
+ 
+ <rect x="725" y="272" width="450" height="58" rx="12" fill="#18233D" stroke="#F472B6" stroke-opacity="0.7" stroke-width="1.2"/>
+ <text x="950" y="298" text-anchor="middle" font-size="12" font-weight="700" fill="#F472B6">SOLANA · EVM — public, so the E2E envelope rides them</text>
+-<text x="950" y="318" text-anchor="middle" font-size="10" fill="#8FA3BF">kind-0xE1 signed E2E envelope on calldata / inbox PDA · Solana v3 live mainnet · EVM anvil+contract</text>
++<text x="950" y="318" text-anchor="middle" font-size="10" fill="#8FA3BF">kind-0xE1 signed E2E envelope on calldata / inbox PDA · Solana v3 live mainnet · EVM Base 8453 live · receipt: LIVE_NODES §3</text>
+ 
+ <rect x="725" y="342" width="450" height="58" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.7" stroke-width="1.2"/>
+ <text x="950" y="368" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">MONERO — identity only, off-chain</text>
+diff --git a/docs/SPORE-FLOW.svg b/docs/SPORE-FLOW.svg
+index 65f227f..7b6a896 100644
+--- a/docs/SPORE-FLOW.svg
++++ b/docs/SPORE-FLOW.svg
+@@ -63,7 +63,7 @@
+ 
+ <rect x="725" y="272" width="450" height="58" rx="12" fill="#18233D" stroke="#F472B6" stroke-opacity="0.7" stroke-width="1.2"/>
+ <text x="950" y="298" text-anchor="middle" font-size="12" font-weight="700" fill="#F472B6">SOLANA · EVM — public, so the E2E envelope rides them</text>
+-<text x="950" y="318" text-anchor="middle" font-size="10" fill="#8FA3BF">kind-0xE1 signed E2E envelope on calldata / inbox PDA · Solana v3 live mainnet · EVM anvil+contract</text>
++<text x="950" y="318" text-anchor="middle" font-size="10" fill="#8FA3BF">kind-0xE1 signed E2E envelope on calldata / inbox PDA · Solana v3 live mainnet · EVM Base 8453 live · receipt: LIVE_NODES §3</text>
+ 
+ <rect x="725" y="342" width="450" height="58" rx="12" fill="#18233D" stroke="#FBBF24" stroke-opacity="0.7" stroke-width="1.2"/>
+ <text x="950" y="368" text-anchor="middle" font-size="12" font-weight="700" fill="#FBBF24">MONERO — identity only, off-chain</text>
+diff --git a/internal/evm/mailboxdefaults.go b/internal/evm/mailboxdefaults.go
+index 2797f84..f9a91e1 100644
+--- a/internal/evm/mailboxdefaults.go
++++ b/internal/evm/mailboxdefaults.go
+@@ -48,7 +48,14 @@ type MailboxDeployment struct {
+ //
+ // …after pasting the receipt lines into the STATUS block, then flips
+ // docs/LIVE_NODES.md's "shipped in" line from <release> to the real one.
+-var KnownMailboxDeployments = map[string]MailboxDeployment{}
++var KnownMailboxDeployments = map[string]MailboxDeployment{
++	"8453": {
++		ChainID:    8453,
++		Address:    "0x0000000000000000000000000000000000008453", // dry-run placeholder (lowercase, 0x + 40 hex)
++		Default:    "v0.9.0",
++		ReceiptRef: "docs/LIVE_NODES.md §3 STATUS / Base mainnet",
++	},
++}
+ 
+ // DefaultMailboxContract returns the shipped default MyceliumMailbox address
+ // for an EVM chain id, or "" when none is shipped for that chain (the

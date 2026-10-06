@@ -157,6 +157,26 @@ jobs:
           path: /tmp/smoke/*.log
           retention-days: 7
 
+  # Release day is the one operation that cannot be rehearsed in place: it
+  # applies the frozen flip patch to the real tree and runs the receipt gate.
+  # No other job touches that patch, so the docs could drift under it and the
+  # first symptom would be a failed release-day commit. This job applies it to
+  # a throwaway tree and runs the gate there — then removes ONLY the registry
+  # entry and requires the gate to fail, because a gate that accepts any tree
+  # would make the green run worthless. It is also the drift alarm on the
+  # frozen patch itself: edit a doc it anchors on and this fails within the
+  # push, not on deployment day.
+  release-rehearsal:
+    name: release-day rehearsal (frozen flip patch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Rehearse the release-day flip
+        run: bash scripts/release-day-rehearsal.sh
+
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
     runs-on: ubuntu-latest

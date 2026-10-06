@@ -251,6 +251,17 @@ echo "== release-designs release-prep set (in-tree; every pointer resolves) =="
 run_gate 'release-designs check' bash scripts/release-designs-check.sh
 
 echo
+echo "== release-day rehearsal (frozen flip applied to a scratch tree) =="
+# --quick only confirms the patch still applies; the full rehearsal also runs
+# the referee twice (flipped -> green, registry removed -> red), ~1m, which is
+# exactly the kind of gate --quick exists to keep out of the inner loop.
+if [ "$QUICK" -eq 1 ]; then
+  run_gate 'release-day rehearsal (apply check)' bash scripts/release-day-rehearsal.sh --check
+else
+  run_gate 'release-day rehearsal' bash scripts/release-day-rehearsal.sh
+fi
+
+echo
 echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
 run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s
 
