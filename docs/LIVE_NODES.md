@@ -180,6 +180,162 @@ Why the code fits without changes (checked against `internal/evm`):
   discovery is log-based), but it is why the contract path is the deployment
   goal and not a nicety.
 
+### Go/no-go checklist — the pre-deploy gates, in order
+
+Every gate below names what it proves and the exact evidence that counts as
+GO. Gates 0–3 are free; gate 4 is the only step that spends mainnet ETH. Stop
+at the first NO-GO: nothing before gate 4 is irreversible, and a deployed
+contract with no shipped default (gate 6) is inert.
+
+#### Gate 0 — the proof runs locally, and the shipped bytes are the audited bytes
+
+```bash
+bash scripts/anvil_e2e.sh                 # free, offline, self-skips without foundry
+go test ./internal/evm ./cmd/spore -count=1
+go test ./internal/evm -run 'TestPinnedMyceliumBytecode|TestDeployTxCarriesPinnedMyceliumCode' -count=1 -v
+```
+
+GO when the harness ends `ANVIL E2E GREEN — N checks` with its final
+`ON-CHAIN PROOF: read(to, seq=…) is empty`, both packages print `ok`, and the
+pin tests PASS. NO-GO on any skip of `TestPinnedMyceliumBytecode` — its sha256
+check is what ties `tools/mycelium.bin` to the reviewed source, and a skip
+there means the deployed bytes are unproven.
+
+#### Gate 1 — chain, key, and predicted address (read-only)
+
+```bash
+export RPC=https://mainnet.base.org
+export SPORE_EVM_PRIVATE_KEY=0x…            # deployer + sender; fund it in gate 2
+cast chain-id --rpc-url $RPC                # must print 8453
+cast wallet address --private-key $SPORE_EVM_PRIVATE_KEY
+cast nonce <deployer> --rpc-url $RPC
+cast compute-address <deployer> --nonce <nonce>   # the address gate 4 must print
+sha256sum tools/mycelium.bin
+```
+
+GO when the chain id is exactly `8453`, the derived deployer address is one
+you control and are willing to fund, and you have recorded the nonce, the
+predicted creation address, and the bytecode hash. NO-GO on any other chain
+id — a pointer sent to a contract address on a different chain targets a
+different (or absent) contract — or when the predicted address is not the one
+you intend to publish.
+
+#### Gate 2 — measure the funding number (read-only, live gas)
+
+```bash
+spore contract estimate -rpc $RPC -from <deployer>
+```
+
+GO when a `deploy … gas …` row is printed and `estimates sent from <deployer>`
+matches gate 1. `funding total` is *expected* to read "not computable" here:
+the deliver/burn rows need a mailbox, which does not exist yet. Fund the
+deployer with at least the deploy figure plus headroom; after gate 4, re-run
+with `-mailbox 0x<addr> -rounds N` for the round budget. The command restates
+the rule itself: re-run at deploy time, never fund from a stale number.
+
+#### Gate 3 — rehearse the whole arc on Base Sepolia (free)
+
+```bash
+export SPORE_EVM_PRIVATE_KEY=0x…A     # deployer + sender
+export SPORE_EVM_PRIVATE_KEY_B=0x…B   # recipient; its proxy signs the burn
+scripts/sepolia_rehearsal.sh
+```
+
+GO when the script ends green **and** prints the empty-slot proof
+(`COMPOST VERIFIED`, and with foundry's `cast` the
+`ON-CHAIN COMPOST PROOF: read(to, seq=…) returned EMPTY bytes` line), and its
+`receipt` step emits the paste-ready STATUS lines. NO-GO if the compost
+assertion falls back or the burn is unproven — mainnet is not the place to
+discover a burn that does not land.
+
+#### Gate 4 — deploy on Base mainnet (the one spending step)
+
+```bash
+SPORE_EVM_PRIVATE_KEY=$SPORE_EVM_PRIVATE_KEY \
+  spore contract deploy-mycelium -rpc $RPC -wait 5m -bin tools/mycelium.bin
+```
+
+GO when it prints all three lines — `tx hash: 0x…`, `contract addr: 0x…`, and
+`code verified: yes (eth_getCode non-empty)` — and the printed address equals
+the gate-1 prediction (if it does not, STOP: something else consumed the
+nonce). Confirm independently:
+
+```bash
+cast receipt <creation-tx> --rpc-url $RPC   # status 1
+cast code <addr> --rpc-url $RPC             # non-empty
+spore contract estimate -rpc $RPC -from <deployer> -mailbox <addr> -rounds 12   # full funding total
+```
+
+The last line is the number the honest fee notes are filled from — and the
+funding decision already used.
+
+#### Gate 5 — the two-party proof on the deployed mailbox (tiny real amounts)
+
+Sends sign node-side, so both endpoints run the loopback signing proxy in
+front of the same public RPC: A with key A, B with key B (the recipient's
+proxy signs the burn, so B needs gas too). Auto-burn is on by default — do
+**not** pass `-auto-burn=false`.
+
+```bash
+# A: SPORE_EVM_PRIVATE_KEY=0x…A spore evm-proxy -rpc $RPC -listen 127.0.0.1:8555
+# B: SPORE_EVM_PRIVATE_KEY=0x…B spore evm-proxy -rpc $RPC -listen 127.0.0.1:8556
+spore msg recv-e2 -chain evm -from 0xB… -rpc http://127.0.0.1:8556 -mailbox <addr> -min-height <block>
+spore msg send-e2 -to 0xB… -chain evm -from 0xA… -rpc http://127.0.0.1:8555 -mailbox <addr> \
+  (bundle/pinned-sig/store flags as ONBOARDING §4)
+```
+
+GO when B decrypts **and** the slot is provably empty — the P0-3 evidence
+(`ROADMAP-PRODUCTION.md`: "Dependent on the mailbox actually burning
+correctly"):
+
+```bash
+cast call <addr> "length(address)(uint256)" 0xB… --rpc-url $RPC
+cast call <addr> "read(address,uint256)(address,uint256,bytes)" 0xB… <seq> --from 0xB… --rpc-url $RPC
+```
+
+`length(to)` counts every delivery and never decreases; `read(to, seq)` read
+as B must return empty `bytes` for the burned slot. NO-GO while it returns
+data: that is exactly the missed burn the local harness catches, and shipping
+a default on top of it would make every message permanent.
+
+#### Gate 6 — publish (one commit, then the tag)
+
+Paste the receipt into the STATUS block below; add the
+`KnownMailboxDeployments["8453"]` entry; flip the four operator-facing rows
+(README, CARRIER_MATRIX, this file's header + goals, ONBOARDING) in the **same
+commit**; fill the honest fee + limit notes from the gate 2 and gate 4
+estimator output (including that the contract path is not payable, so `-amount`
+is refused there by design). Then referee:
+
+```bash
+go test ./internal/evm ./cmd/spore -count=1   # the receipt gate
+bash scripts/gates.sh                        # the FULL suite, not --quick
+```
+
+GO when both are green — these tests fail loudly if a doc claims a deployment
+the registry does not carry, or vice versa. Push, wait for CI green on the
+head SHA (check by SHA — the run list lags), dispatch `release.yml` as a
+dry-run, and only then create the signed tag: `git tag -s v0.9.0 -F <draft>`
+(the release workflow fires on `v*`).
+
+#### Abort rules
+
+| Where it fails | What to do |
+|---|---|
+| Gates 0–3 | Do not spend. Fix and re-run from gate 0. |
+| Gate 4 (tx reverts) | Nothing changed on chain. Re-run gate 1 first — a landed tx shifts the nonce and the predicted address. |
+| Gate 5 (slot still holds data) | Leave the registry empty and the docs pre-deployment. A deployed contract with no shipped default is inert, and the pre-deployment wording stays honest. |
+
+| Gate | Cost | Proves | Evidence that counts |
+|---|---|---|---|
+| 0 | free | the path works locally; shipped bytes = audited bytes | `ANVIL E2E GREEN` + empty-slot read; pin tests PASS |
+| 1 | free | right chain, right key, predicted address | chainid `8453`; derived + predicted address recorded |
+| 2 | free | what it costs | deploy row priced; `estimates sent from` matches gate 1 |
+| 3 | testnet | the whole arc including the burn | rehearsal green + empty-slot proof + STATUS lines |
+| 4 | mainnet | the deployment exists | tx hash, contract addr == prediction, `code verified: yes` |
+| 5 | mainnet | two-party delivery + compost on the real chain | B decrypts + `read(to, seq)` empty |
+| 6 | free | the publish is receipt-honest | receipt gate + full gates green; CI green on the head |
+
 ### Runbook — Phase A: rehearsal on Base Sepolia (free, do first)
 
 One-command path: `scripts/sepolia_rehearsal.sh` drives every step below
