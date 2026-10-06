@@ -370,10 +370,13 @@ dry-run, and only then create the signed tag: `git tag -s v0.9.0 -F <draft>`
 One-command path: `scripts/sepolia_rehearsal.sh` drives every step below
 (estimate → deploy → two-party proof through a pair of loopback proxies →
 empty-slot assertion) and prints the STATUS lines for the block at the end
-of this section. It needs `SPORE_EVM_PRIVATE_KEY` **and**
-`SPORE_EVM_PRIVATE_KEY_B` — TWO funded keys, because the recipient's proxy
-signs the burn (`burn(to,seq)` requires `msg.sender == to`). The manual
-equivalent:
+of this section. Its `--self-check` mode runs that same script's burn-recovery
+step (and the receipt line that carries the txid) against a throwaway local
+anvil — no keys, no faucet — so the wiring behind the burn txid is executed on
+every pre-push rather than only when two funded keys exist. The funded path
+needs `SPORE_EVM_PRIVATE_KEY` **and** `SPORE_EVM_PRIVATE_KEY_B` — TWO funded
+keys, because the recipient's proxy signs the burn (`burn(to,seq)` requires
+`msg.sender == to`). The manual equivalent:
 
 ```
 1. Throwaway keys (TWO — the recipient's proxy signs the burn, so the

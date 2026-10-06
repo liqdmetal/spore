@@ -289,6 +289,16 @@ echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
 run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s -r "${TMPDIR:-/tmp}/spore-anvil-receipt.txt"
 
 echo
+echo "== Base Sepolia rehearsal: its burn-recovery wiring, on a throwaway local anvil =="
+# The rehearsal itself needs two faucet-funded keys, so the step that reads the
+# burn txid back off the chain — and the receipt line that carries it — would
+# otherwise never be executed by anything but release day. --self-check starts
+# its own anvil, puts a burn and its near misses on a real chain, and requires
+# the recovery step to name exactly that burn and refuse every variant. Foundry
+# only, ~10s, and -s turns a missing anvil into a skip rather than a silent pass.
+run_gate 'sepolia rehearsal self-check' bash scripts/sepolia_rehearsal.sh --self-check -s
+
+echo
 echo "== release fill: every marker anchor still resolves (no values needed) =="
 # The frozen patches ship markers, and release day replaces them from a receipt
 # values file. Cheap half of the pair below: this only proves each marker's
