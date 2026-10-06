@@ -375,6 +375,40 @@ func TestApprovalMetricsMultiDirRules(t *testing.T) {
 	}
 }
 
+// TestPromFamilySetLatencyFamily pins the latency family rendering (the
+// -out-dir path): stat-ordered series, queue label joined in front, and
+// 'g'-formatted values — the only family the multi-queue refactor moved
+// that no other test exercises.
+func TestPromFamilySetLatencyFamily(t *testing.T) {
+	var p promFamilySet
+	p.latency("spore_approval_sign_latency_seconds", "help text",
+		&approvalMetricsLatency{Matched: 2, Min: 1, P50: 2, P95: 3, Max: 4, Mean: 2.5}, `queue="q"`)
+	var b strings.Builder
+	p.printTo(&b)
+	want := "# HELP spore_approval_sign_latency_seconds help text\n" +
+		"# TYPE spore_approval_sign_latency_seconds gauge\n" +
+		"spore_approval_sign_latency_seconds{queue=\"q\",stat=\"min\"} 1\n" +
+		"spore_approval_sign_latency_seconds{queue=\"q\",stat=\"p50\"} 2\n" +
+		"spore_approval_sign_latency_seconds{queue=\"q\",stat=\"p95\"} 3\n" +
+		"spore_approval_sign_latency_seconds{queue=\"q\",stat=\"max\"} 4\n" +
+		"spore_approval_sign_latency_seconds{queue=\"q\",stat=\"mean\"} 2.5\n"
+	if b.String() != want {
+		t.Fatalf("latency family rendering drift:\nwant:\n%s\ngot:\n%s", want, b.String())
+	}
+	// Single-queue mode: no queue label, series still stat-ordered.
+	var q promFamilySet
+	q.latency("spore_approval_post_latency_seconds", "help",
+		&approvalMetricsLatency{Min: 0.5, P50: 1, P95: 1.5, Max: 2, Mean: 1.25}, "")
+	b.Reset()
+	q.printTo(&b)
+	if strings.Contains(b.String(), `queue=`) {
+		t.Fatalf("single-queue latency family must be unlabeled:\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), `spore_approval_post_latency_seconds{stat="p50"} 1`) {
+		t.Fatalf("single-queue latency series missing:\n%s", b.String())
+	}
+}
+
 // TestValidateApprovalMetricsOutputFlags pins the output-format rule: -json,
 // -envelope, and -prometheus are alternative renderings, never layers.
 func TestValidateApprovalMetricsOutputFlags(t *testing.T) {
