@@ -32,13 +32,16 @@
 #   batch (default)  check the whole log, print every violation, exit.
 #   -w / --watch     live tripwire: follow only NEW heartbeats (tail -n 0 -f)
 #                    and stop with a non-zero exit on the FIRST violation or
-#                    malformed line. Ctrl-C is the stop signal (exit 130).
+#                    malformed line; a tail failure (file vanished) also
+#                    stops non-zero — never a silent pass. Ctrl-C is the
+#                    stop signal (exit 130).
 #                    Combine with the alerting of your choice:
 #                      while bash scripts/station-health.sh -w -f station.jsonl; do sleep 2; done
 #
-# Exit codes: 0 healthy, 1 health violation, 2 malformed input,
-# 3 no heartbeat lines (batch mode only — a silent station is not a healthy
-# one; watch mode follows instead of ending).
+# Exit codes: 0 healthy, 1 health violation, 2 malformed input (in watch
+# mode: also a tail failure — file vanished, permissions — never a silent
+# pass), 3 no heartbeat lines (batch mode only — a silent station is not a
+# healthy one; watch mode follows instead of ending).
 #
 # Usage: bash scripts/station-health.sh [-w] [-f FILE] [--max-pending-age SEC]
 #             [--max-lock-age SEC] [--max-pending N]
@@ -176,7 +179,14 @@ if [[ $watch == 1 ]]; then
       exit "$rc"
     fi
   done
-  exit 0 # unreachable in practice: tail -f never EOFs
+  # Reaching here means the FIFO hit EOF — tail -f never EOFs a live file,
+  # so this is a tail failure (file vanished between the existence check
+  # and the open, permissions, a directory). Report it instead of exiting
+  # 0 as if the station were healthy.
+  tail_rc=0
+  wait "$TAIL_PID" || tail_rc=$?
+  echo "station-health: watch: tail exited (rc $tail_rc); cannot follow $file" >&2
+  exit 2
 fi
 
 while IFS= read -r line; do
