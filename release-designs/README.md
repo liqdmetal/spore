@@ -19,7 +19,7 @@ deployment-day commit described in
 | [`v0.9.0-doc-flips.patch`](v0.9.0-doc-flips.patch) | The same flip in its **executable** form: the byte-exact `git apply` artifact, frozen from the dry-run commit and machine-checked against the gate. | The flip commit — apply it, don't retype it. |
 | [`v0.9.0-fee-notes.md`](v0.9.0-fee-notes.md) | The measured fee + limit notes: per-chain gas reality and the not-payable contract path. | Read it to understand the pass. |
 | [`v0.9.0-fee-notes.patch`](v0.9.0-fee-notes.patch) | The same pass in **executable** form. Its base is the tree the flip patch produces, so it can only land second. | The release-prep pass, **after** the real numbers exist. |
-| [`v0.9.0-tag-message.txt`](v0.9.0-tag-message.txt) | The signed-tag message draft, with `<<FILL:…>>` fields and a strip marker. | Last: fill → strip into `v0.9.0-tag-message-final.txt` → `git tag -s`. |
+| [`v0.9.0-tag-message.txt`](v0.9.0-tag-message.txt) | The signed-tag message draft, with `<<FILL:…>>` fields and a strip marker. | Last: fill → `scripts/release-tag-message.sh --write` → `git tag -s`. |
 | [`v0.9.0-landing-card.md`](v0.9.0-landing-card.md) | The release narrative / landing copy: what landed, the done-bar, the first move. | With the announcement. |
 
 ## Conventions
@@ -88,6 +88,17 @@ deployment-day commit described in
   the sweep cannot quietly go blind. `<release>` is deliberately not swept — the
   docs name that marker in their own instructions, and the receipt gate already
   owns it.
+- **`scripts/release-tag-message.sh`** is the tag pass, executable — the last
+  release-day step and the only artifact the receipt gate never reads. `--check`
+  (run in `gates.sh`) validates the draft's structure on any tree: the strip
+  marker appears exactly once, the body after it is non-empty, every marker in
+  the body is a `<<FILL: …>>` field, and no stale `-final.txt` from the dry run
+  is sitting there. `--write` fills that in: it refuses while any field is
+  unfilled (a tag is immutable once pushed), then strips, then validates the
+  body — no markers, no rehearsal values, a citation of `docs/LIVE_NODES.md` §3,
+  and the draft's own title as the first line. `--self-test` proves both
+  directions on a synthetically filled copy, because the draft cannot be filled
+  and still be a draft. The rehearsal runs all three on every push.
 - **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
   when a draft is missing or a tracked file points at a `release-designs/`
   artifact that does not exist.

@@ -255,6 +255,10 @@ echo "== release surfaces carry no rehearsal marker (synthetic values must never
 run_gate 'release placeholder sweep' bash scripts/release-placeholders.sh --quiet
 
 echo
+echo "== tag-message draft: strip marker intact, no stale scratch copy =="
+run_gate 'release tag-message check' bash scripts/release-tag-message.sh
+
+echo
 echo "== release-day rehearsal (frozen passes applied to a scratch tree) =="
 # --quick only confirms the patch still applies; the full rehearsal also runs
 # the referee twice (flipped -> green, registry removed -> red), ~1m, which is

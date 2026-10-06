@@ -479,7 +479,11 @@ gone.
    tag draft's placeholders from the receipt (search for the FILL
    markers), then `git tag -s v0.9.0 -F <file>` and push the tag — the
    release workflow fires on `v*` tags, which is exactly why the tag is
-   always the last action.
+   always the last action. `scripts/release-tag-message.sh --write` does
+   the fill check and the strip in one step and **refuses while any field
+   is unfilled**: the tag body is the one artifact the receipt gate never
+   reads, and a tag is immutable once pushed, so a placeholder signed
+   into it would be permanent.
 
 Before the signed tag, the release-prep pass finishes the release's honest
 claims: the fee + limit notes are filled from the step-2 estimate outputs,

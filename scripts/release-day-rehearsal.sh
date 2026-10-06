@@ -217,6 +217,33 @@ fi
 n=$(bash scripts/release-placeholders.sh | sed -n 's/^release-placeholders: \([0-9]*\) marker.*/\1/p' || true)
 echo "   flagged, as it must be — ${n:-?} marker line(s) in the rehearsed tree (see the fill list above)"
 
+# The tag pass is the one release artifact nothing else reads: the receipt gate
+# never looks at the tag body, and a tag is immutable once pushed, so an
+# unfilled field or a mis-stripped title would be permanent. Rehearse all three
+# directions here — structure, the refusal, and the acceptance.
+echo
+echo "-- tag pass (draft -> strip at the marker -> signable body)"
+if [ ! -f scripts/release-tag-message.sh ]; then
+  echo "REHEARSAL FAILED: scripts/release-tag-message.sh is not in the rehearsed tree." >&2
+  exit 1
+fi
+if ! bash scripts/release-tag-message.sh >/dev/null; then
+  echo "REHEARSAL FAILED: the tag draft's structure is broken — the strip marker or the" >&2
+  echo "body is not where the runbook says it is." >&2
+  exit 1
+fi
+if bash scripts/release-tag-message.sh --write >/dev/null 2>&1; then
+  echo "REHEARSAL FAILED: the tag pass stripped an UNFILLED draft. A tag is immutable" >&2
+  echo "once pushed, so the placeholders would be signed into it permanently." >&2
+  exit 1
+fi
+if ! bash scripts/release-tag-message.sh --self-test >/dev/null; then
+  echo "REHEARSAL FAILED: the tag pass refuses a properly filled draft, so release day" >&2
+  echo "would be blocked by the tool instead of by the missing receipt." >&2
+  exit 1
+fi
+echo "   structure ok; refuses the unfilled draft; strips and validates a filled one"
+
 # ---- phase 1: flip + fees, the gate must pass ------------------------------
 # (skipped under --sabotage-only, which exists to show the negative alone)
 if ((SABOTAGE_ONLY == 0)); then
