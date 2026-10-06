@@ -224,6 +224,17 @@ or a log with no heartbeat lines at all. Exit codes: `0` healthy, `1`
 health violation, `2` malformed input, `3` empty log. Thresholds are flags;
 see the script header.
 
+`-w`/`--watch` is the live tripwire form: it follows the log and stops with a
+non-zero exit on the FIRST violation or malformed line instead of waiting for
+the next cron pass, so a wrapper loop can alert immediately:
+
+```bash
+while bash scripts/station-health.sh -w -f station.jsonl; do sleep 2; done
+```
+
+Batch mode stays the historical gate (every violation, exit codes 0/1/2/3);
+watch mode follows only new heartbeats.
+
 ## 4. Requester side: post and verify
 
 ```bash
@@ -287,6 +298,18 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
 - Gate the JSONL log with `bash scripts/station-health.sh -f station.jsonl`:
   non-zero exit on orphaned locks, stale-break-aged locks, requests past the
   approval TTL, malformed lines, or an empty log. See §3.2.
+- For a Prometheus scraper or the node_exporter textfile collector, emit the
+  same summary as the text exposition format:
+
+```bash
+spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/state \
+  -prometheus > ~/node_exporter/spore_approval.prom
+```
+
+  The `spore_approval_*` gauges cover queue volumes, statuses, skip reasons,
+  locks (live / orphaned / oldest age), oldest-pending age, and the outbox
+  latencies — the same numbers as the summary, sorted and diffable across
+  scrapes.
 - Approval latency (request created -> approval signed) is bounded by the
   15-minute TTL; post latency (approval signed -> nonce burned) is the
   requester's remaining window. p95 creeping toward 15m means requests are
