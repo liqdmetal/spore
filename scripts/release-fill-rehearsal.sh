@@ -251,12 +251,18 @@ send_tx() {
 }
 SEPOLIA_TX="$(send_tx)"
 DELIVER_TX="$(send_tx)"
-for h in "$SEPOLIA_TX" "$DELIVER_TX"; do
+# The burn txid is a fourth transaction in the receipt, and the fill refuses a
+# receipt whose txids repeat (the dry run wrote one marker for all of them), so
+# the stand-in has to be real and distinct like the others. On release day it
+# comes off the chain instead: scripts/evm-burn-txid.sh reads back the
+# `burn(to,seq)` chain.Watch issues and never logs.
+BURN_TX="$(send_tx)"
+for h in "$SEPOLIA_TX" "$DELIVER_TX" "$BURN_TX"; do
   case "$h" in 0x*) ;; *) fail "anvil returned no tx hash for a rehearsal transaction" ;; esac
 done
 DEPLOYER="$(printf '%s' "$ADDR_A" | tr 'A-F' 'a-f')"
 SEPOLIA_ADDR="$(printf '%s' "$ADDR_B" | tr 'A-F' 'a-f')"
-ok "mailbox $MAINNET_ADDR (tx $MAINNET_TX) + 2 fills; $MAINNET_TX != $SEPOLIA_TX != $DELIVER_TX"
+ok "mailbox $MAINNET_ADDR (tx $MAINNET_TX) + 3 fills; $MAINNET_TX != $SEPOLIA_TX != $DELIVER_TX != $BURN_TX"
 
 step "the runbook's own command, run the way it says to run it"
 # LIVE_NODES §3 step 1: once with -from only for the deploy row, then again with
@@ -301,6 +307,7 @@ MAINNET_TX=$MAINNET_TX
 MAINNET_DATE=$EST_DATE
 DEPLOYER=$DEPLOYER
 DELIVER_TX=$DELIVER_TX
+BURN_TX=$BURN_TX
 EST_DATE=$EST_DATE
 EST_GAS_PRICE=$EST_GAS_PRICE
 EST_DEPLOY_GAS=$EST_DEPLOY_GAS

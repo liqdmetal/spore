@@ -143,14 +143,19 @@ It is the fast pre-flight for Phase A below and the local mirror of this
 runbook — run it before spending testnet ETH, and again after any carrier
 change. It also pins the compost promise on-chain: the script fails unless a
 fresh-state read of the burned slot (and, with foundry's `cast`, the
-contract's own `read(to, seq)`) comes back empty. With `-r FILE` it also writes the RECEIPT the fill consumes —
-the same key=value file `scripts/release-fill.sh -in` takes, built from the
-mailbox it just deployed, the deployer, a real deliver txid, and the runbook's
-own `spore contract estimate` run the way §3 says to run it — and then requires
-the fill to accept that file before the proof reports green. Release day's last
-hand-work step is six hex strings typed from a terminal into a receipt, and a
-mistyped mailbox address ships as every user's default mailbox while satisfying
-the receipt gate; so the file is written by the run that observed the values.
+contract's own `read(to, seq)`) comes back empty. It also recovers the BURN
+TRANSACTION, which the receive path issues and deliberately never logs, by
+scanning the blocks since the delivery for a `burn(address,uint256)` from B to
+this mailbox — see `scripts/evm-burn-txid.sh`, which is the same lookup on any
+chain. With `-r FILE` it then writes the RECEIPT the fill consumes — the same
+key=value file `scripts/release-fill.sh -in` takes, built from the mailbox it
+just deployed, the deployer, a real deliver txid, the recovered burn txid, and
+the runbook's own `spore contract estimate` run the way §3 says to run it — and
+requires the fill to accept that file before the proof reports green. Release
+day's last hand-work step is hex strings typed from a terminal into a receipt,
+and a mistyped mailbox address ships as every user's default mailbox while
+satisfying the receipt gate; so the file is written by the run that observed
+the values.
 It names anvil's own addresses, which `scripts/release-fill.sh` refuses unless
 it is passed `--local-proof`: a local rehearsal cannot become a deployment
 receipt by accident.
@@ -402,10 +407,15 @@ equivalent:
      cast call 0x<addr> "length(address)(uint256)" 0xB… \
        --rpc-url https://sepolia.base.org
 5. Record txids (creation, one deliver, one burn) in the STATUS block below.
-   The burn txid is unlogged by design (chain.Watch treats the burn as
-   best-effort and the proxy logs nothing), so read it from the explorer's
-   tx history for the contract — or cite the empty-slot read() as the proof,
-   which is what the script does.
+   The burn txid is NOT logged (chain.Watch treats the burn as best-effort and
+   neither the CLI nor the loopback proxy prints it), so read it back off the
+   chain rather than describing its absence:
+     scripts/evm-burn-txid.sh -rpc https://sepolia.base.org \
+       -mailbox 0x<addr> -recipient 0xB… -from-block <deliver tx's block>
+   It prints `<txid> <seq> <block>` for every burn from that recipient, and it
+   exits 1 rather than guessing when there is none. The receipt this section
+   feeds now carries that txid as `BURN_TX`, and `scripts/sepolia_rehearsal.sh`
+   puts it in the STATUS line it prints.
 ```
 
 ### Runbook — Phase B: Base mainnet (chain 8453)
@@ -449,9 +459,10 @@ gone.
    key=value shape step 3 consumes, and the pre-push gate checks that the
    fill accepts it. For the real rows, the Phase A rehearsal script's
    `receipt` step prints the §3 STATUS line to paste into the block below;
-   both describe the same fields, and the fill's 19 keys are the whole
-   list. The burn tx is unlogged by design — cite the on-chain empty-slot
-   `read()` as the proof. A receipt a local run wrote names anvil's own
+   both describe the same fields, and the fill's 20 keys are the whole
+   list — including `BURN_TX`, which the receive path does not log, so
+   `scripts/evm-burn-txid.sh` reads it back out of chain state (Phase A
+   step 5 shows the call). A receipt a local run wrote names anvil's own
    addresses, and the fill REFUSES those unless it is passed
    `--local-proof`: a rehearsal can never ship as a deployment receipt.
 2. **Keep the measured numbers.** Phase B step 1 already ran

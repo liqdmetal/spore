@@ -4,7 +4,11 @@
 # Fill order (each field must already exist in its canonical home first):
 #   1. The receipt fields — copy from docs/LIVE_NODES.md §3 STATUS. The doc
 #      is canonical; the tag cites it and carries the numbers for one-stop
-#      discoverability (same relationship as v0.8.0's scope note).
+#      discoverability (same relationship as v0.8.0's scope note). The burn
+#      txid is in that receipt like any other: the receive path does not log
+#      the burn, so recover it from the chain (`scripts/evm-burn-txid.sh`, or
+#      `scripts/anvil_e2e.sh -r` for the local proof). "unlogged by design"
+#      is no longer a fill value.
 #   2. The bullets — prune/add to match what actually landed:
 #      git log v0.8.0..v0.9.0 --oneline
 #      The "default -mailbox" bullet is FILLED (mechanism pre-staged in
@@ -37,10 +41,9 @@ The receipt (canonical copy: docs/LIVE_NODES.md §3 STATUS):
 - Creation tx: <<FILL: txid, 0x…>>
 - Deployer: <<FILL: 0x…>>
 - Deployed: <<FILL: date>>
-- Two-party proof: deliver <<FILL: txid>>; the auto-burn was verified by
-  the on-chain empty-slot read (burn txid <<FILL: txid, or "unlogged by
-  design — see the contract's explorer history">>), and a fresh-state
-  production read returned nothing afterward.
+- Two-party proof: deliver <<FILL: txid>>, burn <<FILL: txid>> (recovered
+  from chain state — the receive path issues the burn and logs nothing),
+  and a fresh-state production read returned nothing afterward.
 
 What shipped since v0.8.0 (prune to match git log v0.8.0..v0.9.0):
 

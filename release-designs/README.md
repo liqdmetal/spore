@@ -90,7 +90,8 @@ deployment-day commit described in
   runbook used to describe by hand. Both frozen patches deliberately ship
   *markers* (they must be appliable before the deployment exists), and this is
   what replaces every one of them from a single key=value receipt file: both §3
-  STATUS rows, the deliver tx, the address the burn note cites, the registry
+  STATUS rows, the deliver tx, the burn tx (recovered from chain state — the
+  receive path never logs it), the address the §3 rows cite, the registry
   entry, and the fee block's measured numbers. It refuses a partial fill — each
   rule's anchor must resolve exactly once, and it will not leave a tree that
   half-claims a deployment. `--check` needs no values and only proves the

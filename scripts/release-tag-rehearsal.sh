@@ -46,9 +46,13 @@
 # wait until the only run that matters. -in is for the operator, with receipt in
 # hand.
 #
-# -receipt cross-checks the six receipt-shaped fields against the values file
+# -receipt cross-checks the seven receipt-shaped fields against the values file
 # scripts/release-fill.sh consumes, so the tag, the §3 doc and the registry are
-# provably filled from ONE receipt rather than three transcriptions of it.
+# provably filled from ONE receipt rather than three transcriptions of it. The
+# burn txid is one of them: it used to be the field that could be either a txid
+# or the "unlogged by design" phrase, and it is now always a txid — the receive
+# path still does not log the burn, so scripts/evm-burn-txid.sh reads it back
+# out of chain state instead.
 #
 # The signing uses an ephemeral ssh key in a throwaway repo: it never touches the
 # operator's own signing key, and it never writes inside the real checkout. ssh
@@ -76,7 +80,7 @@ usage: bash scripts/release-tag-rehearsal.sh -in VALUES [-receipt FILLVALUES]
   -in FILE       the nine tag fields, one key=value per field, in document order
                  (see --keys). Required unless --self-check.
   -receipt FILE  optionally the values file scripts/release-fill.sh consumes; the
-                 six receipt-shaped fields must agree with it.
+                 seven receipt-shaped fields must agree with it.
   -t TAG         tag name to create (default: v0.9.0)
   -s             self-skip (exit 0) when ssh-keygen is unavailable
   --self-check   run against a synthetic fixture written here, on the real draft:
@@ -121,7 +125,7 @@ KEYS=(
   TAG_DEPLOYER      # 3. the funded key that deployed it
   TAG_DATE          # 4. the deployment date
   TAG_DELIVER_TX    # 5. one deliver txid from the two-party proof
-  TAG_BURN_TX       # 6. the burn txid, or the "unlogged by design" phrase
+  TAG_BURN_TX       # 6. the burn txid for that delivery (recovered from chain state)
   TAG_DOCS_BULLET   # 7. the docs/fee-notes bullet
   TAG_EXTRA_BULLET  # 8. anything else that landed (one user-visible bullet)
   TAG_FEES          # 9. the measured funding total, in prose
@@ -130,9 +134,9 @@ KEYS=(
 if [ "$SHOW_KEYS" -eq 1 ]; then
   cat <<'TEMPLATE'
 # release-tag-rehearsal values — one key per <<FILL: …>> field of
-# release-designs/v0.9.0-tag-message.txt, in document order. The six
+# release-designs/v0.9.0-tag-message.txt, in document order. The seven
 # receipt-shaped fields are the §3 STATUS lines (addresses lowercase 0x+40,
-# txids 0x+64, dates YYYY-MM-DD); the other three are prose you write, and every
+# txids 0x+64, dates YYYY-MM-DD); the other two are prose you write, and every
 # value must be a single line with no placeholder of any shape in it.
 
 TAG_CONTRACT=0x                                    # the mailbox address
@@ -140,7 +144,7 @@ TAG_CREATION_TX=0x                                 # its creation txid
 TAG_DEPLOYER=0x                                    # the deploying key
 TAG_DATE=YYYY-MM-DD                                # the deployment date
 TAG_DELIVER_TX=0x                                  # a deliver txid
-TAG_BURN_TX=                                       # the burn txid, or: unlogged by design — see the contract's explorer history
+TAG_BURN_TX=0x                                     # the burn txid for that delivery (chain state; never logged)
 TAG_DOCS_BULLET=                                   # the docs/fee-notes bullet, one line
 TAG_EXTRA_BULLET=                                  # one user-visible change, one line
 TAG_FEES=                                          # the measured funding total, in prose
@@ -207,6 +211,7 @@ if [ "$SELF_CHECK" -eq 1 ]; then
   CREATION=0x2222222222222222222222222222222222222222222222222222222222222222
   DEPLOYER=0x3333333333333333333333333333333333333333
   DELIVER=0x4444444444444444444444444444444444444444444444444444444444444444
+  BURN=0x5555555555555555555555555555555555555555555555555555555555555555
   cat > "$FIXDIR/values" <<FIXTURE
 # SYNTHETIC (--self-check): a fixture, never a receipt.
 TAG_CONTRACT=$CONTRACT
@@ -214,7 +219,7 @@ TAG_CREATION_TX=$CREATION
 TAG_DEPLOYER=$DEPLOYER
 TAG_DATE=2026-01-01
 TAG_DELIVER_TX=$DELIVER
-TAG_BURN_TX=unlogged by design — see the contract's explorer history
+TAG_BURN_TX=$BURN
 TAG_DOCS_BULLET=docs: honest fee and limit notes (must-do #4) with the measured numbers; the CARRIER_MATRIX and README EVM rows flipped to live
 TAG_EXTRA_BULLET=fix(ci): run only the fast gate on a push to main; the heavy jobs stay dispatch-only
 TAG_FEES=0.0001 ETH deploy + 12 x (deliver+burn) = 0.00012 ETH at 1 gwei
@@ -226,6 +231,7 @@ MAINNET_TX=$CREATION
 MAINNET_DATE=2026-01-01
 DEPLOYER=$DEPLOYER
 DELIVER_TX=$DELIVER
+BURN_TX=$BURN
 EST_FUNDING_TOTAL=0.00012 ETH
 FIXTURE
   VALUES="$FIXDIR/values"
@@ -316,11 +322,13 @@ for k in "${KEYS[@]}"; do
   case "$val" in *$'\n'*) echo "  $k spans lines — one line per value" >&2; problems=1; continue ;; esac
   case "$k" in
     TAG_CONTRACT | TAG_DEPLOYER) is_addr "$val" || { echo "  $k must be 0x + 40 lowercase hex, got '$val'" >&2; problems=1; } ;;
-    TAG_CREATION_TX | TAG_DELIVER_TX) is_tx "$val" || { echo "  $k must be 0x + 64 lowercase hex, got '$val'" >&2; problems=1; } ;;
+    # The burn txid is a txid like the others. It is the field that used to
+    # accept the "unlogged by design" prose as an alternative; that alternative
+    # is what a fill value with no source becomes, so it is gone: recover the
+    # transaction (scripts/evm-burn-txid.sh) or do not tag.
+    TAG_CREATION_TX | TAG_DELIVER_TX | TAG_BURN_TX)
+      is_tx "$val" || { echo "  $k must be 0x + 64 lowercase hex, got '$val'" >&2; problems=1; } ;;
     TAG_DATE) is_date "$val" || { echo "  $k must be YYYY-MM-DD, got '$val'" >&2; problems=1; } ;;
-    # TAG_BURN_TX is either a txid or the documented "unlogged by design" phrase.
-    TAG_BURN_TX)
-      case "$val" in 0x*) is_tx "$val" || { echo "  TAG_BURN_TX must be 0x + 64 lowercase hex, or the unlogged-by-design phrase" >&2; problems=1; } ;; esac ;;
     *)
       case "$val" in *[0-9A-Za-z]*) ;; *) echo "  $k has no content" >&2; problems=1 ;; esac ;;
   esac
@@ -343,7 +351,8 @@ if [ -n "$RECEIPT" ]; then
     R["$k"]=$v
   done < "$RECEIPT"
   for pair in "TAG_CONTRACT:MAINNET_ADDR" "TAG_CREATION_TX:MAINNET_TX" \
-              "TAG_DEPLOYER:DEPLOYER" "TAG_DATE:MAINNET_DATE" "TAG_DELIVER_TX:DELIVER_TX"; do
+              "TAG_DEPLOYER:DEPLOYER" "TAG_DATE:MAINNET_DATE" \
+              "TAG_DELIVER_TX:DELIVER_TX" "TAG_BURN_TX:BURN_TX"; do
     tag_key=${pair%%:*}
     fill_key=${pair#*:}
     [ -n "${R[$fill_key]:-}" ] || continue
@@ -357,13 +366,13 @@ if [ -n "$RECEIPT" ]; then
       *) fail "TAG_FEES does not quote the fill receipt's measured EST_FUNDING_TOTAL (${R[EST_FUNDING_TOTAL]})" ;;
     esac
   fi
-  ok "all six receipt-shaped fields agree with the fill receipt (one receipt, one deployment)"
+  ok "all seven receipt-shaped fields agree with the fill receipt (one receipt, one deployment)"
 fi
 ok "nine values, all present, none of them a placeholder"
 
 # ---- fill the draft --------------------------------------------------------
 step "fill the nine fields (in document order)"
-# Three of the nine fields wrap in the draft. A wrapped field is collapsed onto
+# Some of the nine fields wrap in the draft. A wrapped field is collapsed onto
 # the line it opened on — the text before the field, then the value, then
 # whatever followed the closing >> — so the surrounding prose reads the way the
 # author wrote it instead of leaving the tail stranded on its own line.
@@ -445,7 +454,7 @@ ok "no marker of any shape, cites §3, starts at the title"
 
 # "No markers" alone would pass on a body that silently dropped a field, so
 # require every supplied receipt value to be present in the text that gets signed.
-for k in TAG_CONTRACT TAG_CREATION_TX TAG_DEPLOYER TAG_DATE TAG_DELIVER_TX; do
+for k in TAG_CONTRACT TAG_CREATION_TX TAG_DEPLOYER TAG_DATE TAG_DELIVER_TX TAG_BURN_TX; do
   if ! grep -qF "${V[$k]}" "$FINAL"; then
     fail "$k (${V[$k]}) is missing from the body — the field was filled with something else"
   fi

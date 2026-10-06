@@ -264,9 +264,11 @@ ok "round trip complete: B decrypted the message"
 step "compost: the slot must be provably empty after the burn"
 # The burn is best-effort by design (a failure never blocks delivery) and is
 # deliberately UNLOGGED — neither chain.Watch nor the proxy prints the burn
-# txid. So the rehearsal proves the OUTCOME, not the txid: give the burn a
-# window to land (a couple of 3s poll cadences), then assert emptiness.
-ok "waiting out the burn window (the burn itself is unlogged by design)"
+# txid. So the rehearsal proves the OUTCOME first: give the burn a window to
+# land (a couple of 3s poll cadences), then assert emptiness. The step after
+# this one recovers the TXID as well, because a receipt that names the
+# transaction is better evidence than one that explains why it cannot.
+ok "waiting out the burn window (the burn itself is never logged)"
 sleep 20
 kill "$RECV_PID" 2>/dev/null || true; wait "$RECV_PID" 2>/dev/null || true
 # Mandatory assertion: a FRESH-state production read (new state dir, same
@@ -311,6 +313,25 @@ else
   ok "cast not installed — the fresh-state rescan above carries the empty-slot proof (install foundry for the on-chain read() cross-check)"
 fi
 
+# ---------------- the burn txid ----------------
+step "burn: recover the txid from the chain (nothing logs it)"
+# The same lookup scripts/anvil_e2e.sh runs locally, against this RPC: a
+# `burn(address,uint256)` from B to the mailbox, whose calldata carries B's own
+# address because only the recipient may erase its slot. It exits 1 rather than
+# guessing, so an unfound burn is a failed rehearsal — never a receipt line
+# that quietly falls back to describing the burn's absence.
+BURN_FINDER="$REPO_ROOT/scripts/evm-burn-txid.sh"
+[[ -f "$BURN_FINDER" ]] || fail "scripts/evm-burn-txid.sh is missing — the receipt line cannot name the burn"
+# A burn cannot precede its delivery, so the deliver tx's block bounds the scan.
+DELIVER_BLOCK=$(rpc_call eth_getTransactionByHash "[\"$DELIVER_TX\"]" | jq -r '.result.blockNumber // empty' || true)
+[[ -n "$DELIVER_BLOCK" ]] || DELIVER_BLOCK="$HEAD"
+BURN_HIT=$(bash "$BURN_FINDER" -rpc "$RPC" -mailbox "$CONTRACT" -recipient "$ADDR_B" \
+  -from-block "$DELIVER_BLOCK" | tail -1 || true)
+BURN_TX=$(printf '%s' "$BURN_HIT" | awk '{print $1}')
+[[ "$BURN_TX" =~ ^0x[0-9a-fA-F]{64}$ ]] ||
+  fail "no burn transaction found from $ADDR_B to $CONTRACT in blocks $DELIVER_BLOCK.. — the slot IS empty, but the receipt line needs the txid"
+ok "burn recovered: $BURN_TX (slot $(printf '%s' "$BURN_HIT" | awk '{print $2}'), block $(printf '%s' "$BURN_HIT" | awk '{print $3}'))"
+
 # ---------------- receipt ----------------
 DATE_UTC=$(date -u +%Y-%m-%d)
 FULL_TOTAL=$(grep -h 'funding total' "$ROOT/estimate-full.txt" 2>/dev/null | head -1 || true)
@@ -322,7 +343,7 @@ step "receipt — paste into docs/LIVE_NODES.md §3 STATUS (rehearsal line)"
 cat <<EOF
 
 - Base Sepolia rehearsal: address \`$CONTRACT\`, creation tx \`$CREATION_CELL\`, date $DATE_UTC
-- Two-party E2E → receive → auto-burn → empty-slot proof: deliver \`$DELIVER_TX\`; burn verified by the on-chain empty-slot read (the burn tx is unlogged by design — see \`$CONTRACT\`'s explorer tx history for the burn txid)
+- Two-party E2E → receive → auto-burn → empty-slot proof: deliver \`$DELIVER_TX\`, burn \`$BURN_TX\` (recovered from chain state — the receive path issues the burn and logs nothing), and a fresh-state \`read()\` on \`$CONTRACT\` plus a production rescan both came back empty
 EOF
 cat <<EOF
 

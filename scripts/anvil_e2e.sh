@@ -26,13 +26,15 @@
 #
 # With -r FILE it also writes the RECEIPT the fill consumes: the key=value file
 # scripts/release-fill.sh takes as -in, built from what this run observed (a
-# real mailbox address, a real creation txid, the deployer, a real deliver txid)
-# and measured (the runbook's own `spore contract estimate`, run the way §3 says
-# to run it). Release day's last hand-work step is transcription — six hex
-# strings from a terminal into a receipt — and a mistyped mailbox address ships
-# as every user's default mailbox while satisfying the receipt gate. So the
-# proof writes the file, and release-fill.sh checks it (and refuses a receipt
-# naming anvil's dev accounts unless it is told the point is a local proof).
+# real mailbox address, a real creation txid, the deployer, a real deliver txid,
+# and the BURN txid — recovered from chain state, because the receive path
+# issues the burn and deliberately does not log it) and measured (the runbook's
+# own `spore contract estimate`, run the way §3 says to run it). Release day's
+# last hand-work step is transcription — hex strings from a terminal into a
+# receipt — and a mistyped mailbox address ships as every user's default mailbox
+# while satisfying the receipt gate. So the proof writes the file, and
+# release-fill.sh checks it (and refuses a receipt naming anvil's dev accounts
+# unless it is told the point is a local proof).
 #
 # What it does NOT prove: gas/funding reality (anvil is free) and public-RPC
 # behaviour. Those are what Phase A/B on Base Sepolia/mainnet are for.
@@ -43,7 +45,8 @@
 #     -a   anvil JSON-RPC port (default 18545)
 #     -m   local mailbox port — body store + prekey authority (default 19393)
 #     -b   spore binary to drive (default: built fresh from this repo)
-#     -r   also write the fill-shaped receipt to this path, and check it against
+#     -r   also write the fill-shaped receipt to this path (including the burn
+#          txid recovered from chain state), and check it against
 #          scripts/release-fill.sh's own rules (see below)
 #     -s   skip (exit 0) when anvil is not installed, instead of failing
 #          (exit 3). For CI/gates where foundry may be absent.
@@ -291,11 +294,55 @@ else
   ok "cast not installed — the fresh-state rescan carries the empty-slot proof"
 fi
 
+step "burn: recover the transaction from the chain (the receive path does not log it)"
+# The compost assertion above proves the OUTCOME — a fresh-state production read
+# returns an empty slot, so the burn landed. It does not name the transaction,
+# and it cannot: chain.Watch issues burn(to,seq) best-effort and logs nothing,
+# by design (a burn failure must never look like a delivery failure). The §3
+# receipt used to describe that absence — "unlogged by design, see the
+# explorer". A chain keeps its own history, so read the tx back out instead:
+# scripts/evm-burn-txid.sh enumerates the blocks since the delivery for a
+# burn(address,uint256) from B to this mailbox. No match is a FAILURE here, so
+# the old wording can never quietly come back as the fallback.
+BURN_FINDER="$REPO_ROOT/scripts/evm-burn-txid.sh"
+[ -f "$BURN_FINDER" ] || fail "scripts/evm-burn-txid.sh is missing — the proof cannot name the burn it just asserted"
+DELIVER_BLOCK_HEX="$(rpc_call eth_getTransactionByHash "[\"$DELIVER_TX\"]" \
+  | sed -n 's/.*"blockNumber":"\(0x[0-9a-fA-F]*\)".*/\1/p' | head -1)"
+if [ -n "$DELIVER_BLOCK_HEX" ]; then
+  DELIVER_BLOCK="$(hex_to_dec "$DELIVER_BLOCK_HEX")"
+else
+  DELIVER_BLOCK="$HEAD"
+fi
+BURN_HIT="$(bash "$BURN_FINDER" -rpc "$RPC" -mailbox "$CONTRACT" -recipient "$ADDR_B" \
+  -from-block "$DELIVER_BLOCK" 2>"$ROOT/burn-scan.log" | tail -1 || true)"
+BURN_TX="$(printf '%s' "$BURN_HIT" | awk '{print $1}')"
+BURN_SEQ="$(printf '%s' "$BURN_HIT" | awk '{print $2}')"
+BURN_BLOCK="$(printf '%s' "$BURN_HIT" | awk '{print $3}')"
+case "$BURN_TX" in
+  0x*) ;;
+  *)
+    cat "$ROOT/burn-scan.log" >&2
+    fail "no burn transaction found from $ADDR_B to $CONTRACT in blocks $DELIVER_BLOCK.. — the slot IS empty, but a receipt without the txid would fall back to describing the burn's absence"
+    ;;
+esac
+for other in "$DEPLOY_TX" "$DELIVER_TX"; do
+  if [ "$BURN_TX" = "$other" ]; then
+    fail "the recovered burn tx ($BURN_TX) is also $other — that is not a burn"
+  fi
+done
+if [ -n "${SEQ:-}" ] && [ -n "$BURN_SEQ" ] && [ "$BURN_SEQ" != "$SEQ" ]; then
+  fail "the recovered burn erases slot $BURN_SEQ, but the delivered slot is $SEQ — that burn belongs to a different message"
+fi
+[ -n "$BURN_SEQ" ] || fail "the recovered burn printed no sequence number: $BURN_HIT"
+ok "burn recovered: $BURN_TX (burn(address,uint256), slot $BURN_SEQ, block $BURN_BLOCK — nothing in this run logged it)"
+
 # ---- the receipt the fill consumes -----------------------------------------
 # Everything above proved the arc; this writes the artifact release day needs,
-# from the same run. Nothing here is typed by a human: the six hex strings come
-# out of the deploy and send logs, the dates come off the clock, and the fee
-# numbers come from the runbook's own estimator, invoked the way §3 invokes it.
+# from the same run. Nothing here is typed by a human: the deploy and deliver
+# txids come out of the command logs, the burn txid comes off the chain itself
+# (the step above — the receive path deliberately does not log it), the dates
+# come off the clock, and the fee numbers come from the runbook's own estimator,
+# invoked the way §3 invokes it.
 if [ -n "$RECEIPT" ]; then
   mkdir -p "$(dirname "$RECEIPT")" 2>/dev/null || true
   [ -n "$DEPLOY_TX" ] || fail "the deploy printed no creation txid — there is nothing honest to write in a receipt"
@@ -308,7 +355,12 @@ if [ -n "$RECEIPT" ]; then
   SEPOLIA_TX="$(rpc_call eth_sendTransaction \
     "[{\"from\":\"$ADDR_A\",\"to\":\"$ADDR_B\",\"value\":\"0x1\"}]" | rpc_result || true)"
   case "$SEPOLIA_TX" in 0x*) ;; *) fail "anvil returned no tx hash for the rehearsal row's transaction" ;; esac
-  ok "rehearsal-row tx $SEPOLIA_TX (real, and distinct from the deploy and the deliver)"
+  for other in "$DEPLOY_TX" "$DELIVER_TX" "$BURN_TX"; do
+    if [ "$SEPOLIA_TX" = "$other" ]; then
+      fail "the rehearsal-row transaction is also $other — release-fill.sh refuses a receipt whose txids are not distinct"
+    fi
+  done
+  ok "rehearsal-row tx $SEPOLIA_TX (real, and distinct from the deploy, the deliver and the burn)"
 
   step "receipt: measure with the runbook's own command"
   # Run it from a tree that carries the pinned creation bytecode: the estimator
@@ -361,7 +413,9 @@ if [ -n "$RECEIPT" ]; then
 #   MAINNET_*  this proof's deployment
 #   SEPOLIA_*  the rehearsal row's shape — a real extra transaction, because the
 #              two rows must differ and the fill checks that they do
-# DEPLOYER and DELIVER_TX are this proof's; the EST_* numbers are this chain's.
+# DEPLOYER, DELIVER_TX and BURN_TX are this proof's; the EST_* numbers are this
+# chain's. BURN_TX is the one value the CLI never printed — it was recovered
+# from chain state above, which is why the shipped burn note can cite a txid.
 # scripts/release-fill.sh REFUSES anvil's dev accounts unless it is passed
 # --local-proof: they can only come from a run like this one.
 SEPOLIA_ADDR=$SEPOLIA_ADDR
@@ -372,6 +426,7 @@ MAINNET_TX=$DEPLOY_TX
 MAINNET_DATE=$TTODAY
 DEPLOYER=$DEPLOYER
 DELIVER_TX=$DELIVER_TX
+BURN_TX=$BURN_TX
 EST_DATE=$TTODAY
 EST_GAS_PRICE=$EST_GAS_PRICE
 EST_DEPLOY_GAS=$EST_DEPLOY_GAS
@@ -407,4 +462,6 @@ if [ -n "$RECEIPT" ]; then
   printf 'Receipt: %s\n' "$RECEIPT"
   printf '  check/consume it: bash scripts/release-fill.sh -in %s --local-proof   (drop --local-proof on a real chain)\n' "$RECEIPT"
 fi
+printf 'Burn: %s (slot %s, block %s) — recovered from chain state; the receive path logs nothing.\n' \
+  "$BURN_TX" "$BURN_SEQ" "$BURN_BLOCK"
 printf 'Next: the same flow on Base Sepolia with funded keys — scripts/sepolia_rehearsal.sh\n'

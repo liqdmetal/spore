@@ -381,7 +381,7 @@ index 7ec6b23..876224a 100644
 -- Default `-mailbox` (config `evm_mailbox`) shipped in: <release>
 +- Base Sepolia rehearsal: address `0x0000000000000000000000000000000000008e2a`, creation tx `0x<DRYRUN-TX>`, date 2026-10-06
 +- Base mainnet: address `0x0000000000000000000000000000000000008453`, creation tx `0x<DRYRUN-TX>`, deployer `0x<DRYRUN-DEPLOYER>`, date 2026-10-06
-+- Two-party E2E → receive → auto-burn → empty-slot proof: deliver `0x<DRYRUN-DELIVER-TX>`; burn verified by the on-chain empty-slot read (the burn tx is unlogged by design — see `0x0000000000000000000000000000000000008453`'s explorer history for the burn txid)
++- Two-party E2E → receive → auto-burn → empty-slot proof: deliver `0x<DRYRUN-DELIVER-TX>`, burn `0x<DRYRUN-BURN-TX>` (recovered from chain state — the receive path issues the burn and logs nothing), and a fresh-state `read()` on `0x0000000000000000000000000000000000008453` plus a production rescan both came back empty
 +- Default `-mailbox` (config `evm_mailbox`) shipped in: v0.9.0 (Base mainnet, chain 8453 — `KnownMailboxDeployments`, gated by TestShippedMailboxDefaultsCarryReceipts)
  
  ### Honest notes (sender-side reality)

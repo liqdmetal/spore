@@ -40,9 +40,12 @@
 # exits 0 on a tree where the passes are not applied (nothing to fill).
 #
 # The values file is a receipt, and scripts/anvil_e2e.sh now WRITES one from its
-# own proof (`-r FILE`), so the six hex strings stop being hand-typed. Two rules
-# follow from that, and they are the reason this script is the receipt's
-# definition rather than a second copy of its format:
+# own proof (`-r FILE`), so the hex strings stop being hand-typed — including
+# BURN_TX, the one the receive path issues and never logs, which the proof
+# recovers from chain state via scripts/evm-burn-txid.sh rather than leaving the
+# §3 burn note to describe the burn's absence. Two rules follow from that, and
+# they are the reason this script is the receipt's definition rather than a
+# second copy of its format:
 #
 #   * a receipt naming anvil's documented dev accounts is refused, because
 #     those addresses can only come from a local proof and would otherwise ship
@@ -145,6 +148,11 @@ RULES=(
   "MAINNET_DATE|2026-10-06|1|- Base mainnet"
   "DEPLOYER|0x<DRYRUN-DEPLOYER>|1|"
   "DELIVER_TX|0x<DRYRUN-DELIVER-TX>|1|"
+  # The burn txid the receive path does not log (chain.Watch issues the burn
+  # best-effort and prints nothing). It rides the same §3 proof line as the
+  # deliver txid, so a published burn note can name the transaction instead of
+  # explaining that it cannot.
+  "BURN_TX|0x<DRYRUN-BURN-TX>|1|"
   "EST_DATE|<<EST-DATE>>|1|"
   "EST_GAS_PRICE|<<EST-GAS-PRICE>>|1|"
   "EST_DEPLOY_GAS|<<EST-DEPLOY-GAS>>|1|"
@@ -185,6 +193,7 @@ MAINNET_TX=0x                                       # its creation txid
 MAINNET_DATE=YYYY-MM-DD                             # the Base mainnet deployment date
 DEPLOYER=0x                                         # the funded key that deployed it
 DELIVER_TX=0x                                       # one deliver txid from the two-party proof
+BURN_TX=0x                                          # the burn txid for that delivery (recovered from chain state)
 
 # From the post-deploy `spore contract estimate -rpc … -from … -mailbox …` run.
 EST_DATE=YYYY-MM-DD
@@ -365,6 +374,24 @@ load_values() {
     [ -n "${V[$tx]:-}" ] && [ -n "${V[DELIVER_TX]:-}" ] || continue
     if [ "${V[DELIVER_TX]}" = "${V[$tx]}" ]; then
       echo "release-fill: DELIVER_TX equals $tx — a deliver is not a contract creation" >&2
+      problems=1
+    fi
+  done
+  # The burn txid is a fourth transaction. The DRY RUN wrote one
+  # `0x<DRYRUN-TX>` marker for every txid in the patches, so a receipt that
+  # leaves two of these equal is a receipt that was copied, not measured — and
+  # a §3 note naming the wrong transaction as the burn is exactly the kind of
+  # false claim this fill exists to make impossible.
+  for pair in "DELIVER_TX BURN_TX:a deliver is not the burn" \
+              "SEPOLIA_TX BURN_TX:a contract creation is not the burn" \
+              "MAINNET_TX BURN_TX:a contract creation is not the burn"; do
+    a=${pair%% *}
+    b=${pair#* }
+    b=${b%%:*}
+    what=${pair#*:}
+    [ -n "${V[$a]:-}" ] && [ -n "${V[$b]:-}" ] || continue
+    if [ "${V[$a]}" = "${V[$b]}" ]; then
+      echo "release-fill: $a and $b are the same txid (${V[$a]}) — $what" >&2
       problems=1
     fi
   done
