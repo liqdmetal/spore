@@ -348,6 +348,15 @@ deliberately never invokes. The OSS-Fuzz-shaped build recipe this whole
 pipeline descends from is preserved in the `projects/spore` integration of the
 oss-fuzz fork.
 
+**Corpus:** Go's fuzzer accumulates every input it finds interesting in
+`$GOCACHE/fuzz/…`, which compounds on one machine but dies with the build cache
+and is invisible to review. `scripts/fuzz-corpus.sh` is the durable store: it
+harvests that cache into each package's `testdata/fuzz/<Target>/`, which Go
+loads as seed corpus on the next run, so a saved corpus survives a cache wipe
+and travels with the clone. Entries are content-addressed, so a save is
+additive and never rewrites one. `scripts/fuzz-smoke.sh` prints a one-line
+nudge when a run has found inputs that are not saved yet.
+
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
 legacy flow cannot feed the downloaded corpus to the non-std-lib Go

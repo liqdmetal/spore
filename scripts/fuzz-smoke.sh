@@ -174,3 +174,9 @@ done
 label="FUZZ SMOKE GREEN"
 [ "$DEEP" -eq 1 ] && label="FUZZ DEEP GREEN"
 echo "$label — $n target(s), ${FUZZTIME}s each (wirefuzz + ratchetwire)"
+
+# Say (quietly) when this run discovered inputs worth keeping: the cache
+# compounds on this machine, but only a save puts them where the next clone
+# starts from them. fuzz-corpus.sh owns that mapping and stays silent when
+# there is nothing new.
+bash "$REPO_ROOT/scripts/fuzz-corpus.sh" -q

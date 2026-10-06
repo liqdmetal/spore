@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\xa3aMnPeer.FabricPopaS\x02aE`\xa3f\x10\x00ndlex@fb59a51753549G9ab110498f2ec2896032892870f633ec208269549fff1012b7etokenx@933f14372d28966a4669ac60e581894df6b388b2fcb13cf709f9d61c5202034bcmax\x18@")
