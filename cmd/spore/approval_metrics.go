@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -94,6 +95,7 @@ type approvalMetrics struct {
 //
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] [-json]
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] -envelope
+//	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] -prometheus
 func msgApprovalMetrics(args []string) {
 	fs := flag.NewFlagSet("msg approval-metrics", flag.ExitOnError)
 	dir := fs.String("dir", "", "approval request queue directory to summarize (defaults to -state-dir or the current dir)")
@@ -101,8 +103,9 @@ func msgApprovalMetrics(args []string) {
 	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory whose approval-spent ledger marks consumed nonces")
 	asJSON := fs.Bool("json", false, "emit metrics in machine-readable JSON format")
 	envelope := fs.Bool("envelope", false, "emit one compact JSON heartbeat line (the -watch -metrics-json format: at, station, metrics) instead of a summary")
+	prom := fs.Bool("prometheus", false, "emit metrics in the Prometheus text exposition format (scraper or node_exporter textfile collector)")
 	_ = fs.Parse(args)
-	if err := validateApprovalMetricsOutputFlags(*asJSON, *envelope); err != nil {
+	if err := validateApprovalMetricsOutputFlags(*asJSON, *envelope, *prom); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(2)
 	}
@@ -130,6 +133,10 @@ func msgApprovalMetrics(args []string) {
 		check(enc.Encode(newWatchMetricsEnvelope(time.Now(), m)))
 		return
 	}
+	if *prom {
+		renderPrometheusMetrics(m)
+		return
+	}
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -140,12 +147,22 @@ func msgApprovalMetrics(args []string) {
 }
 
 // validateApprovalMetricsOutputFlags refuses contradictory output-format
-// selections: -json (indented raw metrics) and -envelope (one compact
-// heartbeat line) are alternative renderings of the same summary, not
-// layers that compose.
-func validateApprovalMetricsOutputFlags(asJSON, envelope bool) error {
-	if asJSON && envelope {
-		return errors.New("approval-metrics: -json and -envelope are alternative output formats; choose one (-envelope wraps the metrics in the watch heartbeat shape)")
+// selections: -json (indented raw metrics), -envelope (one compact heartbeat
+// line), and -prometheus (text exposition) are alternative renderings of the
+// same summary, not layers that compose.
+func validateApprovalMetricsOutputFlags(asJSON, envelope, prometheus bool) error {
+	var chosen []string
+	if asJSON {
+		chosen = append(chosen, "-json")
+	}
+	if envelope {
+		chosen = append(chosen, "-envelope")
+	}
+	if prometheus {
+		chosen = append(chosen, "-prometheus")
+	}
+	if len(chosen) > 1 {
+		return fmt.Errorf("approval-metrics: %s are alternative output formats; choose one (-envelope wraps the metrics in the watch heartbeat shape; -prometheus renders the text exposition format)", strings.Join(chosen, ", "))
 	}
 	return nil
 }
@@ -417,6 +434,77 @@ func renderApprovalMetrics(m *approvalMetrics) {
 		if l := o.PostLatency; l != nil {
 			fmt.Printf("  post latency (signed -> spent), %d matched: %s\n", l.Matched, formatMetricLatency(l))
 		}
+	}
+}
+
+// renderPrometheusMetrics prints the summary in the Prometheus text
+// exposition format, for a scraper or the node_exporter textfile collector
+// (`spore msg approval-metrics ... -prometheus > textfile.prom` from cron).
+// Every series is a gauge over the same artifacts the human summary reads.
+// Map families are sorted by label value so the output is deterministic and
+// diffable across scrapes; label values are escaped per the exposition
+// format (backslash, double quote, newline).
+func renderPrometheusMetrics(m *approvalMetrics) {
+	escape := strings.NewReplacer(`\`, `\\`, "\n", `\n`, `"`, `\"`)
+	promValue := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+	promScalar := func(name, help string, value float64) {
+		fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n%s %s\n", name, help, name, name, promValue(value))
+	}
+	promFamily := func(name, help, labelName string, counts map[string]int) {
+		if len(counts) == 0 {
+			return
+		}
+		fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
+		keys := make([]string, 0, len(counts))
+		for k := range counts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("%s{%s=\"%s\"} %d\n", name, labelName, escape.Replace(k), counts[k])
+		}
+	}
+
+	promScalar("spore_approval_queue_requests", "Requests currently visible in the approval queue.", float64(m.Requests))
+	promScalar("spore_approval_ignored_files", "Non-envelope files in the queue directory (queue hygiene noise).", float64(m.IgnoredFiles))
+	promFamily("spore_approval_requests_by_status", "Requests in the queue by classification status.", "status", m.Status)
+	promFamily("spore_approval_requests_by_skip_reason", "Requests by the reason they are not signable right now.", "reason", m.SkipReasons)
+	promFamily("spore_approval_requests_by_chain", "Requests in the queue by chain.", "chain", m.Chains)
+	promFamily("spore_approval_requests_by_action", "Requests in the queue by requested action.", "action", m.Actions)
+	if m.StateDir != "" {
+		promScalar("spore_approval_spent_nonces", "Nonces burned in the approval-spent replay ledger.", float64(m.SpentNonces))
+	}
+	promScalar("spore_approval_locks_live", "Signing locks currently live in the queue.", float64(m.Locks.Live))
+	promScalar("spore_approval_locks_oldest_age_seconds", "Age of the oldest live signing lock; at approvalLockTTL (60s) the next scan stale-breaks it.", m.Locks.OldestAge)
+	orphaned := 0
+	for _, e := range m.Locks.Entries {
+		if e.Orphaned {
+			orphaned++
+		}
+	}
+	promScalar("spore_approval_locks_orphaned", "Live locks whose guarded request file is gone (holder crashed; residue until the stale-break).", float64(orphaned))
+	if m.OldestPending != nil {
+		fmt.Printf("# HELP spore_approval_oldest_pending_age_seconds Age of the longest-waiting pending request; at the 15-minute approval TTL it can never be signed.\n# TYPE spore_approval_oldest_pending_age_seconds gauge\nspore_approval_oldest_pending_age_seconds{path=\"%s\"} %s\n",
+			escape.Replace(m.OldestPending.Path), promValue(m.OldestPending.AgeSeconds))
+	}
+	if o := m.Outbox; o != nil {
+		promScalar("spore_approval_outbox_signed_outputs", "Signed approvals in the outbox.", float64(o.SignedOutputs))
+		promScalar("spore_approval_outbox_signed_unspent", "Signed approvals still waiting on the requester's send.", float64(o.UnspentSigned))
+		promScalar("spore_approval_outbox_matched_requests", "Signed approvals matched back to a queue request for latency math.", float64(o.MatchedRequests))
+		promLatency := func(name, help string, l *approvalMetricsLatency) {
+			if l == nil {
+				return
+			}
+			fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
+			for _, stat := range []struct {
+				key   string
+				value float64
+			}{{"min", l.Min}, {"p50", l.P50}, {"p95", l.P95}, {"max", l.Max}, {"mean", l.Mean}} {
+				fmt.Printf("%s{stat=%q} %s\n", name, stat.key, promValue(stat.value))
+			}
+		}
+		promLatency("spore_approval_sign_latency_seconds", "Request created -> approval signed, nearest-rank percentiles over matched samples.", o.SignLatency)
+		promLatency("spore_approval_post_latency_seconds", "Approval signed -> nonce burned, nearest-rank percentiles over matched samples.", o.PostLatency)
 	}
 }
 

@@ -309,25 +309,117 @@ func TestApprovalMetricsEnvelopeOneShot(t *testing.T) {
 	}
 }
 
-// TestValidateApprovalMetricsOutputFlags pins the -json/-envelope rule: the
-// two machine-readable renderings are alternatives, never layers.
+// TestValidateApprovalMetricsOutputFlags pins the output-format rule: -json,
+// -envelope, and -prometheus are alternative renderings, never layers.
 func TestValidateApprovalMetricsOutputFlags(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		asJSON   bool
-		envelope bool
+		name       string
+		asJSON     bool
+		envelope   bool
+		prometheus bool
 	}{
-		{"summary", false, false},
-		{"json only", true, false},
-		{"envelope only", false, true},
+		{"summary", false, false, false},
+		{"json only", true, false, false},
+		{"envelope only", false, true, false},
+		{"prometheus only", false, false, true},
 	} {
-		if err := validateApprovalMetricsOutputFlags(tc.asJSON, tc.envelope); err != nil {
+		if err := validateApprovalMetricsOutputFlags(tc.asJSON, tc.envelope, tc.prometheus); err != nil {
 			t.Errorf("%s: unexpected error: %v", tc.name, err)
 		}
 	}
-	err := validateApprovalMetricsOutputFlags(true, true)
-	if err == nil || !strings.Contains(err.Error(), "-json and -envelope") {
-		t.Fatalf("both output flags must be refused, got: %v", err)
+	for _, tc := range []struct {
+		name       string
+		asJSON     bool
+		envelope   bool
+		prometheus bool
+		want       string
+	}{
+		{"json+envelope", true, true, false, "-json, -envelope"},
+		{"json+prometheus", true, false, true, "-json, -prometheus"},
+		{"envelope+prometheus", false, true, true, "-envelope, -prometheus"},
+		{"all three", true, true, true, "-json, -envelope, -prometheus"},
+	} {
+		err := validateApprovalMetricsOutputFlags(tc.asJSON, tc.envelope, tc.prometheus)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want error naming %q, got: %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+// TestApprovalMetricsPrometheusExposition pins `msg approval-metrics
+// -prometheus`: the text exposition format with deterministic, sorted series
+// over the same artifacts the human summary reads — including the orphaned
+// lock count and the oldest-pending age the station health gate keys on.
+func TestApprovalMetricsPrometheusExposition(t *testing.T) {
+	queueDir, _ := lockTestRequest(t, t.TempDir(), "promone", time.Now())
+	queueDir = filepath.Dir(queueDir)
+	if err := os.WriteFile(filepath.Join(queueDir, "ghost.lock"), []byte("ghost 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	// Lock and pending ages are wall-clock values that legitimately tick
+	// between scrapes; determinism means the same families, labels, and
+	// ordering, so compare with the trailing series values stripped.
+	norm := func(s string) string {
+		lines := strings.Split(s, "\n")
+		for i, l := range lines {
+			if !strings.HasPrefix(l, "#") {
+				if idx := strings.LastIndex(l, " "); idx > 0 {
+					lines[i] = l[:idx]
+				}
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	var first string
+	for run := 0; run < 2; run++ {
+		out := captureApprovalTestOutput(t, func() {
+			msgApprovalMetrics([]string{"-dir", queueDir, "-state-dir", stateDir, "-prometheus"})
+		})
+		if run == 0 {
+			first = out
+			continue
+		}
+		if norm(out) != norm(first) {
+			t.Fatalf("prometheus output must be deterministic across scrapes (modulo wall-clock ages):\nfirst:\n%s\nsecond:\n%s", first, out)
+		}
+	}
+	for _, want := range []string{
+		"# TYPE spore_approval_queue_requests gauge",
+		"spore_approval_queue_requests 1",
+		`spore_approval_requests_by_status{status="PENDING"} 1`,
+		"spore_approval_spent_nonces 0",
+		"spore_approval_locks_live 1",
+		"spore_approval_locks_orphaned 1",
+		`spore_approval_oldest_pending_age_seconds{path="`,
+	} {
+		if !strings.Contains(first, want) {
+			t.Errorf("prometheus exposition missing %q, got:\n%s", want, first)
+		}
+	}
+	for _, unwanted := range []string{
+		"spore_approval_outbox", // no -out-dir: the outbox family must be absent
+		"spore_approval_sign_latency",
+	} {
+		if strings.Contains(first, unwanted) {
+			t.Errorf("prometheus exposition must not contain %q without -out-dir, got:\n%s", unwanted, first)
+		}
+	}
+	// Series within a family must be sorted by label value (determinism).
+	statusBlock := first[strings.Index(first, "# HELP spore_approval_requests_by_status"):]
+	statusBlock = statusBlock[:strings.Index(statusBlock, "# HELP")]
+	lines := strings.Split(strings.TrimSpace(statusBlock), "\n")
+	var series []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "spore_approval_requests_by_status{") {
+			series = append(series, l)
+		}
+	}
+	for i := 1; i < len(series); i++ {
+		if series[i-1] > series[i] {
+			t.Errorf("status family series not sorted: %v", series)
+			break
+		}
 	}
 }
 
