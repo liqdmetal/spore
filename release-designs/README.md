@@ -81,6 +81,25 @@ deployment-day commit described in
   Windows box with `core.autocrlf=true`, git would otherwise rewrite the docs
   to CRLF and the fee-notes claim — which needs a literal newline plus exactly
   three spaces — would fail an otherwise perfect flip.
+- **`scripts/release-fill.sh`** is the fill itself, executable — the step the
+  runbook used to describe by hand. Both frozen patches deliberately ship
+  *markers* (they must be appliable before the deployment exists), and this is
+  what replaces every one of them from a single key=value receipt file: both §3
+  STATUS rows, the deliver tx, the address the burn note cites, the registry
+  entry, and the fee block's measured numbers. It refuses a partial fill — each
+  rule's anchor must resolve exactly once, and it will not leave a tree that
+  half-claims a deployment. `--check` needs no values and only proves the
+  anchors still resolve, which is what catches a doc edit that moved a line out
+  from under the patches.
+- **`scripts/release-fill-rehearsal.sh`** proves that fill is *satisfiable*.
+  Nothing else checked the positive direction: that replacing every marker with
+  real values actually clears the sweep below and keeps the receipt gate green,
+  rather than only that the sweep still flags the unfilled tree. It deploys the
+  pinned bytecode to a local Anvil, runs the runbook's own
+  `spore contract estimate` against it, fills a scratch tree from those real
+  values, then requires the sweep to pass and the referee to be green — and
+  perturbs the registry address to require the referee to fail, so a fill that
+  disagrees with the receipt cannot pass either way.
 - **`scripts/release-placeholders.sh`** is the last check before the tag, and
   the one nothing else replaces. Both patches ship *markers* (the dry run's
   synthetic receipt values and its `0x000…8453` address; the unfilled measured

@@ -19,6 +19,11 @@
 # fail. A gate that passes on both a released and an unreleased tree would
 # prove nothing.
 #
+# It also proves the fill step's recipe still matches: scripts/release-fill.sh
+# names every marker the passes introduce, and the line each one lives on, and a
+# doc edit that moves one out from under it would otherwise leave that marker
+# unreplaced on the one day it has to be replaced.
+#
 #   bash scripts/release-day-rehearsal.sh              # full rehearsal
 #   bash scripts/release-day-rehearsal.sh --check      # both passes apply in order, nothing run
 #   bash scripts/release-day-rehearsal.sh --flip-only  # rehearse pass 1 alone
@@ -181,9 +186,39 @@ if [ -n "$markers" ]; then
   printf '%s\n' "$markers" | sed 's/^ *\([0-9]*\) */     \1 x /'
 fi
 
+# ---- the fill recipe: a third artifact that can drift from the patches ------
+# release-fill.sh names every marker and the line it lives on. Both patches are
+# markers-only, so the recipe is as load-bearing as the patches themselves: a
+# doc edit that moves a line out from under it leaves a marker that a fill would
+# silently not replace. It needs no toolchain, so prove it on every push.
+echo
+echo "-- fill recipe (every marker still has the anchor the filler expects)"
+if [ ! -f scripts/release-fill.sh ]; then
+  echo "REHEARSAL FAILED: scripts/release-fill.sh is not in the rehearsed tree." >&2
+  echo "Rehearsing the committed tree means the filler must be committed too — otherwise" >&2
+  echo "release day is back to hand-editing markers under time pressure, which is exactly" >&2
+  echo "how a placeholder address ships." >&2
+  exit 1
+fi
+if ! bash scripts/release-fill.sh --check >"$tmp/fill.log" 2>&1; then
+  echo "REHEARSAL FAILED: the fill recipe no longer matches the frozen patches, so a fill" >&2
+  echo "would leave a marker behind. Re-derive the rule table against the patches." >&2
+  sed 's/^/  /' "$tmp/fill.log" >&2
+  exit 1
+fi
+if ! grep -q 'recipe ok' "$tmp/fill.log"; then
+  echo "REHEARSAL FAILED: the fill recipe found nothing to fill on a tree where both passes" >&2
+  echo "are applied. Either it is reading the wrong tree, or the patches stopped shipping" >&2
+  echo "markers and the fill step is no longer needed." >&2
+  sed 's/^/  /' "$tmp/fill.log" >&2
+  exit 1
+fi
+sed 's/^/  /' "$tmp/fill.log"
+
 if ((CHECK_ONLY)); then
   echo
-  echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $sha"
+  echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $sha,"
+  echo "and the fill recipe still resolves every marker they introduce"
   exit 0
 fi
 

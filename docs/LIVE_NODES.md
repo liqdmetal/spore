@@ -447,6 +447,15 @@ gone.
 3. **Paste the receipt into the STATUS block below** — address, creation
    tx, deployer, date, deliver txid — and flip the STATUS block's
    "shipped in" line from `<release>` to the shipping release.
+   Steps 3 and 4 are executable: with both frozen patches applied,
+   `bash scripts/release-fill.sh -in values` performs the whole receipt
+   substitution — both STATUS rows, the deliver tx, the address the burn
+   note cites, the registry entry, and the fee block's measured numbers —
+   from one key=value file, and REFUSES an incomplete receipt rather than
+   leaving a tree that half-claims a deployment. `bash
+   scripts/release-fill.sh --check` needs no values at all: it only
+   confirms every marker anchor still resolves, which is what catches a doc
+   edit that moved a line out from under the patches.
 4. **Add the registry entry** to `internal/evm/mailboxdefaults.go`:
 
    ```go
@@ -510,6 +519,16 @@ unfilled measured number. The receipt gate cannot substitute for it — a
 placeholder address is still `0x` + 40 hex and is still cited in §3, so a
 forgotten one would ship as the default mailbox for every user. Run it after
 filling; it must exit 0.
+
+The fill itself is rehearsed, not just documented.
+`scripts/release-fill-rehearsal.sh` deploys the pinned bytecode to a local
+Anvil, runs the runbook's own `spore contract estimate` against it, fills a
+scratch tree from those real values, and then requires the result to sweep
+clean *and* keep the referee green — the direction nothing else checks, since
+both frozen patches are markers-only until the deployment exists. It perturbs
+the registry address afterwards and requires the referee to fail, so a fill
+that disagrees with the receipt cannot pass as green. It self-skips without
+foundry, which makes it a pre-tag step rather than an inner-loop gate.
 
 `scripts/release-readiness.sh` is the single command that answers "am I ready to
 tag?": it composes the checks above with the registry's own state and the tag

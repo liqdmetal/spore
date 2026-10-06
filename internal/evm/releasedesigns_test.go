@@ -428,3 +428,67 @@ func TestReleaseDesignsExecutablePatchDeliversGateClaims(t *testing.T) {
 		t.Errorf("%d defect(s) in %s — release day applies this file byte for byte", len(bad), releaseDesignsPatchFile)
 	}
 }
+
+// TestReleaseFillRecipeCoversEveryMarker keeps the filler in step with the
+// markers the release introduces.
+//
+// Both patches are the SHAPE of the release, not the measurement: they ship
+// with the receipt values and the fee numbers left as markers, because they
+// have to be appliable before the deployment exists. scripts/release-fill.sh is
+// the step that substitutes the real values, and scripts/release-placeholders.sh
+// is what proves it ran — but the sweep can only read a tree where both patches
+// are ALREADY applied, so a marker a patch adds and the filler never learned is
+// invisible to it right up until the day it ships. Nothing else in this package
+// reads either patch for markers.
+//
+// The filler declares its rule table as literal marker text, so a containment
+// check is the correct contract here: parsing the script would couple this test
+// to its implementation, instead of to the one promise that matters — every
+// marker the release introduces has a rule that removes it.
+func TestReleaseFillRecipeCoversEveryMarker(t *testing.T) {
+	// Token-granular on purpose (the sweep script matches whole lines): the
+	// failure report has to name the exact marker a rule is missing for.
+	markerRe := regexp.MustCompile(`(<DRYRUN-[A-Za-z0-9 _-]*>|<<[A-Za-z0-9 _-]*>>|0x0{30,}[0-9a-fA-F]*)`)
+
+	tokens := map[string]bool{}
+	for _, patch := range []string{releaseDesignsPatchFile, releaseFeeNotesPatchFile} {
+		raw, err := os.ReadFile(patch)
+		if err != nil {
+			t.Fatalf("%s unreadable (%v) — release day would have no executable pass to fill", patch, err)
+		}
+		for _, ln := range strings.Split(string(raw), "\n") {
+			// Added lines only: a marker that is merely CONTEXT is already on
+			// the tree, so it is not this release's to fill.
+			if len(ln) == 0 || ln[0] != '+' || strings.HasPrefix(ln, "+++ ") {
+				continue
+			}
+			for _, m := range markerRe.FindAllString(ln, -1) {
+				tokens[m] = true
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		t.Fatal("neither patch adds a marker — this guard has lost sight of the fill surface and would pass vacuously")
+	}
+
+	const fillPath = "../../scripts/release-fill.sh"
+	raw, err := os.ReadFile(fillPath)
+	if err != nil {
+		t.Fatalf("the marker filler is unreadable (%v) — it is the only thing standing between a rehearsal placeholder and a shipped false claim", err)
+	}
+	fill := string(raw)
+
+	var missing []string
+	for tok := range tokens {
+		if !strings.Contains(fill, tok) {
+			missing = append(missing, tok)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		for _, tok := range missing {
+			t.Errorf("the release introduces the marker %s, but scripts/release-fill.sh has no rule for it — a marker the filler never learned ships as a false claim", tok)
+		}
+		t.Errorf("%d marker(s) missing from the fill recipe: add each to release-fill.sh's rule table so the fill can finish", len(missing))
+	}
+}

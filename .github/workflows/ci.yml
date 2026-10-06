@@ -179,6 +179,12 @@ jobs:
         # receipt, the unfilled fee numbers, its placeholder address). A leaked
         # one satisfies every other gate, so check the tree directly too.
         run: bash scripts/release-placeholders.sh
+      - name: Assert the fill recipe still resolves every marker
+        # The step after the passes: release day fills each marker from a
+        # receipt. No values are needed to prove the recipe still matches — this
+        # is the foundry-free half of scripts/release-fill-rehearsal.sh, which
+        # cannot run on a runner without anvil.
+        run: bash scripts/release-fill.sh --check
       - name: Rehearse the release-day passes (flip, then fees)
         run: bash scripts/release-day-rehearsal.sh
 

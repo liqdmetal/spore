@@ -273,6 +273,31 @@ echo
 echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
 run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s
 
+echo
+echo "== release fill: every marker anchor still resolves (no values needed) =="
+# The frozen patches ship markers, and release day replaces them from a receipt
+# values file. Cheap half of the pair below: this only proves each marker's
+# anchor still resolves, so a doc edit that moves a line out from under the
+# patches fails here in milliseconds instead of on deployment day.
+run_gate 'release fill anchors' bash scripts/release-fill.sh --check
+
+echo
+echo "== release fill rehearsal (real anvil deployment; self-skips without foundry) =="
+# The fill is the one release step nothing else exercises. Both frozen patches
+# are markers-only, and until now nothing had shown that filling every marker
+# actually CLEARS the sweep and keeps the referee green — only that the sweep
+# still flags the unfilled tree. This one deploys the pinned bytecode to a local
+# anvil, measures with the runbook's own `spore contract estimate`, fills a
+# scratch tree from those real values, and requires both. It needs foundry, so
+# -s turns a missing tool into a skip — never a silent pass. --quick keeps it
+# out of the inner loop (it deploys, then runs the referee twice, ~40s) and
+# leans on the anchor check above for the cheap half.
+if [ "$QUICK" -eq 1 ]; then
+  echo "-- release fill rehearsal — skipped (--quick)"
+else
+  run_gate 'release fill rehearsal' bash scripts/release-fill-rehearsal.sh -s
+fi
+
 # ---- summary ---------------------------------------------------------------
 if [ -n "$TIMINGS" ]; then
   echo
