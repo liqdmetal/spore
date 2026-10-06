@@ -76,8 +76,13 @@ deployment-day commit described in
   bash scripts/release-designs-check.sh --status   # what is still unfilled
   ```
 
-  It runs on every push (CI job `release-rehearsal`), so doc drift breaks the
-  build weeks before the deployment. Line endings are forced to LF: on a
+  There is deliberately no CI job for it: the release-day passes, the fill and
+  the placeholder sweep are local, run by hand before the tag (all three are
+  also wired into `scripts/gates.sh`, the pre-push gate). What CI does run on
+  every push is the Go guard in `internal/evm/releasedesigns_test.go`, which
+  pins the frozen patch's claims to the receipt gate — so a doc edit that moves
+  a required claim still fails the build, not the release. Line endings are
+  forced to LF: on a
   Windows box with `core.autocrlf=true`, git would otherwise rewrite the docs
   to CRLF and the fee-notes claim — which needs a literal newline plus exactly
   three spaces — would fail an otherwise perfect flip.
@@ -123,7 +128,7 @@ deployment-day commit described in
   body — no markers, no rehearsal values, a citation of `docs/LIVE_NODES.md` §3,
   and the draft's own title as the first line. `--self-test` proves both
   directions on a synthetically filled copy, because the draft cannot be filled
-  and still be a draft. The rehearsal runs all three on every push.
+  and still be a draft. The rehearsal exercises all three directions.
 - **`scripts/release-readiness.sh`** is what release day reads to answer "am I
   done?". It composes the checks above rather than re-deriving them — set
   integrity, tag-draft structure, tag fields, the marker sweep, the registry's

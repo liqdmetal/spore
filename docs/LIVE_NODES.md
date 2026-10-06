@@ -508,8 +508,9 @@ the passes above, in that order (the fee patch's base is the tree the flip
 produces), and `scripts/release-day-rehearsal.sh` applies both to a throwaway
 tree and runs the referee there — then removes the registry entry and requires
 the same run to fail, so a gate that accepts every tree cannot pass as a green
-rehearsal. It runs on every push; the deployment-day commit is the only run
-whose address is real.
+rehearsal. Run it before the tag — it is part of the local pre-push gate
+(`scripts/gates.sh`); the deployment-day commit is the only run whose address
+is real.
 
 Because both patches carry markers until the deployment produces the numbers,
 `scripts/release-placeholders.sh` is the last check before the tag: it derives

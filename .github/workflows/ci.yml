@@ -157,37 +157,6 @@ jobs:
           path: /tmp/smoke/*.log
           retention-days: 7
 
-  # Release day is the one operation that cannot be rehearsed in place: it
-  # applies the frozen flip patch to the real tree and runs the receipt gate.
-  # No other job touches that patch, so the docs could drift under it and the
-  # first symptom would be a failed release-day commit. This job applies it to
-  # a throwaway tree and runs the gate there — then removes ONLY the registry
-  # entry and requires the gate to fail, because a gate that accepts any tree
-  # would make the green run worthless. It is also the drift alarm on the
-  # frozen patch itself: edit a doc it anchors on and this fails within the
-  # push, not on deployment day.
-  release-rehearsal:
-    name: release-day rehearsal (frozen flip patch)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Assert the release surfaces carry no rehearsal marker
-        # Both patches are full of markers by design (the dry run's synthetic
-        # receipt, the unfilled fee numbers, its placeholder address). A leaked
-        # one satisfies every other gate, so check the tree directly too.
-        run: bash scripts/release-placeholders.sh
-      - name: Assert the fill recipe still resolves every marker
-        # The step after the passes: release day fills each marker from a
-        # receipt. No values are needed to prove the recipe still matches — this
-        # is the foundry-free half of scripts/release-fill-rehearsal.sh, which
-        # cannot run on a runner without anvil.
-        run: bash scripts/release-fill.sh --check
-      - name: Rehearse the release-day passes (flip, then fees)
-        run: bash scripts/release-day-rehearsal.sh
-
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
