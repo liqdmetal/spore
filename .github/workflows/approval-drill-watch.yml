@@ -1,0 +1,133 @@
+name: approval-drill-watch
+
+# The cross-process approval hardening, made automatic — the same tripwire
+# pattern as pin-freshness.yml and fork-parity-watch.yml, pointed at spore's
+# own two-station guarantees instead of an external repo. The things it
+# guards were all real bugs once: two stations racing one queue must never
+# double-sign a nonce (TestApprovalTwoStationDrillNeverDoubleSign, real OS
+# processes), the always-on station's self-metrics must reach stdout through
+# the real binary in both render modes (TestWatchStationSelfMetricsLive),
+# and the station health gate must pass on a healthy heartbeat and trip on
+# an orphaned lock (scripts/station-health.sh, live-fired here).
+#
+# Daily 05:33 UTC (an off-the-minute slot, like the other sentinels). A red
+# run is the primary flag; the tracking issue (marker
+# <!-- approval-drill-watch -->, label approval-drill) is the durable,
+# searchable one — opened on red, updated while red, auto-closed on green.
+# ci.yml already runs the full suite on every push; this sentinel exists for
+# the quiet weeks when nothing is pushed and the drill still has to run.
+
+on:
+  schedule:
+    - cron: "33 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: approval-drill-watch
+  cancel-in-progress: true
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Two-station double-sign drill (real OS processes)
+        id: drill
+        run: go test ./cmd/spore/ -run 'TestApprovalTwoStationDrillNeverDoubleSign' -count=1 -v
+
+      - name: Watch station self-metrics live smoke (real binary, both render modes)
+        id: smoke
+        run: go test ./cmd/spore/ -run 'TestWatchStationSelfMetricsLive' -count=1 -v
+
+      - name: Station health gate live fire (healthy passes, orphan trips)
+        id: gate
+        run: |
+          go build -o /tmp/spore ./cmd/spore
+          work="$(mktemp -d)"
+          mkdir -p "$work/queue"
+          # Healthy path: one real one-shot heartbeat over a fresh queue
+          # must pass the gate (exit 0).
+          /tmp/spore msg approval-metrics -dir "$work/queue" -envelope > "$work/station.jsonl"
+          bash scripts/station-health.sh -f "$work/station.jsonl"
+          # Negative control: an orphaned lock (no guarded request file)
+          # must trip the gate — the gate that never trips is the bug.
+          touch "$work/queue/orphan.lock"
+          /tmp/spore msg approval-metrics -dir "$work/queue" -envelope | bash scripts/station-health.sh -f - && {
+            echo "::error::station-health.sh did NOT trip on an orphaned lock"
+            exit 1
+          }
+          echo "health gate: healthy passed, orphaned-lock control tripped"
+
+      - name: Ensure the tracking label exists
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create approval-drill --repo "$GITHUB_REPOSITORY" \
+            --description "scheduled approval drill went red" \
+            --color D93F0B 2>/dev/null || true
+
+      - name: Manage the tracking issue (open on red, close on green)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- approval-drill-watch -->';
+            const ok = '${{ job.status }}' === 'success';
+            const drill = '${{ steps.drill.outcome }}';
+            const smoke = '${{ steps.smoke.outcome }}';
+            const gate = '${{ steps.gate.outcome }}';
+            const runUrl = 'https://github.com/' + context.repo.owner + '/' + context.repo.repo +
+                           '/actions/runs/' + context.runId;
+            const row = (name, outcome) => '| ' + name + ' | ' + outcome + ' |';
+            const body = [
+              'Approval drill report (scheduled sentinel):',
+              '',
+              '| check | result |',
+              '|---|---|',
+              row('two-station double-sign drill', drill),
+              row('watch self-metrics live smoke', smoke),
+              row('station health gate live fire', gate),
+              '',
+              ok
+                ? 'All checks green. (This issue auto-closes.)'
+                : 'A check went RED — see the run for logs: ' + runUrl,
+              '',
+              marker,
+            ].join('\n');
+            const q = 'repo:' + context.repo.owner + '/' + context.repo.repo +
+                      ' is:issue is:open in:body "' + marker + '"';
+            const found = await github.rest.search.issuesAndPullRequests({ q });
+            const num = found.data.items.length ? found.data.items[0].number : null;
+            if (!ok) {
+              if (num) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: num, body: 'Still red as of this run:\n\n' + body,
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: 'Approval drill went red on schedule',
+                  body: body, labels: ['approval-drill'],
+                });
+              }
+            } else if (num) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: num, body: 'Drill green again; auto-closing.\n\n' + body,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: num, state: 'closed',
+              });
+            }
