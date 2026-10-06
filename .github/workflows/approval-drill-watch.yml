@@ -186,6 +186,7 @@ jobs:
       # of this step failed silently that way (init path had no origin
       # remote, so the push died under set -e and the step looked green).
       - name: Append the drill heartbeat to the metrics branch
+        id: heartbeat
         if: always()
         continue-on-error: true
         env:
