@@ -5,29 +5,55 @@ permissions:
 
 
 on:
-  # Pushes to main run the gate. Tag pushes don't: a tag fires the Release
-  # workflow, whose pipeline is the tag's gate, and the tagged commit's CI
-  # already ran when it landed on main — running CI on the tag ref only ever
-  # duplicated that run. PRs run on their merge-refs; the concurrency group
-  # still cancels superseded runs on the same ref.
+  # Pushes to main run the FAST gate only — see `jobs:` below for the four jobs
+  # that is. Tag pushes don't run CI at all: a tag fires the Release workflow,
+  # whose pipeline is the tag's gate, and the tagged commit's CI already ran
+  # when it landed on main, so running CI on the tag ref only ever duplicated
+  # that run. PRs run on their merge-refs; the concurrency group still cancels
+  # superseded runs on the same ref. workflow_dispatch is how the expensive
+  # jobs are run on demand.
   push:
     branches:
       - main
   pull_request:
   workflow_dispatch:
+  # Weekly, for the two jobs whose inputs decay without any new code: fuzz-smoke
+  # (a parser bug reachable from a mutated input) and govulncheck (a CVE
+  # published against code that never changed). Monday 06:40 UTC, clear of
+  # pin-freshness (06:20) and fork-parity-watch (06:47).
+  schedule:
+    - cron: '40 6 * * 1'
 
 # Cancel superseded PR runs (same branch, newer commit) instead of letting
 # stale runs grind to completion.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Scoped per event as well as per ref: with one group shared across events,
+  # the weekly run could cancel an in-flight push run (a cancelled check is not
+  # a passing one), or be cancelled by the next push before it reports.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # WHICH JOBS AN ORDINARY PUSH RUNS IS A DELIBERATE CHOICE, NOT ALL OF THEM.
+  # A push to main spends minutes on four: this build/vet/test job and the
+  # three fast static/doc gates further down. Everything else is expensive per
+  # run — two Windows runners, the race pass, the Rust wire-contract build, the
+  # stub-chain rehearsal, ten fuzz targets, two release builds and their
+  # manifest, and a network vuln scan — and most commits cannot change any of
+  # it. Those jobs run on demand (Actions -> CI -> Run workflow) and, for
+  # fuzz-smoke and govulncheck, on the weekly schedule above.
+  #
+  # A skipped job reports as SKIPPED, and GitHub counts a skipped required check
+  # as passing, so a branch rule that names any of them cannot hang on a push
+  # that skipped it. Nothing here is deleted: the definitions stay, and a
+  # dispatch runs the whole set exactly as a push used to.
+  #
   # First signal: the fast, uninstrumented suite. Build/vet/test breakage
-  # surfaces here in minutes; the -race jobs below then double-check the
-  # same commit under the race detector without delaying this result.
+  # surfaces here in minutes; the -race jobs then double-check the same commit
+  # under the race detector when they are run.
   test:
     name: build + vet + test
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -50,6 +76,7 @@ jobs:
   # matter most. Build and vet already passed on this exact commit in `test`.
   test-race:
     name: build + vet + test -race
+    if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -63,6 +90,7 @@ jobs:
 
   windows:
     name: Windows build + vet + test
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -78,6 +106,7 @@ jobs:
 
   windows-race:
     name: Windows test -race
+    if: github.event_name == 'workflow_dispatch'
     needs: windows
     runs-on: windows-latest
     steps:
@@ -96,6 +125,10 @@ jobs:
   # drift apart. The audited pin lives in that file too.
   spore-peer:
     name: spore-peer Rust + wire contract
+    # Also dispatched by the peer repo itself (repository_dispatch in
+    # spore-peer-contract.yml), so the cross-repo contract still fires on a
+    # spore-peer push even though a spore push no longer runs it.
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/spore-peer-contract.yml
 
   # The Phase A runbook can bit-rot silently: it drives spore's real CLI
@@ -109,6 +142,7 @@ jobs:
   # ABI drift fails here instead of at the next real rehearsal.
   rehearsal-smoke:
     name: sepolia rehearsal smoke (stub chain)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -159,6 +193,7 @@ jobs:
 
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     strategy:
       # One target finding a crash must not mask the others.
@@ -204,6 +239,7 @@ jobs:
 
   windows-release:
     name: Windows release binary
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -221,6 +257,7 @@ jobs:
 
   linux-release:
     name: Linux release binary
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -238,6 +275,7 @@ jobs:
 
   release-manifest:
     name: Release manifest
+    if: github.event_name == 'workflow_dispatch'
     needs: [windows-release, linux-release]
     runs-on: ubuntu-latest
     steps:
@@ -267,6 +305,7 @@ jobs:
           retention-days: 7
   gofmt:
     name: gofmt (blocking gate)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -286,6 +325,7 @@ jobs:
 
   audit-refs:
     name: audit doc commit refs
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -302,6 +342,7 @@ jobs:
 
   goimports:
     name: goimports (import-section gate)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -325,6 +366,7 @@ jobs:
 
   govulncheck:
     name: govulncheck (reachable vulns gate)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
