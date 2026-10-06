@@ -427,8 +427,12 @@ Phase B ends with a deployed contract and a proven two-party round. What
 follows is the publication sequence, in order — each step names the check
 that keeps it honest. The exact flipped wording for step 5 is pinned by
 `internal/evm/mailboxdefaults_test.go` (the receipt gate), which is the
-in-repo source of truth for every string involved; this runbook stays valid
-even when out-of-repo design notes are gone.
+in-repo source of truth for every string involved. The ready-to-apply flip
+patch is vendored at
+[`release-designs/v0.9.0-doc-flips.md`](../release-designs/v0.9.0-doc-flips.md),
+with the line-wrap constraints a 2026-10-06 rehearsal found annotated at its
+end — so this runbook stays valid even if the out-of-repo design notes are
+gone.
 
 1. **Capture the receipt.** From the Phase B outputs (and Phase A if it
    ran): contract address, creation tx, deployer, date, one deliver txid.

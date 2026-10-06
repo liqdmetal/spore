@@ -10,8 +10,10 @@ package evm
 // The same gate covers the public doc CLAIMS (README chain table, the
 // CARRIER_MATRIX EVM row, the LIVE_NODES header): none may flip to "live"
 // before the registry does, and all must flip together with it. The
-// ready-to-apply flip wording lives in release-designs/ (outside this
-// repo); deployment day copies it verbatim.
+// ready-to-apply flip wording is vendored in-tree at
+// release-designs/v0.9.0-doc-flips.md — annotated with the line-wrap
+// constraints a dry-run rehearsal found — and deployment day applies it
+// verbatim.
 import (
 	"fmt"
 	"os"
