@@ -99,6 +99,15 @@ deployment-day commit described in
   and the draft's own title as the first line. `--self-test` proves both
   directions on a synthetically filled copy, because the draft cannot be filled
   and still be a draft. The rehearsal runs all three on every push.
+- **`scripts/release-readiness.sh`** is what release day reads to answer "am I
+  done?". It composes the checks above rather than re-deriving them — set
+  integrity, tag-draft structure, tag fields, the marker sweep, the registry's
+  own state, and whether both frozen passes still land — and exits 1 while
+  anything is outstanding, naming each blocker with the command that clears it.
+  It also prints the checklist steps it does **not** cover, so a green run is
+  never mistaken for "the deployment happened". It is expected to exit 1 until
+  release day, so it is not a pre-push gate; the rehearsal asserts it is
+  blocked on the released-shape tree.
 - **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
   when a draft is missing or a tracked file points at a `release-designs/`
   artifact that does not exist.

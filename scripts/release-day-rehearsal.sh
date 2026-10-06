@@ -92,14 +92,9 @@ for tool in git tar mktemp; do
     exit 2
   }
 done
-if ! command -v go >/dev/null 2>&1; then
-  if ((SELF_SKIP)); then
-    echo "SKIP release-day rehearsal: the Go toolchain is not on PATH (self-skip)"
-    exit 0
-  fi
-  echo "release-day-rehearsal: go not found - pass -s to self-skip" >&2
-  exit 2
-fi
+# The Go check comes AFTER the scratch tree is built: --check only runs
+# `git apply --check`, so requiring a toolchain for it would block the callers
+# that just want to know whether the passes still land (release-readiness.sh).
 for p in "$PATCH_FLIP" "$PATCH_FEE"; do
   [ -f "$p" ] || {
     echo "release-day-rehearsal: $p is missing — release day has no executable pass" >&2
@@ -192,6 +187,16 @@ if ((CHECK_ONLY)); then
   exit 0
 fi
 
+if ! command -v go >/dev/null 2>&1; then
+  if ((SELF_SKIP)); then
+    echo "SKIP release-day rehearsal: the Go toolchain is not on PATH (self-skip)"
+    exit 0
+  fi
+  echo "release-day-rehearsal: the passes apply, but go is not on PATH for the referee —" >&2
+  echo "pass -s to self-skip when run without one" >&2
+  exit 2
+fi
+
 run_gate() { # run_gate LOGFILE -> runs the referee, returns its status
   go test ./internal/evm ./cmd/spore -count=1 >"$1" 2>&1
 }
@@ -243,6 +248,21 @@ if ! bash scripts/release-tag-message.sh --self-test >/dev/null; then
   exit 1
 fi
 echo "   structure ok; refuses the unfilled draft; strips and validates a filled one"
+
+# The readiness aggregator is what release day reads to answer "am I done?".
+# It must be blocked on THIS tree — unfilled fields, an empty registry — or it
+# would green-light a tag with a placeholder in it.
+if [ -f scripts/release-readiness.sh ]; then
+  echo
+  echo "-- readiness aggregator (must be BLOCKED on this tree, which is not release-ready)"
+  if bash scripts/release-readiness.sh --quiet; then
+    echo "REHEARSAL FAILED: release-readiness.sh called this tree ready to tag." >&2
+    echo "It carries unfilled fields and an empty registry, so the aggregator is blind." >&2
+    exit 1
+  fi
+  nb=$(bash scripts/release-readiness.sh 2>/dev/null | sed -n 's/^NOT READY TO TAG — \([0-9]*\) blocker.*/\1/p' || true)
+  echo "   blocked, as it must be — ${nb:-?} blocker(s)"
+fi
 
 # ---- phase 1: flip + fees, the gate must pass ------------------------------
 # (skipped under --sabotage-only, which exists to show the negative alone)

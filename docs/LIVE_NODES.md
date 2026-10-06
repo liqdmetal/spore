@@ -511,6 +511,14 @@ placeholder address is still `0x` + 40 hex and is still cited in §3, so a
 forgotten one would ship as the default mailbox for every user. Run it after
 filling; it must exit 0.
 
+`scripts/release-readiness.sh` is the single command that answers "am I ready to
+tag?": it composes the checks above with the registry's own state and the tag
+draft's structure, exits 1 while anything is outstanding, names each blocker
+with the command that clears it, and prints the checklist steps no machine can
+decide. It is expected to be blocked until release day. It never replaces the
+tag itself: the signed tag is still the last action, and `scripts/release-tag-message.sh --write`
+prepares its message.
+
 ### Post-launch: the compost watchdog (the red signal)
 
 The deployment's headline claim is that a delivered message composts — the

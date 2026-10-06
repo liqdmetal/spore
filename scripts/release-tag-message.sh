@@ -48,6 +48,7 @@ usage: bash scripts/release-tag-message.sh [--check] [--print] [--write] [--self
   --write      strip into -final.txt and validate it; refuses while markers remain
   --self-test  prove the strip+validate logic accepts a filled draft and refuses
                an unfilled one (writes only inside a temp dir)
+  --fields     print the number of unfilled fields and exit (0 when none remain)
   --in PATH    draft to read (default: release-designs/v0.9.0-tag-message.txt)
   --out PATH   file --write produces (default: release-designs/v0.9.0-tag-message-final.txt)
   -h, --help   this message
@@ -63,6 +64,7 @@ while [ $# -gt 0 ]; do
     --print) MODE=print ;;
     --write) MODE=write ;;
     --self-test) MODE=self-test ;;
+    --fields) MODE=fields ;;
     --in)
       shift
       IN="${1:-}"
@@ -240,6 +242,14 @@ case "$MODE" in
       echo "release-tag-message: structure ok; $n field(s) still unfilled (expected until release day):"
       body "$IN" | grep -o '<<FILL: [^>]*' | sed 's/^/     /' | cut -c1-96
     fi
+    exit 0
+    ;;
+  fields)
+    [ -f "$IN" ] || {
+      echo "release-tag-message: $IN is missing" >&2
+      exit 2
+    }
+    fields "$IN"
     exit 0
     ;;
   print)
