@@ -45,6 +45,12 @@ deployment-day commit described in
   stated in `v0.9.0-doc-flips.md`, and the registry entry it installs must be
   documented. Change the gate's required wording without updating the patch and
   this test fails — instead of release day failing mid-apply.
+- **`TestReleaseDesignsNamesResolveInRepo`** guards this set as a *document*.
+  It resolves every script, doc, contract, package, and `Test…` name the six
+  files mention, so renaming `scripts/sepolia_rehearsal.sh` or an
+  `internal/evm` test cannot quietly turn release-day instructions into
+  fiction. The one deliberate gap is `v0.9.0-tag-message-final.txt`, created at
+  tag time — kept in step with `NOT_YET` in `scripts/release-designs-check.sh`.
 - **`TestReleaseDesignsExecutablePatchDeliversGateClaims`** covers the artifact
   release day actually runs. It reconstructs every hunk's post-apply text from
   `v0.9.0-doc-flips.patch` and requires each gated claim to appear **raw** in

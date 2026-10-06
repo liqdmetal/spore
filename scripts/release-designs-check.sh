@@ -87,7 +87,12 @@ if ((SHOW_STATUS == 1)); then
   for f in "${EXPECTED[@]}"; do [ -f "$DIR/$f" ] && present=$((present + 1)); done
   echo "release-designs readiness — v0.9.0 release-prep set"
   echo "  drafts present: $present/${#EXPECTED[@]}"
-  echo "  unresolved placeholders (expected until release day):"
+  # Raw marker occurrences, NOT a worklist: the .md drafts also MENTION markers
+  # in their own prose ("replace `<release>`…", "fill every `<<FILL:…>>`"), so
+  # this count overstates what is left to type in. The worklists that do not
+  # overstate live in release-tag-message.sh (the tag fields) and
+  # release-day-rehearsal.sh (the applied artifacts) — use those to decide.
+  echo "  raw marker occurrences (prose mentions included — expected until release day):"
   for f in \
     v0.9.0-pretag-checklist.md \
     v0.9.0-doc-flips.md \
@@ -111,6 +116,8 @@ if ((SHOW_STATUS == 1)); then
   else
     echo "  tag-message-final.txt: absent (created at tag time, last step)"
   fi
+  echo "  real fill targets: bash scripts/release-tag-message.sh --fields, and the"
+  echo "    list release-day-rehearsal.sh prints; readiness: bash scripts/release-readiness.sh"
   echo "  referee: go test ./internal/evm ./cmd/spore -count=1"
 fi
 

@@ -14,7 +14,10 @@ package evm
 // warning until the flip commit.
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -75,6 +78,116 @@ func TestReleaseDesignsPatchDocumentsRegistryEntry(t *testing.T) {
 		if !strings.Contains(patch, want) {
 			t.Errorf("the vendored patch does not document the registry entry field %q", want)
 		}
+	}
+}
+
+// TestReleaseDesignsNamesResolveInRepo guards the release paperwork as a
+// document, not as a patch. It names scripts, docs, contracts, packages, and
+// tests by name, and those instructions are read by a human under time
+// pressure on the one day the repository must not lie. A rename anywhere else
+// silently turns them into fiction, and nothing else reads them: the receipt
+// gate checks claims about the deployment, not whether `scripts/foo.sh` still
+// exists. Every name the six files use has to resolve here.
+func TestReleaseDesignsNamesResolveInRepo(t *testing.T) {
+	repo := "../.."
+
+	// The one name that is deliberately absent: it is created at tag time by
+	// scripts/release-tag-message.sh --write, as the last action. Keep this in
+	// step with NOT_YET in scripts/release-designs-check.sh.
+	notYet := map[string]bool{"v0.9.0-tag-message-final.txt": true}
+
+	// pathRe matches repository paths (packages included, so a moved package is
+	// caught too); bareRe matches a document named without a directory.
+	pathRe := regexp.MustCompile(`(?:scripts|docs|internal|cmd|contracts|tools)/[A-Za-z0-9_./-]*[A-Za-z0-9_]`)
+	// The leading class excludes a path separator and the ellipsis: the drafts
+	// write shorthand like "`…final.txt`" for a long name, and that tail is not
+	// a filename anybody has to resolve.
+	bareRe := regexp.MustCompile(`(?:^|[^/A-Za-z0-9_.\-…])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:md|txt|patch))`)
+	testRe := regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*\b`)
+
+	var texts []string
+	for _, name := range []string{
+		"README.md", "v0.9.0-pretag-checklist.md", "v0.9.0-doc-flips.md",
+		"v0.9.0-fee-notes.md", "v0.9.0-tag-message.txt", "v0.9.0-landing-card.md",
+	} {
+		raw, err := os.ReadFile("../../release-designs/" + name)
+		if err != nil {
+			t.Fatalf("release-designs/%s unreadable: %v", name, err)
+		}
+		texts = append(texts, string(raw))
+	}
+
+	// Test names live in _test.go files, and only under these two trees.
+	declaredTests := map[string]bool{}
+	for _, root := range []string{"../../internal", "../../cmd"} {
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return nil
+			}
+			s := string(b)
+			for _, m := range testRe.FindAllString(s, -1) {
+				if strings.Contains(s, "func "+m+"(") {
+					declaredTests[m] = true
+				}
+			}
+			return nil
+		})
+	}
+
+	var bad []string
+	seen := map[string]bool{}
+	note := func(kind, name string) {
+		key := kind + " " + name
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		bad = append(bad, kind+" "+name)
+	}
+
+	for _, s := range texts {
+		for _, raw := range pathRe.FindAllString(s, -1) {
+			p := strings.TrimRight(raw, ".-/")
+			if p == "" || notYet[filepath.Base(p)] {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(repo, p)); err != nil {
+				note("PATH", p+" is named by the release drafts but does not exist")
+			}
+		}
+		for _, m := range bareRe.FindAllStringSubmatch(s, -1) {
+			name := strings.TrimRight(m[1], ".-")
+			if notYet[name] {
+				continue
+			}
+			found := false
+			for _, dir := range []string{"", "docs/", "release-designs/"} {
+				if _, err := os.Stat(filepath.Join(repo, dir+name)); err == nil {
+					found = true
+					break
+				}
+			}
+			if !found {
+				note("DOC", name+" is named by the release drafts but is not at the repo root, docs/, or release-designs/")
+			}
+		}
+		for _, name := range testRe.FindAllString(s, -1) {
+			if !declaredTests[name] {
+				note("TEST", name+" is named by the release drafts but no _test.go under internal/ or cmd/ declares it")
+			}
+		}
+	}
+
+	if len(bad) > 0 {
+		sort.Strings(bad)
+		for _, b := range bad {
+			t.Errorf("release paperwork names something that is not there: %s", b)
+		}
+		t.Errorf("%d stale reference(s) — a renamed file makes release day read instructions that cannot be followed", len(bad))
 	}
 }
 
