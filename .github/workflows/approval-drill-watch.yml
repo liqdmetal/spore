@@ -8,7 +8,8 @@ name: approval-drill-watch
 # processes), the always-on station's self-metrics must reach stdout through
 # the real binary in both render modes (TestWatchStationSelfMetricsLive),
 # and the station health gate must pass on a healthy heartbeat and trip on
-# an orphaned lock (scripts/station-health.sh, live-fired here).
+# an orphaned lock — in batch and in -w watch mode (scripts/station-health.sh,
+# live-fired here).
 #
 # Daily 05:33 UTC (an off-the-minute slot, like the other sentinels). A red
 # run is the primary flag; the tracking issue (marker
@@ -48,7 +49,7 @@ jobs:
         id: smoke
         run: go test ./cmd/spore/ -run 'TestWatchStationSelfMetricsLive' -count=1 -v
 
-      - name: Station health gate live fire (healthy passes, orphan trips)
+      - name: Station health gate live fire (batch + watch mode)
         id: gate
         run: |
           go build -o /tmp/spore ./cmd/spore
@@ -65,7 +66,45 @@ jobs:
             echo "::error::station-health.sh did NOT trip on an orphaned lock"
             exit 1
           }
-          echo "health gate: healthy passed, orphaned-lock control tripped"
+          # Watch mode (-w): a healthy heartbeat must keep the watcher
+          # running and a violating heartbeat must stop it with exit 1 —
+          # the FIFO/trap plumbing and exit-code propagation only get
+          # exercised under a real follow. The orphaned lock from the
+          # batch control is removed first so the healthy heartbeat is
+          # genuinely healthy.
+          rm -f "$work/queue/orphan.lock"
+          : > "$work/watch.jsonl"
+          bash scripts/station-health.sh -w -f "$work/watch.jsonl" >/dev/null 2>&1 &
+          wpid=$!
+          sleep 2
+          /tmp/spore msg approval-metrics -dir "$work/queue" -envelope >> "$work/watch.jsonl"
+          if ! kill -0 "$wpid" 2>/dev/null; then
+            echo "::error::watch mode stopped on a healthy heartbeat"
+            exit 1
+          fi
+          touch "$work/queue/orphan.lock"
+          /tmp/spore msg approval-metrics -dir "$work/queue" -envelope >> "$work/watch.jsonl"
+          for i in $(seq 1 10); do
+            kill -0 "$wpid" 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 "$wpid" 2>/dev/null; then
+            echo "::error::watch mode did not trip on an orphaned-lock heartbeat"
+            kill "$wpid" 2>/dev/null || true
+            exit 1
+          fi
+          rc=0
+          wait "$wpid" || rc=$?
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::watch trip exited $rc, want 1"
+            exit 1
+          fi
+          # A tail failure in watch mode must exit 2, never a silent pass.
+          bash scripts/station-health.sh -w -f "$work" >/dev/null 2>&1 && {
+            echo "::error::watch mode exited 0 on a tail failure"
+            exit 1
+          }
+          echo "health gate: batch + watch live-fired (healthy holds, trip exits 1, tail failure exits 2)"
 
       - name: Ensure the tracking label exists
         if: always()
@@ -96,7 +135,7 @@ jobs:
               '|---|---|',
               row('two-station double-sign drill', drill),
               row('watch self-metrics live smoke', smoke),
-              row('station health gate live fire', gate),
+              row('station health gate (batch + watch)', gate),
               '',
               ok
                 ? 'All checks green. (This issue auto-closes.)'
