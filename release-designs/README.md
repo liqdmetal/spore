@@ -96,6 +96,15 @@ deployment-day commit described in
   half-claims a deployment. `--check` needs no values and only proves the
   anchors still resolve, which is what catches a doc edit that moved a line out
   from under the patches.
+
+  It also defines the receipt, which is why the receipt can be a file rather than
+  a transcription: a values file given on a tree where nothing needs filling is
+  *validated* rather than ignored, so the receipt `scripts/anvil_e2e.sh -r`
+  writes is held to this script's shapes and cross-field rules on every push;
+  and a receipt naming anvil's own addresses is refused unless `--local-proof`
+  says the point is a local proof, because those addresses can only have come
+  from a rehearsal — the one mistake that would otherwise ship silently, since
+  an anvil mailbox address is still 0x + 40 hex cited in §3.
 - **`scripts/release-fill-rehearsal.sh`** proves that fill is *satisfiable*.
   Nothing else checked the positive direction: that replacing every marker with
   real values actually clears the sweep below and keeps the receipt gate green,

@@ -24,15 +24,27 @@
 # proof reproducible on any dev box — and wires the deploy to the pinned
 # bytecode the release actually ships, so it cannot drift from what Base gets.
 #
+# With -r FILE it also writes the RECEIPT the fill consumes: the key=value file
+# scripts/release-fill.sh takes as -in, built from what this run observed (a
+# real mailbox address, a real creation txid, the deployer, a real deliver txid)
+# and measured (the runbook's own `spore contract estimate`, run the way §3 says
+# to run it). Release day's last hand-work step is transcription — six hex
+# strings from a terminal into a receipt — and a mistyped mailbox address ships
+# as every user's default mailbox while satisfying the receipt gate. So the
+# proof writes the file, and release-fill.sh checks it (and refuses a receipt
+# naming anvil's dev accounts unless it is told the point is a local proof).
+#
 # What it does NOT prove: gas/funding reality (anvil is free) and public-RPC
 # behaviour. Those are what Phase A/B on Base Sepolia/mainnet are for.
 #
 # Usage:
 #   scripts/anvil_e2e.sh [-a ANVIL_PORT] [-m MAIL_PORT] [-b SPORE_BINARY]
-#                        [-s] [-k]
+#                        [-r RECEIPT_FILE] [-s] [-k]
 #     -a   anvil JSON-RPC port (default 18545)
 #     -m   local mailbox port — body store + prekey authority (default 19393)
 #     -b   spore binary to drive (default: built fresh from this repo)
+#     -r   also write the fill-shaped receipt to this path, and check it against
+#          scripts/release-fill.sh's own rules (see below)
 #     -s   skip (exit 0) when anvil is not installed, instead of failing
 #          (exit 3). For CI/gates where foundry may be absent.
 #     -k   keep the workspace + anvil running on exit (for inspection)
@@ -44,16 +56,18 @@ set -euo pipefail
 ANVIL_PORT=18545
 MAIL_PORT=19393
 SPORE=""
+RECEIPT=""
 SKIP_IF_MISSING=0
 KEEP=0
 
 usage() { sed -n '/^# Usage:/,/^set -euo/p' "$0" | sed '1d;$d' | sed 's/^# \{0,1\}//'; }
 
-while getopts "a:m:b:skh" opt; do
+while getopts "a:m:b:r:skh" opt; do
   case "$opt" in
     a) ANVIL_PORT=$OPTARG ;;
     m) MAIL_PORT=$OPTARG ;;
     b) SPORE=$OPTARG ;;
+    r) RECEIPT=$OPTARG ;;
     s) SKIP_IF_MISSING=1 ;;
     k) KEEP=1 ;;
     h) usage; exit 0 ;;
@@ -71,6 +85,10 @@ MAIL="http://127.0.0.1:$MAIL_PORT"
 KEY_A="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 ADDR_A="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 ADDR_B="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+# The fill's values are lowercase-only (its shape rules say so); every address
+# this script writes into a receipt goes through this.
+lower() { printf '%s' "$1" | tr 'A-F' 'a-f'; }
+DEPLOYER="$(lower "$ADDR_A")"
 
 PASS=0
 ANVIL_PID=""; MAIL_PID=""; RECV_PID=""
@@ -273,6 +291,120 @@ else
   ok "cast not installed — the fresh-state rescan carries the empty-slot proof"
 fi
 
+# ---- the receipt the fill consumes -----------------------------------------
+# Everything above proved the arc; this writes the artifact release day needs,
+# from the same run. Nothing here is typed by a human: the six hex strings come
+# out of the deploy and send logs, the dates come off the clock, and the fee
+# numbers come from the runbook's own estimator, invoked the way §3 invokes it.
+if [ -n "$RECEIPT" ]; then
+  mkdir -p "$(dirname "$RECEIPT")" 2>/dev/null || true
+  [ -n "$DEPLOY_TX" ] || fail "the deploy printed no creation txid — there is nothing honest to write in a receipt"
+
+  step "receipt: the row the rehearsal stands in for"
+  # The two receipt rows are two different chains' deployments, so they cannot
+  # share a creation txid and the fill refuses it if they do. Locally the second
+  # row is one more REAL transaction, so the substitution is rehearsed with real
+  # hashes rather than with plausible-looking constants.
+  SEPOLIA_TX="$(rpc_call eth_sendTransaction \
+    "[{\"from\":\"$ADDR_A\",\"to\":\"$ADDR_B\",\"value\":\"0x1\"}]" | rpc_result || true)"
+  case "$SEPOLIA_TX" in 0x*) ;; *) fail "anvil returned no tx hash for the rehearsal row's transaction" ;; esac
+  ok "rehearsal-row tx $SEPOLIA_TX (real, and distinct from the deploy and the deliver)"
+
+  step "receipt: measure with the runbook's own command"
+  # Run it from a tree that carries the pinned creation bytecode: the estimator
+  # reads tools/mycelium.bin, so the runbook's own working directory is the repo.
+  # SPORE_HOME/SPORE_CONFIG are unset so this box's real config cannot leak a
+  # mailbox default or a chain into the numbers the receipt will carry.
+  # LIVE_NODES §3 step 1: once with -from for the deploy row, then again with
+  # -mailbox for deliver/burn and the funding total. The order is the point: the
+  # fee block is filled from the command it quotes.
+  (cd "$REPO_ROOT" && env -u SPORE_HOME -u SPORE_CONFIG "$SPORE" contract estimate \
+    -rpc "$RPC" -from "$DEPLOYER" -rounds 5) >"$ROOT/estimate-pre.log" 2>&1 ||
+    { cat "$ROOT/estimate-pre.log"; fail "the pre-deploy estimate failed"; }
+  grep -q '^deploy ' "$ROOT/estimate-pre.log" ||
+    { cat "$ROOT/estimate-pre.log"; fail "the pre-deploy estimate printed no deploy row"; }
+  (cd "$REPO_ROOT" && env -u SPORE_HOME -u SPORE_CONFIG "$SPORE" contract estimate \
+    -rpc "$RPC" -from "$DEPLOYER" -mailbox "$CONTRACT" -rounds 5) >"$ROOT/estimate.log" 2>&1 ||
+    { cat "$ROOT/estimate.log"; fail "the post-deploy estimate failed"; }
+
+  est() { sed -n "$1" "$ROOT/estimate.log" | head -1; }
+  EST_GAS_PRICE="$(est 's/^gas price: *\([0-9][0-9]*\) wei.*/\1/p')"
+  EST_DEPLOY_GAS="$(est 's/^deploy  *\([0-9][0-9,]*\) gas.*/\1/p')"
+  EST_DEPLOY_ETH="$(est 's/^deploy  *[0-9][0-9,]* gas  *\(.*\)$/\1/p')"
+  EST_DELIVER_GAS="$(est 's/^deliver  *\([0-9][0-9,]*\) gas.*/\1/p')"
+  EST_DELIVER_ETH="$(est 's/^deliver  *[0-9][0-9,]* gas  *\(.*\)$/\1/p')"
+  EST_BURN_GAS="$(est 's/^burn  *\([0-9][0-9,]*\) gas.*/\1/p')"
+  EST_BURN_ETH="$(est 's/^burn  *[0-9][0-9,]* gas  *\(.*\)$/\1/p')"
+  EST_ROUND_ETH="$(est 's/^deliver+burn  *[0-9][0-9,]* gas  *\(.*\)$/\1/p')"
+  EST_N_ROUNDS="$(est 's/^funding total:.*deploy + \([0-9][0-9]*\) .*/\1/p')"
+  EST_FUNDING_TOTAL="$(est 's/^funding total:.* = //p')"
+  TTODAY="$(date -u +%Y-%m-%d)"
+  for v in EST_GAS_PRICE EST_DEPLOY_GAS EST_DEPLOY_ETH EST_DELIVER_GAS EST_DELIVER_ETH \
+           EST_BURN_GAS EST_BURN_ETH EST_ROUND_ETH EST_N_ROUNDS EST_FUNDING_TOTAL; do
+    [ -n "${!v:-}" ] || { cat "$ROOT/estimate.log"; fail "could not parse $v out of the estimator output"; }
+  done
+  [ "$EST_N_ROUNDS" = "5" ] || fail "the funding total reports $EST_N_ROUNDS rounds, asked for 5 — the parse is wrong"
+  ok "gas price $EST_GAS_PRICE wei; deploy $EST_DEPLOY_GAS gas; round $EST_ROUND_ETH; total $EST_FUNDING_TOTAL ($EST_N_ROUNDS rounds)"
+
+  step "receipt: write it, then require the fill to accept it"
+  MAINNET_ADDR="$(lower "$CONTRACT")"
+  SEPOLIA_ADDR="$(lower "$ADDR_B")"
+  cat >"$RECEIPT" <<RECEIPT_FILE
+# LOCAL ANVIL PROOF — NOT A DEPLOYMENT RECEIPT (chain $(hex_to_dec "$CHAIN_ID"), $RPC).
+#
+# Written by scripts/anvil_e2e.sh from the run it just proved, so that release
+# day copies a file instead of transcribing hex strings, and so this shape of
+# file is exercised on every push. Every value was observed in that run or
+# measured by the runbook's own estimator; none was typed.
+#
+# The fill's two receipt rows are two chains' deployments. Locally they are:
+#   MAINNET_*  this proof's deployment
+#   SEPOLIA_*  the rehearsal row's shape — a real extra transaction, because the
+#              two rows must differ and the fill checks that they do
+# DEPLOYER and DELIVER_TX are this proof's; the EST_* numbers are this chain's.
+# scripts/release-fill.sh REFUSES anvil's dev accounts unless it is passed
+# --local-proof: they can only come from a run like this one.
+SEPOLIA_ADDR=$SEPOLIA_ADDR
+SEPOLIA_TX=$SEPOLIA_TX
+SEPOLIA_DATE=$TTODAY
+MAINNET_ADDR=$MAINNET_ADDR
+MAINNET_TX=$DEPLOY_TX
+MAINNET_DATE=$TTODAY
+DEPLOYER=$DEPLOYER
+DELIVER_TX=$DELIVER_TX
+EST_DATE=$TTODAY
+EST_GAS_PRICE=$EST_GAS_PRICE
+EST_DEPLOY_GAS=$EST_DEPLOY_GAS
+EST_DEPLOY_ETH=$EST_DEPLOY_ETH
+EST_DELIVER_GAS=$EST_DELIVER_GAS
+EST_DELIVER_ETH=$EST_DELIVER_ETH
+EST_BURN_GAS=$EST_BURN_GAS
+EST_BURN_ETH=$EST_BURN_ETH
+EST_ROUND_ETH=$EST_ROUND_ETH
+EST_N_ROUNDS=$EST_N_ROUNDS
+EST_FUNDING_TOTAL=$EST_FUNDING_TOTAL
+RECEIPT_FILE
+  ok "receipt written: $RECEIPT ($(grep -c '^[A-Z]' "$RECEIPT" || true) values, $(grep -c '^#' "$RECEIPT" || true) provenance lines)"
+
+  # The receipt's shape is defined by its consumer, so the consumer gets to say
+  # whether this one is usable. On a tree where the frozen passes are not applied
+  # that is a pure validation (nothing is filled); on a flipped tree it is a dry
+  # run. Either way exit 0 means the fill would take this file.
+  if [ ! -f "$REPO_ROOT/scripts/release-fill.sh" ]; then
+    fail "scripts/release-fill.sh is missing — the receipt's consumer defines its shape, so it cannot be checked"
+  fi
+  if ! bash "$REPO_ROOT/scripts/release-fill.sh" -C "$REPO_ROOT" --check \
+    -in "$RECEIPT" --local-proof >"$ROOT/receipt-check.log" 2>&1; then
+    cat "$ROOT/receipt-check.log"
+    fail "the receipt this run wrote is not accepted by the fill: $RECEIPT"
+  fi
+  ok "the fill accepts it: $(sed -n 's/^release-fill: //p' "$ROOT/receipt-check.log" | head -1)"
+fi
+
 printf '\n\033[1;32mANVIL E2E GREEN\033[0m — %d checks. mailbox %s on chain %s.\n' \
   "$PASS" "$CONTRACT" "$(hex_to_dec "$CHAIN_ID")"
+if [ -n "$RECEIPT" ]; then
+  printf 'Receipt: %s\n' "$RECEIPT"
+  printf '  check/consume it: bash scripts/release-fill.sh -in %s --local-proof   (drop --local-proof on a real chain)\n' "$RECEIPT"
+fi
 printf 'Next: the same flow on Base Sepolia with funded keys — scripts/sepolia_rehearsal.sh\n'

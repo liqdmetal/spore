@@ -282,7 +282,11 @@ fi
 
 echo
 echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
-run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s
+# -r makes the proof write the receipt release day consumes (and have it checked
+# against release-fill.sh's own rules), so the artifact is produced — not typed —
+# on every push. Nothing is written inside the repo: it is a scratch file whose
+# values are anvil's, which release-fill.sh refuses without --local-proof.
+run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s -r "${TMPDIR:-/tmp}/spore-anvil-receipt.txt"
 
 echo
 echo "== release fill: every marker anchor still resolves (no values needed) =="

@@ -331,7 +331,11 @@ b0="$(blockers)"
 [ -n "$b0" ] || fail "release-readiness.sh reported nothing parseable before the fill"
 ok "readiness before the fill: $b0 blocker(s)"
 
-if ! bash "$REPO_ROOT/scripts/release-fill.sh" -C "$work" -in "$ROOT/values" >"$ROOT/fill.log" 2>&1; then
+# --local-proof: every value here is anvil's, which is the point of the
+# rehearsal. release-fill.sh refuses those accounts by default, so a receipt
+# that could only have come from a local run cannot be shipped by accident.
+if ! bash "$REPO_ROOT/scripts/release-fill.sh" -C "$work" --local-proof \
+  -in "$ROOT/values" >"$ROOT/fill.log" 2>&1; then
   cat "$ROOT/fill.log" >&2
   fail "the fill refused a complete set of values taken from a real deployment"
 fi
@@ -367,7 +371,8 @@ step "negative control 1: the filler refuses a copy-pasted receipt row"
 # It runs against the UNFILLED snapshot, where the markers still are.
 sed "s/^MAINNET_ADDR=.*/MAINNET_ADDR=$SEPOLIA_ADDR/" "$ROOT/values" >"$ROOT/values-dup"
 pre_sha="$(sha256sum "$prefill/docs/LIVE_NODES.md" | awk '{print $1}')"
-if bash "$REPO_ROOT/scripts/release-fill.sh" -C "$prefill" -in "$ROOT/values-dup" >"$ROOT/dup.log" 2>&1; then
+if bash "$REPO_ROOT/scripts/release-fill.sh" -C "$prefill" --local-proof \
+  -in "$ROOT/values-dup" >"$ROOT/dup.log" 2>&1; then
   fail "the filler accepted a values file whose mainnet row IS the Sepolia row"
 fi
 grep -q 'the same mailbox addresses' "$ROOT/dup.log" ||

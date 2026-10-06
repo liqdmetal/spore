@@ -143,7 +143,17 @@ It is the fast pre-flight for Phase A below and the local mirror of this
 runbook — run it before spending testnet ETH, and again after any carrier
 change. It also pins the compost promise on-chain: the script fails unless a
 fresh-state read of the burned slot (and, with foundry's `cast`, the
-contract's own `read(to, seq)`) comes back empty.
+contract's own `read(to, seq)`) comes back empty. With `-r FILE` it also writes the RECEIPT the fill consumes —
+the same key=value file `scripts/release-fill.sh -in` takes, built from the
+mailbox it just deployed, the deployer, a real deliver txid, and the runbook's
+own `spore contract estimate` run the way §3 says to run it — and then requires
+the fill to accept that file before the proof reports green. Release day's last
+hand-work step is six hex strings typed from a terminal into a receipt, and a
+mistyped mailbox address ships as every user's default mailbox while satisfying
+the receipt gate; so the file is written by the run that observed the values.
+It names anvil's own addresses, which `scripts/release-fill.sh` refuses unless
+it is passed `--local-proof`: a local rehearsal cannot become a deployment
+receipt by accident.
 
 ### Why Base (chain comparison, as of 2026-09)
 
@@ -434,11 +444,16 @@ with the line-wrap constraints a 2026-10-06 rehearsal found annotated at its
 end — so this runbook stays valid even if the out-of-repo design notes are
 gone.
 
-1. **Capture the receipt.** From the Phase B outputs (and Phase A if it
-   ran): contract address, creation tx, deployer, date, one deliver txid.
-   The burn tx is unlogged by design — cite the on-chain empty-slot
-   `read()` as the proof. The rehearsal script's `receipt` step prints
-   these lines ready to paste into the STATUS block below.
+1. **Capture the receipt — do not retype it.** `scripts/anvil_e2e.sh -r
+   <file>` writes a whole receipt from its own local proof, in the exact
+   key=value shape step 3 consumes, and the pre-push gate checks that the
+   fill accepts it. For the real rows, the Phase A rehearsal script's
+   `receipt` step prints the §3 STATUS line to paste into the block below;
+   both describe the same fields, and the fill's 19 keys are the whole
+   list. The burn tx is unlogged by design — cite the on-chain empty-slot
+   `read()` as the proof. A receipt a local run wrote names anvil's own
+   addresses, and the fill REFUSES those unless it is passed
+   `--local-proof`: a rehearsal can never ship as a deployment receipt.
 2. **Keep the measured numbers.** Phase B step 1 already ran
    `spore contract estimate` twice (pre-deploy with `-from` only;
    post-deploy with `-mailbox`). Save both outputs — the fee + limit

@@ -39,6 +39,19 @@
 # recipe still matches the frozen patches without touching anything, and it
 # exits 0 on a tree where the passes are not applied (nothing to fill).
 #
+# The values file is a receipt, and scripts/anvil_e2e.sh now WRITES one from its
+# own proof (`-r FILE`), so the six hex strings stop being hand-typed. Two rules
+# follow from that, and they are the reason this script is the receipt's
+# definition rather than a second copy of its format:
+#
+#   * a receipt naming anvil's documented dev accounts is refused, because
+#     those addresses can only come from a local proof and would otherwise ship
+#     as the default mailbox. --local-proof accepts them, for the rehearsals
+#     whose whole point is a local proof.
+#   * -in on a tree with nothing to fill still validates the receipt, so the
+#     artifact the proof writes is checked on every push instead of on the one
+#     day it is used for real.
+#
 # Exit codes: 0 filled (or nothing to fill), 1 refused — incomplete values,
 # a marker whose anchor moved, or a marker left behind; 2 cannot check
 # (patch missing); 3 usage.
@@ -48,17 +61,23 @@ ROOT="."
 VALUES=""
 CHECK=0
 SHOW_KEYS=0
+LOCAL_PROOF=0
 
 usage() {
   cat <<'USAGE'
-usage: bash scripts/release-fill.sh [-C DIR] [-in FILE] [--check] [--keys]
+usage: bash scripts/release-fill.sh [-C DIR] [-in FILE] [--check] [--keys] [--local-proof]
 
   -C DIR      the tree to fill (default: the current directory). The two frozen
               patches must be present at release-designs/ under it.
   -in FILE    key=value values file. See --keys for the keys and their shapes.
+              On a tree with nothing to fill it is still validated, not applied.
   --check     verify the recipe against the tree and write nothing. With -in,
               also validate the values and simulate the whole fill; without
               -in, only prove every marker's anchor still resolves.
+  --local-proof
+              accept a receipt whose addresses are anvil's documented dev
+              accounts — a local proof, never a deployment. Rehearsals pass it;
+              release day must not.
   --keys      print the values-file template
   -h, --help  this message
 USAGE
@@ -73,6 +92,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "release-fill: -in needs a file" >&2; exit 3; }
       VALUES=$2; shift 2 ;;
     --check) CHECK=1; shift ;;
+    --local-proof) LOCAL_PROOF=1; shift ;;
     --keys) SHOW_KEYS=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "release-fill: unknown argument: $1 (see --help)" >&2; usage >&2; exit 3 ;;
@@ -86,6 +106,15 @@ PATCH_FEE=release-designs/v0.9.0-fee-notes.patch
 # purpose: this script's post-condition is that the shipped sweep has nothing
 # left to find.
 MARKER_RE='<DRYRUN-[A-Za-z0-9 -]*>|<<[A-Za-z0-9 _-]*>>|0x0{30,}'
+
+# Addresses only a local anvil run can produce: its two well-known dev accounts
+# (public, funded by nobody) and 0x5fbd…aa03, which is where account 0's first
+# deployment deterministically lands — the address every local mailbox in this
+# repo has been deployed at. A real deployment cannot be any of them, so a
+# receipt naming one is a local proof, and a local proof shipped as the default
+# mailbox is precisely the failure this repository's release gates exist to
+# prevent. Refused unless --local-proof says the caller means it.
+ANVIL_ONLY_ADDRS='0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266|0x70997970c51812dc3a010c7d01b50e0d17dc79c8|0x5fbdb2315678afecb367f032d93f642f64180aa3'
 
 # ---- the rule table --------------------------------------------------------
 # VALUE | MARKER (written verbatim, exactly as the patches write it) | how many
@@ -284,7 +313,19 @@ load_values() {
     esac
     case "$key" in
       DEPLOYER | *_ADDR)
-        is_addr "$val" || { echo "release-fill: $key must be 0x + 40 lowercase hex (and not all-zero), got '$val'" >&2; problems=1; } ;;
+        if ! is_addr "$val"; then
+          echo "release-fill: $key must be 0x + 40 lowercase hex (and not all-zero), got '$val'" >&2
+          problems=1
+        elif printf '%s' "$val" | grep -qE "^($ANVIL_ONLY_ADDRS)$"; then
+          if [ "$LOCAL_PROOF" -eq 1 ]; then
+            :
+          else
+            echo "release-fill: $key is an address only a local anvil run produces ($val)." >&2
+            echo "  -> it can never be a deployment receipt. Re-run against the real chain," >&2
+            echo "     or pass --local-proof when the point IS a local proof." >&2
+            problems=1
+          fi
+        fi ;;
       *_TX)
         is_tx "$val" || { echo "release-fill: $key must be 0x + 64 lowercase hex, got '$val'" >&2; problems=1; } ;;
       *_DATE)
@@ -433,8 +474,20 @@ trap cleanup EXIT
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/spore-release-fill.XXXXXX")
 
 # Nothing to fill is a legitimate state: the passes are not applied here yet
-# (this is what makes --check safe as an every-push gate).
+# (this is what makes --check safe as an every-push gate). A values file that WAS
+# given is validated anyway: that is how the receipt scripts/anvil_e2e.sh writes
+# is held to this script's own rules on every push, rather than on release day.
 if [ -z "$(markers_now)" ]; then
+  if [ -n "$VALUES" ]; then
+    [ -f "$VALUES" ] || {
+      echo "release-fill: no such values file: $VALUES" >&2
+      exit 2
+    }
+    load_values || exit 1
+    echo "release-fill: values ok — a complete receipt ($(printf '%s' "$REQUIRED_KEYS" | wc -w | tr -d ' ') keys: shapes and cross-field checks pass)"
+    echo "             nothing to fill in $ROOT — the frozen passes are not applied here yet"
+    exit 0
+  fi
   echo "release-fill: nothing to fill — no rehearsal marker on the release surfaces in $ROOT"
   exit 0
 fi
