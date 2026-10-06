@@ -247,6 +247,10 @@ echo "== doc-refs checker =="
 run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
 
 echo
+echo "== release-designs release-prep set (in-tree; every pointer resolves) =="
+run_gate 'release-designs check' bash scripts/release-designs-check.sh
+
+echo
 echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
 run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s
 

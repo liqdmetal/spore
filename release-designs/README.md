@@ -36,6 +36,21 @@ deployment-day commit described in
 - These files are release paperwork, not build inputs: nothing here is compiled
   or shipped in a binary.
 
+## Guards (they keep this set from rotting)
+
+- **`TestReleaseDesignsPatchCarriesGateClaims`** (`internal/evm/releasedesigns_test.go`)
+  pins the flip patch to the receipt gate: every claim the gate requires must be
+  stated in `v0.9.0-doc-flips.md`, and the registry entry it installs must be
+  documented. Change the gate's required wording without updating the patch and
+  this test fails — instead of release day failing mid-apply.
+- **`scripts/release-designs-check.sh`** (wired into `scripts/gates.sh`) fails
+  when a draft is missing or a tracked file points at a `release-designs/`
+  artifact that does not exist. `--status` prints what is still unfilled:
+
+  ```bash
+  bash scripts/release-designs-check.sh --status
+  ```
+
 ## Provenance
 
 Copied byte-for-byte on 2026-10-06 from the release working area one level above
