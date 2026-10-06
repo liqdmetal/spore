@@ -342,6 +342,20 @@ spore msg approval-metrics -dir ~/approval-queue -out-dir ~/outbox -state-dir ~/
   locks (live / orphaned / oldest age), oldest-pending age, and the outbox
   latencies — the same numbers as the summary, sorted and diffable across
   scrapes.
+- Several queues on one host can share one textfile: repeat `-dir` (with
+  `-prometheus` only) and every series is labeled with its queue, so
+  dashboards stay attributable per station. Write to a temp file and rename
+  so the scraper never reads a half-written textfile:
+
+```bash
+spore msg approval-metrics -dir ~/station-a-queue -dir ~/station-b-queue \
+  -prometheus > ~/node_exporter/spore_approval.prom.tmp \
+  && mv ~/node_exporter/spore_approval.prom.tmp ~/node_exporter/spore_approval.prom
+```
+
+  Multi-queue mode refuses `-out-dir` and `-state-dir`: outbox and ledger
+  latencies belong to one pipeline, so run one invocation per pipeline for
+  those (into a per-pipeline file).
 - Approval latency (request created -> approval signed) is bounded by the
   15-minute TTL; post latency (approval signed -> nonce burned) is the
   requester's remaining window. p95 creeping toward 15m means requests are

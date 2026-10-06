@@ -309,6 +309,72 @@ func TestApprovalMetricsEnvelopeOneShot(t *testing.T) {
 	}
 }
 
+// TestApprovalMetricsPrometheusMultiQueue pins repeated -dir with
+// -prometheus: one exposition, every series labeled queue="<dir>", each
+// family's HELP/TYPE emitted exactly once, and per-queue values
+// attributable (the orphaned lock lives in queue one only).
+func TestApprovalMetricsPrometheusMultiQueue(t *testing.T) {
+	q1, _ := lockTestRequest(t, t.TempDir(), "promq1", time.Now())
+	q1 = filepath.Dir(q1)
+	q2, _ := lockTestRequest(t, t.TempDir(), "promq2", time.Now())
+	q2 = filepath.Dir(q2)
+	if err := os.WriteFile(filepath.Join(q1, "ghost.lock"), []byte("ghost 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureApprovalTestOutput(t, func() {
+		msgApprovalMetrics([]string{"-dir", q1, "-dir", q2, "-prometheus"})
+	})
+	l1 := `queue="` + promEscapeLabel(q1) + `"`
+	l2 := `queue="` + promEscapeLabel(q2) + `"`
+	for _, want := range []string{
+		"spore_approval_queue_requests{" + l1 + "} 1",
+		"spore_approval_queue_requests{" + l2 + "} 1",
+		"spore_approval_locks_orphaned{" + l1 + "} 1",
+		"spore_approval_locks_orphaned{" + l2 + "} 0",
+		`spore_approval_requests_by_status{` + l1 + `,status="PENDING"} 1`,
+		`spore_approval_requests_by_status{` + l2 + `,status="PENDING"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("multi-queue exposition missing %q, got:\n%s", want, out)
+		}
+	}
+	for _, family := range []string{"spore_approval_queue_requests", "spore_approval_requests_by_status", "spore_approval_locks_live"} {
+		if got := strings.Count(out, "# HELP "+family+" "); got != 1 {
+			t.Errorf("family header %s must be emitted exactly once, got %d:\n%s", family, got, out)
+		}
+	}
+	for _, unwanted := range []string{"spore_approval_outbox", "spore_approval_spent_nonces"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("multi-queue mode must not carry %s (single-pipeline sections):\n%s", unwanted, out)
+		}
+	}
+}
+
+// TestApprovalMetricsMultiDirRules pins the multi-queue flag rules:
+// repeated -dir is a -prometheus feature, and the outbox/ledger sections
+// stay single-queue because their latencies belong to one pipeline.
+func TestApprovalMetricsMultiDirRules(t *testing.T) {
+	two := []string{"q1", "q2"}
+	if err := validateApprovalMetricsDirs(two[:1], "", "", false); err != nil {
+		t.Errorf("single -dir must stay valid in any mode: %v", err)
+	}
+	if err := validateApprovalMetricsDirs(two, "", "", true); err != nil {
+		t.Errorf("two -dir with -prometheus must be valid: %v", err)
+	}
+	err := validateApprovalMetricsDirs(two, "", "", false)
+	if err == nil || !strings.Contains(err.Error(), "-prometheus") {
+		t.Errorf("two -dir without -prometheus must be refused, got: %v", err)
+	}
+	err = validateApprovalMetricsDirs(two, "out", "", true)
+	if err == nil || !strings.Contains(err.Error(), "-out-dir") {
+		t.Errorf("multi-queue with -out-dir must be refused, got: %v", err)
+	}
+	err = validateApprovalMetricsDirs(two, "", "state", true)
+	if err == nil || !strings.Contains(err.Error(), "-state-dir") {
+		t.Errorf("multi-queue with -state-dir must be refused, got: %v", err)
+	}
+}
+
 // TestValidateApprovalMetricsOutputFlags pins the output-format rule: -json,
 // -envelope, and -prometheus are alternative renderings, never layers.
 func TestValidateApprovalMetricsOutputFlags(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -96,9 +97,11 @@ type approvalMetrics struct {
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] [-json]
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] -envelope
 //	spore msg approval-metrics [-dir QUEUE] [-out-dir OUTBOX] [-state-dir D] -prometheus
+//	spore msg approval-metrics -dir Q1 -dir Q2 ... -prometheus   (one exposition, per-queue labels)
 func msgApprovalMetrics(args []string) {
 	fs := flag.NewFlagSet("msg approval-metrics", flag.ExitOnError)
-	dir := fs.String("dir", "", "approval request queue directory to summarize (defaults to -state-dir or the current dir)")
+	var dirs approvalDirList
+	fs.Var(&dirs, "dir", "approval request queue directory to summarize (defaults to -state-dir or the current dir; repeatable with -prometheus for one labeled multi-queue exposition)")
 	outDir := fs.String("out-dir", "", "signed-approval outbox directory to include (enables the approval/post latency summaries)")
 	stateDir := fs.String("state-dir", "", "encrypted endpoint session state directory whose approval-spent ledger marks consumed nonces")
 	asJSON := fs.Bool("json", false, "emit metrics in machine-readable JSON format")
@@ -109,13 +112,26 @@ func msgApprovalMetrics(args []string) {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(2)
 	}
+	if err := validateApprovalMetricsDirs([]string(dirs), *outDir, *stateDir, *prom); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
+	if len(dirs) > 1 {
+		// Multi-queue scrape: one exposition, every series labeled with
+		// its queue, so several stations share one textfile.
+		check(renderPrometheusMetricsMulti([]string(dirs)))
+		return
+	}
+	queueDir := ""
+	if len(dirs) == 1 {
+		queueDir = dirs[0]
+	}
 	if *stateDir == "" {
 		_ = loadConfigForFlags(fs)
 		if f := fs.Lookup("state-dir"); f != nil && f.Value.String() != "" {
 			*stateDir = f.Value.String()
 		}
 	}
-	queueDir := *dir
 	if queueDir == "" {
 		if *stateDir != "" {
 			queueDir = *stateDir
@@ -163,6 +179,35 @@ func validateApprovalMetricsOutputFlags(asJSON, envelope, prometheus bool) error
 	}
 	if len(chosen) > 1 {
 		return fmt.Errorf("approval-metrics: %s are alternative output formats; choose one (-envelope wraps the metrics in the watch heartbeat shape; -prometheus renders the text exposition format)", strings.Join(chosen, ", "))
+	}
+	return nil
+}
+
+// approvalDirList collects repeated -dir values in invocation order.
+type approvalDirList []string
+
+func (d *approvalDirList) String() string { return strings.Join(*d, ",") }
+func (d *approvalDirList) Set(v string) error {
+	*d = append(*d, v)
+	return nil
+}
+
+// validateApprovalMetricsDirs pins the multi-queue rules: repeating -dir is
+// a -prometheus scraping feature; the other renderings stay single-queue,
+// and so do the outbox and ledger sections — their latencies belong to one
+// pipeline and would be misattributed across queues.
+func validateApprovalMetricsDirs(dirs []string, outDir, stateDir string, prometheus bool) error {
+	if len(dirs) <= 1 {
+		return nil
+	}
+	if !prometheus {
+		return errors.New("approval-metrics: multiple -dir values are only supported with -prometheus (one labeled queue per -dir)")
+	}
+	if outDir != "" {
+		return errors.New("approval-metrics: -out-dir cannot be combined with multiple -dir values: outbox latencies belong to one pipeline; run one invocation per pipeline")
+	}
+	if stateDir != "" {
+		return errors.New("approval-metrics: -state-dir cannot be combined with multiple -dir values: the approval-spent ledger belongs to one pipeline; run one invocation per pipeline")
 	}
 	return nil
 }
@@ -437,75 +482,161 @@ func renderApprovalMetrics(m *approvalMetrics) {
 	}
 }
 
-// renderPrometheusMetrics prints the summary in the Prometheus text
-// exposition format, for a scraper or the node_exporter textfile collector
-// (`spore msg approval-metrics ... -prometheus > textfile.prom` from cron).
-// Every series is a gauge over the same artifacts the human summary reads.
-// Map families are sorted by label value so the output is deterministic and
-// diffable across scrapes; label values are escaped per the exposition
-// format (backslash, double quote, newline).
-func renderPrometheusMetrics(m *approvalMetrics) {
-	escape := strings.NewReplacer(`\`, `\\`, "\n", `\n`, `"`, `\"`)
-	promValue := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
-	promScalar := func(name, help string, value float64) {
-		fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n%s %s\n", name, help, name, name, promValue(value))
-	}
-	promFamily := func(name, help, labelName string, counts map[string]int) {
-		if len(counts) == 0 {
-			return
-		}
-		fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
-		keys := make([]string, 0, len(counts))
-		for k := range counts {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Printf("%s{%s=\"%s\"} %d\n", name, labelName, escape.Replace(k), counts[k])
-		}
-	}
+// promLabelEscaper escapes a label value per the exposition format:
+// backslash, double quote, newline.
+var promLabelEscaper = strings.NewReplacer(`\`, `\`, "\n", `\n`, `"`, `\"`)
 
-	promScalar("spore_approval_queue_requests", "Requests currently visible in the approval queue.", float64(m.Requests))
-	promScalar("spore_approval_ignored_files", "Non-envelope files in the queue directory (queue hygiene noise).", float64(m.IgnoredFiles))
-	promFamily("spore_approval_requests_by_status", "Requests in the queue by classification status.", "status", m.Status)
-	promFamily("spore_approval_requests_by_skip_reason", "Requests by the reason they are not signable right now.", "reason", m.SkipReasons)
-	promFamily("spore_approval_requests_by_chain", "Requests in the queue by chain.", "chain", m.Chains)
-	promFamily("spore_approval_requests_by_action", "Requests in the queue by requested action.", "action", m.Actions)
-	if m.StateDir != "" {
-		promScalar("spore_approval_spent_nonces", "Nonces burned in the approval-spent replay ledger.", float64(m.SpentNonces))
+func promEscapeLabel(s string) string { return promLabelEscaper.Replace(s) }
+
+func promFormatValue(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+
+// promSeries renders one series line: name, optional labels, value.
+func promSeries(name, label, value string) string {
+	if label == "" {
+		return name + " " + value
 	}
-	promScalar("spore_approval_locks_live", "Signing locks currently live in the queue.", float64(m.Locks.Live))
-	promScalar("spore_approval_locks_oldest_age_seconds", "Age of the oldest live signing lock; at approvalLockTTL (60s) the next scan stale-breaks it.", m.Locks.OldestAge)
+	return name + "{" + label + "} " + value
+}
+
+// joinPromLabels combines the per-queue label with a series-specific label.
+func joinPromLabels(queueLabel, extra string) string {
+	if queueLabel == "" {
+		return extra
+	}
+	return queueLabel + "," + extra
+}
+
+// promFamilySet accumulates exposition output grouped by metric family so
+// # HELP/# TYPE is emitted exactly once per family even when several queues
+// contribute series to the same family (multi-queue mode). Families print
+// in first-seen order; empty families never print at all.
+type promFamilySet struct {
+	order []string
+	help  map[string]string
+	lines map[string][]string
+}
+
+func (p *promFamilySet) ensure(name, help string) {
+	if p.lines == nil {
+		p.help = map[string]string{}
+		p.lines = map[string][]string{}
+	}
+	if _, ok := p.lines[name]; !ok {
+		p.order = append(p.order, name)
+		p.help[name] = help
+		p.lines[name] = nil
+	}
+}
+
+func (p *promFamilySet) scalar(name, help string, value float64, label string) {
+	p.ensure(name, help)
+	p.lines[name] = append(p.lines[name], promSeries(name, label, promFormatValue(value)))
+}
+
+func (p *promFamilySet) counts(name, help, labelName string, counts map[string]int, queueLabel string) {
+	if len(counts) == 0 {
+		return
+	}
+	p.ensure(name, help)
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		p.lines[name] = append(p.lines[name], promSeries(name, joinPromLabels(queueLabel, labelName+`="`+promEscapeLabel(k)+`"`), strconv.Itoa(counts[k])))
+	}
+}
+
+func (p *promFamilySet) latency(name, help string, l *approvalMetricsLatency, queueLabel string) {
+	if l == nil {
+		return
+	}
+	p.ensure(name, help)
+	for _, stat := range []struct {
+		key   string
+		value float64
+	}{{"min", l.Min}, {"p50", l.P50}, {"p95", l.P95}, {"max", l.Max}, {"mean", l.Mean}} {
+		p.lines[name] = append(p.lines[name], promSeries(name, joinPromLabels(queueLabel, `stat="`+stat.key+`"`), promFormatValue(stat.value)))
+	}
+}
+
+func (p *promFamilySet) printTo(w io.Writer) {
+	for _, name := range p.order {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", name, p.help[name], name)
+		for _, line := range p.lines[name] {
+			fmt.Fprintln(w, line)
+		}
+	}
+}
+
+// emitPrometheusQueue adds one pipeline's summary to the set. queueLabel is
+// "" for the single-queue rendering (byte-compatible with v0.8.5) or
+// `queue="<dir>"` in multi-queue mode.
+func emitPrometheusQueue(p *promFamilySet, m *approvalMetrics, queueLabel string) {
+	p.scalar("spore_approval_queue_requests", "Requests currently visible in the approval queue.", float64(m.Requests), queueLabel)
+	p.scalar("spore_approval_ignored_files", "Non-envelope files in the queue directory (queue hygiene noise).", float64(m.IgnoredFiles), queueLabel)
+	p.counts("spore_approval_requests_by_status", "Requests in the queue by classification status.", "status", m.Status, queueLabel)
+	p.counts("spore_approval_requests_by_skip_reason", "Requests by the reason they are not signable right now.", "reason", m.SkipReasons, queueLabel)
+	p.counts("spore_approval_requests_by_chain", "Requests in the queue by chain.", "chain", m.Chains, queueLabel)
+	p.counts("spore_approval_requests_by_action", "Requests in the queue by requested action.", "action", m.Actions, queueLabel)
+	if m.StateDir != "" {
+		p.scalar("spore_approval_spent_nonces", "Nonces burned in the approval-spent replay ledger.", float64(m.SpentNonces), queueLabel)
+	}
+	p.scalar("spore_approval_locks_live", "Signing locks currently live in the queue.", float64(m.Locks.Live), queueLabel)
+	p.scalar("spore_approval_locks_oldest_age_seconds", "Age of the oldest live signing lock; at approvalLockTTL (60s) the next scan stale-breaks it.", m.Locks.OldestAge, queueLabel)
 	orphaned := 0
 	for _, e := range m.Locks.Entries {
 		if e.Orphaned {
 			orphaned++
 		}
 	}
-	promScalar("spore_approval_locks_orphaned", "Live locks whose guarded request file is gone (holder crashed; residue until the stale-break).", float64(orphaned))
+	p.scalar("spore_approval_locks_orphaned", "Live locks whose guarded request file is gone (holder crashed; residue until the stale-break).", float64(orphaned), queueLabel)
 	if m.OldestPending != nil {
-		fmt.Printf("# HELP spore_approval_oldest_pending_age_seconds Age of the longest-waiting pending request; at the 15-minute approval TTL it can never be signed.\n# TYPE spore_approval_oldest_pending_age_seconds gauge\nspore_approval_oldest_pending_age_seconds{path=\"%s\"} %s\n",
-			escape.Replace(m.OldestPending.Path), promValue(m.OldestPending.AgeSeconds))
+		name := "spore_approval_oldest_pending_age_seconds"
+		p.ensure(name, "Age of the longest-waiting pending request; at the 15-minute approval TTL it can never be signed.")
+		p.lines[name] = append(p.lines[name], promSeries(name, joinPromLabels(queueLabel, `path="`+promEscapeLabel(m.OldestPending.Path)+`"`), promFormatValue(m.OldestPending.AgeSeconds)))
 	}
 	if o := m.Outbox; o != nil {
-		promScalar("spore_approval_outbox_signed_outputs", "Signed approvals in the outbox.", float64(o.SignedOutputs))
-		promScalar("spore_approval_outbox_signed_unspent", "Signed approvals still waiting on the requester's send.", float64(o.UnspentSigned))
-		promScalar("spore_approval_outbox_matched_requests", "Signed approvals matched back to a queue request for latency math.", float64(o.MatchedRequests))
-		promLatency := func(name, help string, l *approvalMetricsLatency) {
-			if l == nil {
-				return
-			}
-			fmt.Printf("# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
-			for _, stat := range []struct {
-				key   string
-				value float64
-			}{{"min", l.Min}, {"p50", l.P50}, {"p95", l.P95}, {"max", l.Max}, {"mean", l.Mean}} {
-				fmt.Printf("%s{stat=%q} %s\n", name, stat.key, promValue(stat.value))
-			}
-		}
-		promLatency("spore_approval_sign_latency_seconds", "Request created -> approval signed, nearest-rank percentiles over matched samples.", o.SignLatency)
-		promLatency("spore_approval_post_latency_seconds", "Approval signed -> nonce burned, nearest-rank percentiles over matched samples.", o.PostLatency)
+		p.scalar("spore_approval_outbox_signed_outputs", "Signed approvals in the outbox.", float64(o.SignedOutputs), queueLabel)
+		p.scalar("spore_approval_outbox_signed_unspent", "Signed approvals still waiting on the requester's send.", float64(o.UnspentSigned), queueLabel)
+		p.scalar("spore_approval_outbox_matched_requests", "Signed approvals matched back to a queue request for latency math.", float64(o.MatchedRequests), queueLabel)
+		p.latency("spore_approval_sign_latency_seconds", "Request created -> approval signed, nearest-rank percentiles over matched samples.", o.SignLatency, queueLabel)
+		p.latency("spore_approval_post_latency_seconds", "Approval signed -> nonce burned, nearest-rank percentiles over matched samples.", o.PostLatency, queueLabel)
 	}
+}
+
+// renderPrometheusMetrics prints one pipeline's summary in the Prometheus
+// text exposition format, for a scraper or the node_exporter textfile
+// collector (`spore msg approval-metrics ... -prometheus > textfile.prom`
+// from cron). Every series is a gauge over the same artifacts the human
+// summary reads; map families are sorted by label value so the output is
+// deterministic and diffable across scrapes. Unlabeled: byte-compatible
+// with v0.8.5. Multi-queue mode (repeated -dir) adds a per-queue label.
+func renderPrometheusMetrics(m *approvalMetrics) {
+	var p promFamilySet
+	emitPrometheusQueue(&p, m, "")
+	p.printTo(os.Stdout)
+}
+
+// renderPrometheusMetricsMulti renders several queues into one exposition,
+// every series labeled queue="<dir>" so several stations can share one
+// textfile while staying attributable. -out-dir and -state-dir are refused
+// in this mode: outbox and ledger latencies belong to one pipeline.
+func renderPrometheusMetricsMulti(dirs []string) error {
+	var p promFamilySet
+	for _, dir := range dirs {
+		if dir == "" {
+			dir = "."
+		}
+		m, err := buildApprovalMetrics(dir, "", "", time.Now())
+		if err != nil {
+			return err
+		}
+		emitPrometheusQueue(&p, m, `queue="`+promEscapeLabel(dir)+`"`)
+	}
+	p.printTo(os.Stdout)
+	return nil
 }
 
 func formatMetricCounts(counts map[string]int) string {
