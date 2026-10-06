@@ -3,6 +3,52 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.8.6 — the station pages you: watch mode, Prometheus, and a daily drill (2026-10-05)
+
+Ten commits that turn the always-on approver station into a fully
+observable, gated, alerting service — plus one fix the new CI exercise
+caught before it could bite.
+
+- `station-health.sh` gains `-w`/`--watch`: a live tripwire that follows
+  the heartbeat log and stops non-zero on the FIRST violation or malformed
+  line. It follows with a pure-bash chunked reader — GNU tail block-buffers
+  its stdout when piping, which stalled small-append delivery indefinitely
+  (a violating heartbeat could sit untripped; found by the new sentinel and
+  proven with a >4KB flush experiment) — and it follows copytruncate and
+  rename rotation, exits 2 (never a silent pass) when the file vanishes or
+  cannot be reopened, and exits 130 on Ctrl-C.
+- `-prometheus`: `spore msg approval-metrics` renders the summary as the
+  Prometheus text exposition format (`spore_approval_*` gauges: volumes,
+  statuses, skip reasons, locks live/orphaned/oldest age, oldest-pending
+  age, outbox latencies) for a scraper or the node_exporter textfile
+  collector.
+- Multi-queue scraping: repeated `-dir` puts several pipelines into ONE
+  exposition, every series labeled `queue="..."`; `-dir path=name` gives a
+  station a friendly label instead of a raw path. Zero or one plain `-dir`
+  keeps the v0.8.5 output byte-identical (proven against a pre-refactor
+  binary capture). Multi-queue refuses `-out-dir` and `-state-dir` — outbox
+  and ledger latencies belong to one pipeline.
+- `station-health-alert.sh`: an example alerting wrapper — runs the gate in
+  `-w` mode and POSTs one JSON object (source, at, host, file, exit_code,
+  text, detail) to a webhook on the first trip (posts as-is to Slack
+  incoming webhooks), then resumes watching after a cooldown. `--dry-run`
+  tests the whole path without a receiver; `--once` exits with the gate's
+  code for cron/systemd supervision and 4 when delivery itself fails; the
+  webhook can come from `STATION_HEALTH_WEBHOOK` so the secret stays out of
+  argv.
+- `approval-drill-watch.yml`: a daily sentinel in the pin-freshness pattern
+  — the real-process double-sign drill, the watch self-metrics live smoke,
+  and a live fire of the health gate in batch AND `-w` mode (healthy holds,
+  an orphan trips, a vanish exits 2). Opens and updates one tracking issue
+  on red, auto-closes on green. It earned its keep on day one: its watch
+  exercise exposed the tail-buffering stall above.
+- The three machine-readable renderings of `approval-metrics` (`-json`,
+  `-envelope`, `-prometheus`) are mutually exclusive by validation, and the
+  latency-family rendering is pinned byte-exact by test.
+
+Runbook §3.2/§3.3 document the gate and the wrapper; §5 documents the
+shared-textfile patterns.
+
 ## v0.8.5 — the heartbeat names its station, and the log gets a health gate (2026-10-05)
 
 Everything an operator needs to scrape and gate an always-on approver
