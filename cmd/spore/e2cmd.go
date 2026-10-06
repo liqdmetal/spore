@@ -883,6 +883,7 @@ type recvE2Opts struct {
 	interval, idleInterval            *time.Duration
 	idleAfter                         *time.Duration
 	min                               *uint64
+	autoBurn                          *bool
 	receiptsFile                      *string
 	autoAck                           *bool
 	ackTTL                            *time.Duration
@@ -908,6 +909,7 @@ func newRecvE2Flagset() (*flag.FlagSet, *recvE2Opts) {
 	o.idleInterval = fs.Duration("idle-interval", 60*time.Second, "adaptive: poll this slowly after -idle-after of silence")
 	o.idleAfter = fs.Duration("idle-after", 2*time.Minute, "adaptive: silence this long before backing off to -idle-interval (0 disables adaptation)")
 	o.min = fs.Uint64("min-height", 0, "scan height")
+	o.autoBurn = fs.Bool("auto-burn", true, "erase each message from on-chain mailbox state right after receiving it (evm/solana only; nothing persists but a spent tx)")
 	o.receiptsFile = fs.String("receipts", "receipts.json", "ledger file to append received invoice/payment envelopes to")
 	o.autoAck = fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	o.ackTTL = fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
@@ -928,6 +930,30 @@ func newRecvE2Flagset() (*flag.FlagSet, *recvE2Opts) {
 	return fs, o
 }
 
+// recvE2WatchOpts builds the chain-watch options for the E2 receive loop.
+//
+// AutoBurn is on by default (evm/solana): once a frame is ingested the
+// mailbox slot is erased, so nothing but a spent tx persists — the compost
+// promise the carrier matrix makes. This wiring was MISSING: the E2 path
+// passed WatchOpts with no AutoBurn at all, so `msg recv-e2` never burned a
+// delivered pointer and the MyceliumMailbox slot kept it forever, while the
+// legacy `msg recv` path burned correctly. Found by scripts/anvil_e2e.sh —
+// the local proof that asserts a fresh-state read of the burned slot comes
+// back empty (the on-chain slot is the evidence, not a log line).
+func recvE2WatchOpts(o *recvE2Opts) chain.WatchOpts {
+	autoBurn := true
+	if o.autoBurn != nil {
+		autoBurn = *o.autoBurn
+	}
+	return chain.WatchOpts{
+		MinHeight:    *o.min,
+		Interval:     *o.interval,
+		IdleInterval: *o.idleInterval,
+		IdleAfter:    *o.idleAfter,
+		AutoBurn:     autoBurn,
+	}
+}
+
 func msgRecvE2(args []string) {
 	fs, o := newRecvE2Flagset()
 	_ = fs.Parse(args)
@@ -937,7 +963,7 @@ func msgRecvE2(args []string) {
 	// Rebind the polling knobs (still per-command); receiver setup itself
 	// moved into openE2Receiver (e2ingest.go) — shared with `spore fabric
 	// subscribe` (slice F2) so both transports ingest through ONE pipeline.
-	interval, idleInterval, idleAfter, min := o.interval, o.idleInterval, o.idleAfter, o.min
+	interval := o.interval
 
 	// Validate and create the attachment output directory before any prekey
 	// state can be consumed (a bad path must not burn a one-time prekey).
@@ -1037,10 +1063,7 @@ func msgRecvE2(args []string) {
 		}
 	}
 
-	in, errs := ratchetwire.WatchE2(ctx, c, chain.WatchOpts{
-		MinHeight: *min, Interval: *interval,
-		IdleInterval: *idleInterval, IdleAfter: *idleAfter,
-	})
+	in, errs := ratchetwire.WatchE2(ctx, c, recvE2WatchOpts(o))
 	for {
 		select {
 		case inc, ok := <-in:

@@ -131,6 +131,20 @@ Executes the "deploy for real" step of the v0.9.0 roadmap item
 (ROADMAP.md, product roadmap): put the already-built-and-pinned
 `MyceliumMailbox` on a real chain and publish the receipt.
 
+### Rehearse for free first: the local Anvil proof
+
+`scripts/anvil_e2e.sh` runs the entire two-party arc — deploy the PINNED
+`tools/mycelium.bin` through the real `spore contract deploy-mycelium` path,
+publish a prekey batch, A → B `send-e2 -mailbox`, B receiving with auto-burn,
+and the empty-slot read back — against a throwaway local Anvil that the script
+starts and stops itself. No keys, no faucet, no network, no jq: it needs only
+`anvil` on PATH, and with `-s` it self-skips (exit 0) where foundry is absent.
+It is the fast pre-flight for Phase A below and the local mirror of this
+runbook — run it before spending testnet ETH, and again after any carrier
+change. It also pins the compost promise on-chain: the script fails unless a
+fresh-state read of the burned slot (and, with foundry's `cast`, the
+contract's own `read(to, seq)`) comes back empty.
+
 ### Why Base (chain comparison, as of 2026-09)
 
 | Chain | Fee reality for a pointer tx | Fits our deploy path? | Verdict |
@@ -324,6 +338,12 @@ entry from step 4 exists.
   Base-specific; that is the point of the JSON-RPC seam.
 - Compost is the recipient's gas: `burn(to,seq)` costs a real (small) fee
   per message on EVM, unlike DERO's native expiry.
+- **Compost is wired on the E2 receive path too.** `msg recv-e2` now passes
+  `AutoBurn` to `chain.Watch` (default on; `-auto-burn=false` disables it),
+  matching what `msg recv` always did. Before this it never erased the
+  delivered pointer, so a configured MyceliumMailbox slot kept it forever —
+  the local Anvil proof above asserts the erased slot, which is how the gap
+  was found.
 - Value carriage on EVM: the calldata path (no mailbox configured) is
   payable — `-amount` rides the same tx as the pointer. The mailbox-contract
   path is NOT payable: `deliver()` is not a payable function, so `msg

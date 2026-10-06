@@ -246,6 +246,10 @@ echo
 echo "== doc-refs checker =="
 run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
 
+echo
+echo "== local Anvil two-party EVM proof (self-skips when foundry is absent) =="
+run_gate 'anvil E2E proof' bash scripts/anvil_e2e.sh -s
+
 # ---- summary ---------------------------------------------------------------
 if [ -n "$TIMINGS" ]; then
   echo

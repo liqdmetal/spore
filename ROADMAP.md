@@ -205,6 +205,15 @@ pointing it at a funded account on a real chain and publishing the evidence.
   a deployment), with a clearly-labeled conservative constant for burn
   (empty-slot burns revert the estimate; real burns are typically cheaper).
   This is must-do #4's "measure, don't assume" made mechanical.
+- **The local proof harness:** `scripts/anvil_e2e.sh` drives the whole
+  two-party arc — pinned-bytecode deploy through the real deploy path, prekey
+  publish, `send-e2 -mailbox`, receive with auto-burn, and the empty-slot read
+  — on a throwaway Anvil it starts itself, with no keys, no network, and no
+  funder. It is the zero-cost pre-flight for Phase A, runs in `gates.sh`
+  (self-skipping where foundry is absent), and it earned its keep immediately:
+  it caught that `msg recv-e2` never set `AutoBurn`, so the E2 path left every
+  delivered pointer in the mailbox slot while the legacy `msg recv` path
+  burned correctly.
 
 **v0.9.0 must do:**
 

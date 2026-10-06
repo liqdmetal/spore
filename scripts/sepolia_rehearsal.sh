@@ -39,6 +39,10 @@
 #
 # Cost: a deploy plus a dozen deliver/burn rounds is well under 0.01 testnet
 # ETH. Fund both keys from a Base Sepolia faucet (Alchemy/Chainlink run ones).
+#
+# Before spending even testnet ETH, run the FREE offline mirror of this arc:
+# scripts/anvil_e2e.sh — same two-party path against a throwaway local anvil,
+# no keys, no faucet, no jq. It is the fast pre-flight for this rehearsal.
 set -euo pipefail
 
 RPC="https://sepolia.base.org"
