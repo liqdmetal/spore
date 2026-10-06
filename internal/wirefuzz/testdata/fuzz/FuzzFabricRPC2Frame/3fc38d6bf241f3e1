@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("eߡ\xc5\xee0")

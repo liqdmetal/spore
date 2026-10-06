@@ -1,10 +1,13 @@
 package wirefuzz
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -106,4 +109,56 @@ func targetsListedIn(t *testing.T, script string) map[string]string {
 		t.Fatalf("parsed no targets out of %s — did the TARGETS list change format?", script)
 	}
 	return out
+}
+
+// TestFuzzCorpusEntriesAreContentAddressed guards the property the corpus store
+// is built on: Go names a saved entry after the sha256 of its bytes, which is
+// what makes a save additive and exact, and what lets scripts/fuzz-corpus.sh
+// tell "already saved" from "new" by name alone.
+//
+// It is also the one check that would catch the way this corpus could die
+// silently: a line-ending rewrite. The entries are ASCII text, so a checkout
+// that rewrote LF to CRLF would keep every file present and every test passing
+// on the machine that made the mess, while breaking the hash — and Go's parser —
+// everywhere else. A name that no longer prefixes the digest is that damage.
+func TestFuzzCorpusEntriesAreContentAddressed(t *testing.T) {
+	for _, dir := range []string{".", "../ratchetwire"} {
+		fuzzDir := filepath.Join(dir, "testdata", "fuzz")
+		targets, err := os.ReadDir(fuzzDir)
+		if err != nil {
+			t.Fatalf("read %s: %v", fuzzDir, err)
+		}
+
+		checked := 0
+		for _, target := range targets {
+			// Only the per-target corpus directories hold hash-named entries;
+			// seedcorpus/ is a hand-named fixture and is not ours to police.
+			if !target.IsDir() || !strings.HasPrefix(target.Name(), "Fuzz") {
+				continue
+			}
+			entries, err := os.ReadDir(filepath.Join(fuzzDir, target.Name()))
+			if err != nil {
+				t.Fatalf("read %s: %v", filepath.Join(fuzzDir, target.Name()), err)
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				path := filepath.Join(fuzzDir, target.Name(), entry.Name())
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read %s: %v", path, err)
+				}
+				sum := fmt.Sprintf("%x", sha256.Sum256(raw))
+				name := entry.Name()
+				if len(name) < 16 || !strings.HasPrefix(sum, name) {
+					t.Errorf("%s is not named after its own contents: want a prefix of %s, name is %q — was the file rewritten?", path, sum[:16], name)
+				}
+				checked++
+			}
+		}
+		if checked == 0 {
+			t.Errorf("no corpus entries under %s — did the store move?", fuzzDir)
+		}
+	}
 }

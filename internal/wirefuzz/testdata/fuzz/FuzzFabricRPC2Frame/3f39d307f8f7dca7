@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("\xab\xa3a0`a0\x02a0`")

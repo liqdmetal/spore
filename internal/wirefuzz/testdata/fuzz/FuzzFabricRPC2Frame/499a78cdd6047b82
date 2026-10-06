@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("q뮤ˤ˳0000뮤000")

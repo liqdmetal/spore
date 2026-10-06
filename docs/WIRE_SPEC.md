@@ -353,9 +353,22 @@ oss-fuzz fork.
 and is invisible to review. `scripts/fuzz-corpus.sh` is the durable store: it
 harvests that cache into each package's `testdata/fuzz/<Target>/`, which Go
 loads as seed corpus on the next run, so a saved corpus survives a cache wipe
-and travels with the clone. Entries are content-addressed, so a save is
-additive and never rewrites one. `scripts/fuzz-smoke.sh` prints a one-line
-nudge when a run has found inputs that are not saved yet.
+and travels with the clone. Entries are named after the sha256 of their bytes,
+so a save is additive, exact, and never rewrites one, and
+`TestFuzzCorpusEntriesAreContentAddressed` fails if a checkout ever rewrites
+them. `scripts/fuzz-smoke.sh` prints a one-line nudge when a run has found
+inputs that are not saved yet.
+
+A store that only grows stops being reviewable — the first harvest here added
+515 files, 202 of them from one target — so a save also *minimizes*. The
+harvester runs every entry alone against an instrumented test binary, records
+the statement blocks that entry exercises (with hit-count buckets, so inputs
+that differ only in how often they loop stay distinct), and greedily keeps the
+entries covering the union: 89 of 515 here, including 65 of the 202. It drops
+the rest from the repo *and* from the cache, so the next save does not copy
+them straight back — git history still holds them. Coverage is preserved by
+construction, and the pass refuses to delete anything it cannot prove is
+redundant.
 
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock

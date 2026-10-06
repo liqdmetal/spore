@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("\xa0\xa0\xa0\xa0Peer.FabrioRegaS\x03aE`\xa4fffhandlex@fb59a5175354969ab110498f2ec2896032892870f633ec218269549fff1012b7etokenx@933f14372d28966a4669ac60e581894df6b388b2fcb13cf709f9d61c5202034benoncetspore-fabric-vectorselease\x19\x0e\x10")

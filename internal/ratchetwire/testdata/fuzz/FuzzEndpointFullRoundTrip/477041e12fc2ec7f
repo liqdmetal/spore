@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("Y\x80\x00")

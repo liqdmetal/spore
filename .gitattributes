@@ -34,6 +34,12 @@
 # an incidental line-ending rewrite would corrupt cross-implementation checks.
 docs/interop-vectors.json text eol=lf
 
+# Go fuzz corpus entries. Each file is named after the sha256 of the bytes
+# inside, so those bytes are the identity: a normalization pass (line endings
+# above all) breaks the hash, Go's parser, and the harvester's idea of what is
+# already saved. -text means git never rewrites them, in either direction.
+internal/*/testdata/fuzz/** -text
+
 # Generated but text, and worth diffing.
 go.sum        text eol=lf
 Cargo.lock    text eol=lf
