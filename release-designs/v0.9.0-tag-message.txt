@@ -1,0 +1,98 @@
+# v0.9.0 tag message DRAFT — do not tag until every <<FILL:…>> is resolved.
+# Find them all at tag time with:  grep -n 'FILL' release-designs/v0.9.0-tag-message.txt
+#
+# Fill order (each field must already exist in its canonical home first):
+#   1. The receipt fields — copy from docs/LIVE_NODES.md §3 STATUS. The doc
+#      is canonical; the tag cites it and carries the numbers for one-stop
+#      discoverability (same relationship as v0.8.0's scope note).
+#   2. The bullets — prune/add to match what actually landed:
+#      git log v0.8.0..v0.9.0 --oneline
+#      The "default -mailbox" bullet is FILLED (mechanism pre-staged in
+#      main: registry + init wiring + receipt gate); the address it names
+#      lands in the deployment-day flip commit, which the release includes
+#      because the tag is always cut last.
+#   3. If the chain changed from Base: fix the title, the chain line, and
+#      the RPC — LIVE_NODES §3's chain comparison table is the decision
+#      record (Arbitrum One is the documented runner-up).
+#   4. Strip the comment block (everything through the "strip EVERYTHING
+#      above this line" marker) into v0.9.0-tag-message-final.txt, then:
+#        git tag -s v0.9.0 -F release-designs/v0.9.0-tag-message-final.txt
+#      -s is MANDATORY: v0.8.0 set the signed-tag precedent; unsigned would
+#      be a regression. Tag LAST: main pushed, CI green, release published
+#      (the workflow fires on the tag), ruleset makes the tag immutable.
+# (strip EVERYTHING above this line — the title below is the message body)
+
+Spore v0.9.0 — the EVM carrier goes live on Base
+
+The goal stated in the roadmap is met: `spore msg send-e2 -to 0x…` works
+end-to-end on a real EVM chain through a deployed MyceliumMailbox, with
+compost-on-delivery proven on that chain. The EVM row in the carrier
+matrix flips from "live-verified (local Anvil); deployment pending" to
+"live, deployment receipt published".
+
+The receipt (canonical copy: docs/LIVE_NODES.md §3 STATUS):
+
+- Chain: Base (chain 8453), RPC https://mainnet.base.org
+- Contract: <<FILL: MyceliumMailbox address, 0x…>>
+- Creation tx: <<FILL: txid, 0x…>>
+- Deployer: <<FILL: 0x…>>
+- Deployed: <<FILL: date>>
+- Two-party proof: deliver <<FILL: txid>>; the auto-burn was verified by
+  the on-chain empty-slot read (burn txid <<FILL: txid, or "unlogged by
+  design — see the contract's explorer history">>), and a fresh-state
+  production read returned nothing afterward.
+
+What shipped since v0.8.0 (prune to match git log v0.8.0..v0.9.0):
+
+- feat(evm): `spore contract estimate` — the funding math as one command:
+  live eth_gasPrice × live eth_estimateGas for the deploy (and deliver,
+  once -mailbox points at a deployment), a clearly-labeled conservative
+  constant for burn (empty-slot burns revert the estimate; real burns are
+  typically cheaper). Re-run at deploy time; never fund from a stale
+  number.
+- feat(evm): scripts/sepolia_rehearsal.sh — the Phase A rehearsal as one
+  command: estimate, deploy, the two-party proof through a pair of
+  loopback evm-proxy processes, the fresh-state empty-slot assertion, and
+  paste-ready receipt lines. Proven end-to-end against a stateful stub
+  chain (17 checks green) before any faucet funds were spent.
+- feat(evm): default `-mailbox` shipped (roadmap must-do #3) —
+  `internal/evm` KnownMailboxDeployments + `spore init -chain evm` write
+  the Base mainnet address so send-e2 works without retyping it (explicit
+  -mailbox-contract wins; -mailbox-contract= opts out; non-EVM chains
+  never get one). The address lands in the deployment-day flip commit —
+  receipt, registry entry, and doc rows in ONE commit, enforced by the
+  receipt gate (TestShippedMailboxDefaultsCarryReceipts,
+  TestDocClaimsMatchRegistryState, TestReleasePrepProseDrainedAfterFlip).
+- <<FILL: docs: honest fee + limit notes (must-do #4) with the measured
+  numbers; CARRIER_MATRIX + README EVM rows flipped to "live" with the
+  DERO/Solana honesty bar>>
+- feat(evm): pay-with-message honesty — `msg send-e2` and `msg pay` REFUSE
+  -amount on the mailbox-contract path (deliver() is not payable; refusal
+  beats printing PAID over a zero-value tx), wire-pinned by
+  TestPostPayloadContractPathDropsValue.
+- docs: the deployment-day runbook (funded key → receipt → one-commit
+  flip → signed tag) lives in docs/LIVE_NODES.md §3; the narrative and
+  remaining-document status drains (doc-flips Patches 6–7) are gate-enforced
+  post-flip.
+- <<FILL: anything else that lands between this draft and the tag — one
+  bullet per user-visible change, pruned against git log v0.8.0..v0.9.0>>
+
+Honest notes:
+
+- Compost is the recipient's gas: burn(to,seq) costs a real (small) fee
+  per message on EVM, unlike DERO's native expiry. The raw-calldata path
+  stays the default and the payable one; the contract path carries no
+  value and refuses -amount rather than silently underpaying.
+- Fees measured at deploy time with `spore contract estimate`:
+  <<FILL: the measured funding total, e.g. "0.004 ETH deploy + 12 ×
+  (deliver+burn) = 0.0049… ETH at 1 gwei">>. Gas prices move.
+
+Deliberately not in v0.9.0: cross-chain identity proof (roadmap item #10
+gates it later — EVM delivery here is DERO-independent by design: the
+recipient is an EVM address, the ratchet is X3DH as today); and
+pay-with-message through the contract path (stretch — needs a payable
+deliver variant; kept out of the done-bar on purpose so the core
+deployment was not hostage to it).
+
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>
