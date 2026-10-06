@@ -4,8 +4,11 @@
 //
 // Reports per configured chain whether the RPC/wallet endpoint is reachable,
 // our address, and the current chain height — plus whether a mailbox (if one
-// is configured/running) is serving. It is the "am I actually connected?"
-// sanity check before you try to send or receive.
+// is configured/running) is serving. On the EVM path it also prints the
+// configured MyceliumMailbox contract, the chain it belongs to, and whether it
+// is a shipped default or the operator's own override, so the live contract is
+// visible at a glance. It is the "am I actually connected?" sanity check
+// before you try to send or receive.
 package main
 
 import (
@@ -14,9 +17,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/evm"
 )
 
 // statusProbe is one connection's health result.
@@ -45,12 +50,56 @@ func statuscmd(args []string) {
 	p := probeChain(ctx, c)
 	probes = append(probes, p)
 
+	// The EVM mailbox is the "which contract am I pointed at?" fact. Resolve
+	// it for EVM operators whether or not one is configured, so the line is
+	// never a silent absence. The chain id comes from the registry when the
+	// address is a shipped default, else from the live backend.
+	mailboxLine := ""
+	if eb, ok := c.(*evm.Backend); ok {
+		var chainID uint64
+		known := false
+		if id, err := eb.ChainID(ctx); err == nil && id != nil && id.IsUint64() {
+			chainID, known = id.Uint64(), true
+		}
+		mailboxLine = mailboxStatusLine(eb.Mailbox(), chainID, known)
+	}
+
 	// Optional mailbox HTTP probe.
 	if *mailboxHTTP != "" {
 		probes = append(probes, probeMailbox(ctx, *mailboxHTTP))
 	}
 
-	renderStatus(probes)
+	renderStatus(probes, mailboxLine)
+}
+
+// mailboxStatusLine renders the configured EVM MyceliumMailbox for the status
+// HUD — the address, the chain it belongs to, and whether it is a shipped
+// default or the operator's own override:
+//
+//	mailbox       0x12…cd  chain=8453   shipped default (v0.9.0)
+//	mailbox       0x12…cd  chain=31337  user override (-mailbox / config evm_mailbox)
+//	mailbox       none configured (EVM only; set -mailbox or config evm_mailbox)
+//
+// connectedChainID is the chain the RPC is actually on (known=false when the
+// backend could not report it). A shipped default's chain id comes from the
+// registry — its address is only valid there — so a connected chain that
+// differs is called out rather than silently trusted.
+func mailboxStatusLine(mailbox string, connectedChainID uint64, known bool) string {
+	if mailbox == "" {
+		return "  mailbox       none configured (EVM only; set -mailbox or config evm_mailbox)"
+	}
+	if d, ok := evm.MailboxDeploymentByAddress(mailbox); ok {
+		line := fmt.Sprintf("  mailbox       %-25s chain=%d  shipped default (%s)", truncMid(mailbox, 22), d.ChainID, d.Default)
+		if known && connectedChainID != d.ChainID {
+			line += fmt.Sprintf("  ⚠ connected chain is %d", connectedChainID)
+		}
+		return line
+	}
+	chainID := "unknown"
+	if known {
+		chainID = strconv.FormatUint(connectedChainID, 10)
+	}
+	return fmt.Sprintf("  mailbox       %-25s chain=%s  user override (-mailbox / config evm_mailbox)", truncMid(mailbox, 22), chainID)
 }
 
 // probeChain checks one chain.Chain: reachable (Height succeeds) + address.
@@ -108,10 +157,14 @@ func probeMailbox(ctx context.Context, base string) statusProbe {
 	return sp
 }
 
-// renderStatus prints the HUD.
-func renderStatus(probes []statusProbe) {
+// renderStatus prints the HUD. mailboxLine is the pre-rendered EVM mailbox
+// summary (empty on non-EVM chains).
+func renderStatus(probes []statusProbe, mailboxLine string) {
 	fmt.Println("spore status")
 	fmt.Println("---------------")
+	if mailboxLine != "" {
+		fmt.Println(mailboxLine)
+	}
 	anyDown := false
 	for _, p := range probes {
 		mark := "✅"

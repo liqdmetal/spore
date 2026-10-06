@@ -378,6 +378,37 @@ func TestReleasePrepDrainGatePolarity(t *testing.T) {
 	}
 }
 
+// TestMailboxDeploymentByAddress covers the reverse lookup the status HUD
+// uses to tell a shipped default from an operator override.
+func TestMailboxDeploymentByAddress(t *testing.T) {
+	const addr = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01"
+	if _, ok := MailboxDeploymentByAddress(addr); ok {
+		t.Fatal("the empty shipped registry must match nothing")
+	}
+	if _, ok := MailboxDeploymentByAddress(""); ok {
+		t.Fatal("an empty address must never match")
+	}
+
+	KnownMailboxDeployments["8453"] = MailboxDeployment{
+		ChainID: 8453, Address: addr, Default: "vTEST", ReceiptRef: "test",
+	}
+	t.Cleanup(func() { delete(KnownMailboxDeployments, "8453") })
+
+	got, ok := MailboxDeploymentByAddress(addr)
+	if !ok || got.ChainID != 8453 || got.Default != "vTEST" {
+		t.Fatalf("address lookup returned %+v ok=%v", got, ok)
+	}
+	if _, ok := MailboxDeploymentByAddress(strings.ToLower(addr)); !ok {
+		t.Fatal("address lookup must be case-insensitive")
+	}
+	if _, ok := MailboxDeploymentByAddress("  0xAbCdEf0123456789AbCdEf0123456789AbCdEf01  "); !ok {
+		t.Fatal("address lookup must tolerate surrounding whitespace")
+	}
+	if _, ok := MailboxDeploymentByAddress("0x0000000000000000000000000000000000000000"); ok {
+		t.Fatal("an unknown address must not match a shipped default")
+	}
+}
+
 func TestDefaultMailboxContractLookupGuards(t *testing.T) {
 	if shipped, ok := KnownMailboxDeployments["8453"]; ok {
 		if got := DefaultMailboxContract(8453); got != shipped.Address {

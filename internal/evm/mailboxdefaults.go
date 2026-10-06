@@ -74,6 +74,25 @@ func DefaultMailboxDeployment(chainID uint64) (MailboxDeployment, bool) {
 	return d, ok
 }
 
+// MailboxDeploymentByAddress returns the shipped deployment whose Address is
+// addr (case-insensitive), if one exists. Callers use it to classify a
+// configured mailbox: a match is a shipped default (its chain id and releasing
+// version come from the registry — the address is only valid there), a miss is
+// the operator's own override. This is the reverse of DefaultMailboxContract,
+// which goes chain id → address.
+func MailboxDeploymentByAddress(addr string) (MailboxDeployment, bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return MailboxDeployment{}, false
+	}
+	for _, d := range KnownMailboxDeployments {
+		if d.Address != "" && strings.EqualFold(d.Address, addr) {
+			return d, true
+		}
+	}
+	return MailboxDeployment{}, false
+}
+
 func uintToString(v uint64) string {
 	// strconv would do; kept dependency-free and allocation-light for a
 	// hot-ish lookup path.
