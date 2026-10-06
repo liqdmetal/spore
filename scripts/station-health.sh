@@ -30,18 +30,22 @@
 #
 # Two modes:
 #   batch (default)  check the whole log, print every violation, exit.
-#   -w / --watch     live tripwire: follow only NEW heartbeats (tail -n 0 -f)
-#                    and stop with a non-zero exit on the FIRST violation or
-#                    malformed line; a tail failure (file vanished) also
-#                    stops non-zero — never a silent pass. Ctrl-C is the
-#                    stop signal (exit 130).
+#   -w / --watch     live tripwire: follow only NEW heartbeats (pure-bash
+#                    chunked follower — NOT tail -f, whose stdio buffers
+#                    small appends when stdout is a pipe, stalling
+#                    delivery) and stop with a non-zero exit on the FIRST
+#                    violation or malformed line; a vanished file, an
+#                    unopenable rotation, or a directory also stops
+#                    non-zero — never a silent pass. Ctrl-C is the stop
+#                    signal (exit 130). Rename/copytruncate rotation is
+#                    followed.
 #                    Combine with the alerting of your choice:
 #                      while bash scripts/station-health.sh -w -f station.jsonl; do sleep 2; done
 #
 # Exit codes: 0 healthy, 1 health violation, 2 malformed input (in watch
-# mode: also a tail failure — file vanished, permissions — never a silent
-# pass), 3 no heartbeat lines (batch mode only — a silent station is not a
-# healthy one; watch mode follows instead of ending).
+# mode: also a vanished file, unopenable rotation, or directory — never a
+# silent pass), 3 no heartbeat lines (batch mode only — a silent station is
+# not a healthy one; watch mode follows instead of ending).
 #
 # Usage: bash scripts/station-health.sh [-w] [-f FILE] [--max-pending-age SEC]
 #             [--max-lock-age SEC] [--max-pending N]
@@ -155,38 +159,74 @@ process_line() {
 
 if [[ $watch == 1 ]]; then
   # Live tripwire: follow only NEW heartbeats and stop on the first
-  # violation or malformed line. tail runs in the background and feeds the
-  # read loop through a FIFO: on exit the trap kills tail (a plain
-  # "tail | while" pipeline would hang, because bash waits for the tail
-  # member even after the loop has exited) and removes the fifo. Ctrl-C
-  # exits 130 via the INT trap.
-  fifodir=$(mktemp -d)
-  mkfifo "$fifodir/p"
-  tail -n 0 -f "$file" > "$fifodir/p" &
-  TAIL_PID=$!
+  # violation or malformed line. Pure-bash chunked reads instead of
+  # `tail -f`: tail's stdio buffers small appends when its stdout is a
+  # pipe (4KB block buffering), so a violating heartbeat could sit
+  # undelivered indefinitely — found by exactly this scenario in testing.
+  # Lines are reassembled across chunk boundaries; a truncated file
+  # (logrotate copytruncate) or a renamed rotation reopens from the new
+  # file; a vanished file exits 2. Ctrl-C exits 130 via the INT trap.
+  buf=""
+  # set -e: a failing stat in an assignment exits the script silently with
+  # stat's status — catch it so the vanished-file check below can run.
+  prev_size=$(stat -c %s "$file" 2>/dev/null) || prev_size=""
+  prev_ino=$(stat -c %i "$file" 2>/dev/null) || prev_ino=""
+  if [[ -z $prev_size ]]; then
+    echo "station-health: watch: cannot stat $file" >&2
+    exit 2
+  fi
+  if [[ -d $file ]]; then
+    echo "station-health: watch: cannot follow a directory: $file" >&2
+    exit 2
+  fi
+  exec 3<"$file"
   cleanup() {
-    kill "$TAIL_PID" 2>/dev/null || true
-    rm -rf "$fifodir"
+    exec 3<&-
+  }
+  reopen() {
+    exec 3<&-
+    if ! exec 3<"$file"; then
+      echo "station-health: watch: cannot reopen $file (rotated away?)" >&2
+      exit 2
+    fi
+    buf=""
   }
   trap 'cleanup; exit 130' INT TERM
   trap 'cleanup' EXIT
   rc=0
-  while IFS= read -r line <"$fifodir/p"; do
-    [[ $line == '{"at":'* ]] || continue
-    rc=0
-    process_line "$line" || rc=$?
-    if ((rc != 0)); then
-      exit "$rc"
+  while :; do
+    chunk=""
+    got=0
+    if IFS= read -r -u 3 -N 65536 chunk; then got=1; fi
+    if [[ -n $chunk ]]; then
+      buf+=$chunk
+      while [[ $buf == *$'\n'* ]]; do
+        line=${buf%%$'\n'*}
+        buf=${buf#*$'\n'}
+        line=${line%$'\r'}
+        [[ $line == '{"at":'* ]] || continue
+        rc=0
+        process_line "$line" || rc=$?
+        if ((rc != 0)); then
+          exit "$rc"
+        fi
+      done
+    fi
+    cur_size=$(stat -c %s "$file" 2>/dev/null) || cur_size=""
+    cur_ino=$(stat -c %i "$file" 2>/dev/null) || cur_ino=""
+    if [[ -z $cur_size ]]; then
+      echo "station-health: watch: $file vanished; cannot follow" >&2
+      exit 2
+    fi
+    if [[ $cur_ino != "$prev_ino" || $cur_size -lt $prev_size ]]; then
+      reopen
+    fi
+    prev_size=$cur_size
+    prev_ino=$cur_ino
+    if ((got == 0)); then
+      sleep 1
     fi
   done
-  # Reaching here means the FIFO hit EOF — tail -f never EOFs a live file,
-  # so this is a tail failure (file vanished between the existence check
-  # and the open, permissions, a directory). Report it instead of exiting
-  # 0 as if the station were healthy.
-  tail_rc=0
-  wait "$TAIL_PID" || tail_rc=$?
-  echo "station-health: watch: tail exited (rc $tail_rc); cannot follow $file" >&2
-  exit 2
 fi
 
 while IFS= read -r line; do
