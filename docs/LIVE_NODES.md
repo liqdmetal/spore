@@ -187,6 +187,20 @@ GO. Gates 0–3 are free; gate 4 is the only step that spends mainnet ETH. Stop
 at the first NO-GO: nothing before gate 4 is irreversible, and a deployed
 contract with no shipped default (gate 6) is inert.
 
+One command runs the free, read-only gates (0–2) and ends in a GO/NO-GO:
+
+```bash
+scripts/preflight-base.sh                 # Base mainnet defaults: chain 8453
+scripts/preflight-base.sh -a 0x… -c 31337 # any EVM chain (e.g. a local anvil)
+scripts/preflight-base.sh -m 0x…          # after gate 4: adds the round budget
+```
+
+It never signs, deploys, or sends anything. It derives the deployer address
+without printing the key, computes the predicted creation address from the
+live nonce, and checks the deployer's balance against the live estimate; a
+missing tool (foundry/`cast`, go, `anvil`) is a NO-GO with a reason, never a
+silent pass. Run it before gate 3 and again after gate 4.
+
 #### Gate 0 — the proof runs locally, and the shipped bytes are the audited bytes
 
 ```bash
