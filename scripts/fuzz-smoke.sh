@@ -8,9 +8,12 @@
 # parser regression crashes a pre-push run instead of shipping. scripts/gates.sh
 # invokes it, and lefthook runs gates.sh on every push.
 #
-#   usage: scripts/fuzz-smoke.sh [-t SECONDS] [--check]
+#   usage: scripts/fuzz-smoke.sh [-t SECONDS] [--check] [--deep]
 #     -t SECONDS  fuzz time per target (default 5; the retired CI matrix used 15)
 #     --check     verify every listed target exists in the source, then stop
+#     --deep      release pre-flight: 60s per target (about nine minutes) instead
+#                 of the few seconds a push gets. Never run by gates.sh or
+#                 lefthook — invoke it by hand before a release.
 #
 # Coverage: the four standalone SPR2 parser targets in internal/wirefuzz and
 # the five SecureWire seam targets in internal/ratchetwire — the same nine the
@@ -27,8 +30,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-FUZZTIME=5
+DEFAULT_FUZZTIME=5
+FUZZTIME=""
 CHECK=0
+DEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -t)
@@ -36,9 +41,18 @@ while [ $# -gt 0 ]; do
       FUZZTIME="$2"
       shift 2
       ;;
+    --deep)
+      DEEP=1
+      DEFAULT_FUZZTIME=60
+      shift
+      ;;
     --check) CHECK=1; shift ;;
     -h | --help)
-      echo "usage: scripts/fuzz-smoke.sh [-t SECONDS] [--check]"
+      echo "usage: scripts/fuzz-smoke.sh [-t SECONDS] [--check] [--deep]"
+      echo "  -t SECONDS  fuzz time per target (default 5; --deep makes it 60)"
+      echo "  --check     verify the target list resolves in the source, then stop"
+      echo "  --deep      release pre-flight: 60s per target (~9 minutes), never run"
+      echo "              by the pre-push gate"
       exit 0
       ;;
     *)
@@ -47,6 +61,9 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# -t wins over --deep's preset; --deep's preset wins over the smoke default.
+[ -n "$FUZZTIME" ] || FUZZTIME="$DEFAULT_FUZZTIME"
 
 case "$FUZZTIME" in
   '' | *[!0-9]*)
@@ -100,9 +117,29 @@ command -v go >/dev/null 2>&1 || {
 # dozens of orphaned directories behind (observed: 123 across two runs). Point
 # Go's temp dir at a scratch directory this script removes, so the gate leaves
 # nothing outside the repo or in it.
+#
+# Sweep scratch dirs an interrupted run left behind. Only ones over an hour
+# old: even a --deep run finishes in about nine minutes, so a newer directory
+# may belong to a run still in progress and is left alone.
+find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'spore-fuzz-smoke.*' -mmin +60 \
+  -exec rm -rf {} + 2>/dev/null || true
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/spore-fuzz-smoke.XXXXXX")"
-trap 'rm -rf "$SCRATCH"' EXIT
+cleanup() {
+  # A fuzz worker killed mid-iteration (Ctrl-C, or this script under `timeout`)
+  # keeps its temp dir busy for a moment: retry once after a short settle, so
+  # an interrupted run — likelier for --deep than for the smoke — still cleans
+  # up after itself instead of spraying rm errors and leaving the directory.
+  rm -rf "$SCRATCH" 2>/dev/null && return 0
+  sleep 1
+  rm -rf "$SCRATCH" 2>/dev/null || true
+}
+trap cleanup EXIT
 export TMPDIR="$SCRATCH" TEMP="$SCRATCH" TMP="$SCRATCH"
+
+if [ "$DEEP" -eq 1 ]; then
+  echo "fuzz-smoke: DEEP pre-flight — ${#TARGETS[@]} target(s) at ${FUZZTIME}s each, about $(( ${#TARGETS[@]} * FUZZTIME / 60 )) minute(s). The pre-push gate runs this script without --deep."
+fi
 
 n=0
 for entry in "${TARGETS[@]}"; do
@@ -128,4 +165,6 @@ for entry in "${TARGETS[@]}"; do
   n=$((n + 1))
 done
 
-echo "FUZZ SMOKE GREEN — $n target(s), ${FUZZTIME}s each (wirefuzz + ratchetwire)"
+label="FUZZ SMOKE GREEN"
+[ "$DEEP" -eq 1 ] && label="FUZZ DEEP GREEN"
+echo "$label — $n target(s), ${FUZZTIME}s each (wirefuzz + ratchetwire)"

@@ -342,9 +342,11 @@ target's corpus is seeded from those same vectors.
 **Local (now the only runner):** the pre-push gate (`scripts/gates.sh`)
 calls `scripts/fuzz-smoke.sh`, which drives every `wirefuzz` and
 `ratchetwire` target for a few seconds each, so a regression in any of them
-fails before it can be pushed. The OSS-Fuzz-shaped build recipe this whole
-pipeline descends from is preserved in the `projects/spore` integration of
-the oss-fuzz fork.
+fails before it can be pushed. For a release pre-flight the same script takes
+`--deep` — 60 seconds per target, about nine minutes — which the pre-push gate
+deliberately never invokes. The OSS-Fuzz-shaped build recipe this whole
+pipeline descends from is preserved in the `projects/spore` integration of the
+oss-fuzz fork.
 
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
