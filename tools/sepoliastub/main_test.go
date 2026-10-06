@@ -4,11 +4,11 @@ package main
 //
 // The E2 receive path's burn is deliberately unlogged, so the txid has to be
 // read back off the chain — and the offline rehearsal smoke that runs the whole
-// funded path against this stub is a dispatch-only CI job. Without a test here,
-// a change to eth_getTransactionByHash / eth_getBlockByNumber would break a job
-// nobody runs on a push, and the first symptom would be a rehearsal that cannot
-// name the burn it just proved. These pin the contract the reader consumes:
-// field names, the null answers it depends on, and the block window it scans.
+// funded path against this stub is a ~minute-long CI job, so a change to
+// eth_getTransactionByHash / eth_getBlockByNumber would surface only there.
+// These pin the same contract at unit speed: field names, the null answers the
+// reader depends on, and the block window it scans — a precise failure in
+// seconds instead of a rehearsal that cannot name the burn it just proved.
 //
 // The last test closes the loop by running the REAL reader script against this
 // stub over HTTP, so the two cannot drift apart silently either.

@@ -5,13 +5,15 @@ permissions:
 
 
 on:
-  # Pushes to main run the FAST gate only — see `jobs:` below for the four jobs
-  # that is. Tag pushes don't run CI at all: a tag fires the Release workflow,
-  # whose pipeline is the tag's gate, and the tagged commit's CI already ran
-  # when it landed on main, so running CI on the tag ref only ever duplicated
-  # that run. PRs run on their merge-refs; the concurrency group still cancels
-  # superseded runs on the same ref. workflow_dispatch is how the expensive
-  # jobs are run on demand.
+  # Pushes to main and PRs run the FAST gate — the five jobs named in `jobs:`
+  # below: build+vet+test, the three static/doc gates, and the stub-chain
+  # rehearsal smoke (the one integration job whose inputs an ordinary commit
+  # can change). Tag pushes don't run CI at all: a tag fires the Release
+  # workflow, whose pipeline is the tag's gate, and the tagged commit's CI
+  # already ran when it landed on main, so running CI on the tag ref only ever
+  # duplicated that run. PRs run on their merge-refs; the concurrency group
+  # still cancels superseded runs on the same ref. workflow_dispatch runs the
+  # remaining expensive jobs on demand.
   push:
     branches:
       - main
@@ -35,13 +37,19 @@ concurrency:
 
 jobs:
   # WHICH JOBS AN ORDINARY PUSH RUNS IS A DELIBERATE CHOICE, NOT ALL OF THEM.
-  # A push to main spends minutes on four: this build/vet/test job and the
-  # three fast static/doc gates further down. Everything else is expensive per
-  # run — two Windows runners, the race pass, the Rust wire-contract build, the
-  # stub-chain rehearsal, ten fuzz targets, two release builds and their
-  # manifest, and a network vuln scan — and most commits cannot change any of
-  # it. Those jobs run on demand (Actions -> CI -> Run workflow) and, for
-  # fuzz-smoke and govulncheck, on the weekly schedule above.
+  # A push to main or a PR spends minutes on five: this build/vet/test job, the
+  # three fast static/doc gates further down, and the stub-chain rehearsal
+  # smoke. The rehearsal smoke earns its place on every push because it is the
+  # only automated exercise of the funded receive path — it drives the real CLI
+  # (evm-proxy, contract deploy/estimate, msg send-e2/recv-e2, and the unlogged
+  # burn plus its chain-state recovery) against tools/sepoliastub, so an
+  # ordinary flag rename or ABI drift fails here instead of at the next real
+  # rehearsal. Everything else is expensive per run — two Windows runners, the
+  # race pass, the Rust wire-contract build, ten fuzz targets, two release
+  # builds and their manifest, and a network vuln scan — and most commits
+  # cannot change any of it. Those jobs run on demand (Actions -> CI -> Run
+  # workflow) and, for fuzz-smoke and govulncheck, on the weekly schedule
+  # above.
   #
   # A skipped job reports as SKIPPED, and GitHub counts a skipped required check
   # as passing, so a branch rule that names any of them cannot hang on a push
@@ -132,17 +140,21 @@ jobs:
     uses: ./.github/workflows/spore-peer-contract.yml
 
   # The Phase A runbook can bit-rot silently: it drives spore's real CLI
-  # (evm-proxy, contract deploy/estimate, msg send-e2/recv-e2) against an
-  # RPC surface no unit test pretends to be. This smoke runs the ENTIRE
+  # (evm-proxy, contract deploy/estimate, msg send-e2/recv-e2, and the
+  # unlogged burn plus its chain-state recovery) against an RPC surface no
+  # unit test pretends to be. This smoke runs the ENTIRE
   # scripts/sepolia_rehearsal.sh against tools/sepoliastub (a stateful
   # MyceliumMailbox simulator whose selectors and ABI shapes are computed
   # from the same signatures internal/evm encodes) plus a local derosim
-  # store — no faucet, no relays, fully offline. The script's own ~17
+  # store — no faucet, no relays, fully offline. The script's own ~18
   # assertions are the gate: a CLI flag rename, a log-line rewording, or an
-  # ABI drift fails here instead of at the next real rehearsal.
+  # ABI drift fails here instead of at the next real rehearsal. It runs on
+  # every push and PR: the funded run needs two faucet-funded keys, so this is
+  # the only place the wiring is exercised end to end without a human
+  # dispatching it.
   rehearsal-smoke:
     name: sepolia rehearsal smoke (stub chain)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
