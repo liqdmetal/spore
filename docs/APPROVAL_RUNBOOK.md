@@ -386,3 +386,64 @@ spore msg approval-metrics -dir ~/station-a-queue -dir ~/station-b-queue \
   requires it, because the station signs without a human watching each action.
 - **Plaintext never on argv.** Bodies stay in `-msg-file`; the envelope only
   ever carries the opaque E2 pointer hash.
+
+## 7. One host, end to end
+
+A complete, copy-pasteable station posture for one approver box — station,
+scrape, gate, alert, and drill history:
+
+```bash
+# --- one-time: names and paths used below
+HOST_TAG=$(hostname)                          # or pick your own station name
+Q=~/approval-queue                            # request queue
+OUT=~/outbox                                  # signed approvals
+STATE=~/state                                 # replay ledger
+KEY=~/keys/approver.key                       # approver identity
+PROM=~/node_exporter/spore_approval.prom      # node_exporter textfile
+LOG=~/station.jsonl                           # heartbeat + verdict log
+
+# --- the always-on station (systemd unit recommended; nohup works)
+spore msg approve -request-dir "$Q" -identity "$KEY" -out-dir "$OUT" -state-dir "$STATE" \
+  -watch -every 30s -metrics-every 1m -metrics-json | tee -a "$LOG"
+
+# --- cron, every minute: shared Prometheus textfile (two stations, friendly
+# --- labels) + the log gate + the live alert wrapper
+* * * * * spore msg approval-metrics \
+    -dir "$HOME/approval-queue=$HOST_TAG" \
+    -dir "$HOME/station-b-queue=station-b" \
+    -prometheus > "$HOME/node_exporter/spore_approval.prom.tmp" \
+  && mv "$HOME/node_exporter/spore_approval.prom.tmp" "$HOME/node_exporter/spore_approval.prom"
+
+* * * * * bash ~/spore/scripts/station-health.sh -f "$HOME/station.jsonl"
+
+@reboot STATION_HEALTH_WEBHOOK=https://hooks.slack.com/services/... \
+  bash ~/spore/scripts/station-health-alert.sh -f "$HOME/station.jsonl" --cooldown 300
+```
+
+What each piece buys you:
+
+- **The textfile** (`spore_approval_*`) is what dashboards graph: queue
+  depths, lock ages, orphaned locks, pending ages, outbox latencies —
+  labeled per station, one file for the whole host. Node exporter serves it
+  at `:9100/metrics` alongside everything else.
+- **The batch gate** in cron re-checks the whole log every minute and fails
+  loudly (exit 1/2/3) on anything accumulated so far — a cron-mail or
+  CI-var-style backstop that needs no long-running process.
+- **The alert wrapper** is the pager: `station-health-alert.sh` runs the
+  gate in `-w` mode and POSTs to your webhook on the first trip, at most
+  once per `--cooldown`. The `@reboot` entry restarts it after a reboot;
+  under systemd use `Restart=on-failure` for the same guarantee.
+- **The drill history is public and scrapeable**: spore's own scheduled
+  sentinel (`.github/workflows/approval-drill-watch.yml`) runs the
+  double-sign drill, the live smoke, and the gate every day and appends its
+  verdict as one JSON line to `drill.jsonl` on the repo's `metrics` branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl | tail -1
+# {"at":"2026-10-05T05:33:00Z","source":"spore-approval-drill","run":"...","verdict":"success",...}
+```
+
+  Gate the tail the same way: the last line's `verdict` is the drill's most
+  recent word. A red day appends too — history shows it, the tracking issue
+  pages it.
+

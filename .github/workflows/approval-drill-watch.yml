@@ -24,7 +24,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write # append the drill heartbeat to the metrics branch
   issues: write
 
 concurrency:
@@ -170,3 +170,40 @@ jobs:
                 issue_number: num, state: 'closed',
               });
             }
+
+      # Durable, scrapeable drill history: every run appends one JSON line to
+      # drill.jsonl on the `metrics` branch (data-only branch — no code, no
+      # CI, no tags fire from it). Anyone can tail the history with
+      #   curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/metrics/drill.jsonl
+      # and grep for the last verdict. Red runs append too — history should
+      # show them. A failed append warns but does not flip the drill red:
+      # history is a degradation, the issue above is the flag.
+      - name: Append the drill heartbeat to the metrics branch
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRILL: ${{ steps.drill.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          GATE: ${{ steps.gate.outcome }}
+          VERDICT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          repo_dir="$(mktemp -d)"
+          if git clone -q --depth 1 --branch metrics \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$repo_dir" 2>/dev/null; then
+            touch "$repo_dir/drill.jsonl" # exists: append
+          else
+            git -c init.defaultBranch=metrics init -q "$repo_dir" # first run: create the branch
+          fi
+          at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          line=$(printf '{"at":"%s","source":"spore-approval-drill","run":"%s","url":"https://github.com/%s/actions/runs/%s","commit":"%s","drill":"%s","smoke":"%s","gate":"%s","verdict":"%s"}' \
+            "$at" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SHA" \
+            "${DRILL:-skipped}" "${SMOKE:-skipped}" "${GATE:-skipped}" "${VERDICT}")
+          printf '%s\n' "$line" >> "$repo_dir/drill.jsonl"
+          git -C "$repo_dir" add drill.jsonl
+          git -C "$repo_dir" -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "drill heartbeat ${GITHUB_RUN_ID} (${VERDICT})"
+          git -C "$repo_dir" push -q origin HEAD:metrics
+          echo "heartbeat appended: $line"
