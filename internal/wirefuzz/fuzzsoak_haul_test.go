@@ -50,15 +50,31 @@ func newSandbox(t *testing.T) sandbox {
 	gitIn(t, sb.repo, "push", "-q", "origin", "main")
 
 	// The soak under test is the one in the working tree, which is what a
-	// developer has. Copying it in also leaves a second, non-corpus edit in the
-	// clone — a stand-in for whatever else a real tree holds, which the haul
-	// must never sweep up.
+	// developer runs.
 	script, err := os.ReadFile(filepath.Join(root, "scripts", "fuzz-soak.sh"))
 	if err != nil {
 		t.Fatalf("reading the soak: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(sb.repo, "scripts", "fuzz-soak.sh"), script, 0o644); err != nil {
 		t.Fatalf("writing the soak into the sandbox: %v", err)
+	}
+
+	// A second, non-corpus edit: the stand-in for whatever else a real tree is
+	// holding, which a haul must never sweep up. It is made explicitly rather
+	// than left over from the copy above, because once the soak is committed that
+	// copy changes nothing — and a fixture that quietly stops existing is a test
+	// that quietly stops testing.
+	roadmap := filepath.Join(sb.repo, "ROADMAP.md")
+	f, err := os.OpenFile(roadmap, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening %s: %v", roadmap, err)
+	}
+	if _, err := f.WriteString("\n<!-- an unrelated edit a haul must never sweep up -->\n"); err != nil {
+		f.Close()
+		t.Fatalf("appending to %s: %v", roadmap, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing %s: %v", roadmap, err)
 	}
 	return sb
 }
@@ -183,7 +199,7 @@ func TestFuzzSoakHaulHandsTheCorpusOver(t *testing.T) {
 	if !strings.Contains(status, "testdata/fuzz") {
 		t.Errorf("the haul moved the corpus out of the working tree; status is:\n%s", status)
 	}
-	if !strings.Contains(status, "scripts/fuzz-soak.sh") {
+	if !strings.Contains(status, "ROADMAP.md") {
 		t.Errorf("the haul disturbed an unrelated edit; status is:\n%s", status)
 	}
 	// ...and it does not leave a branch behind in the tree it borrowed.
