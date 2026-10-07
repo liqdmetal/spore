@@ -406,20 +406,27 @@ it happens rather than after a week of passes that never started.
 
 A pass then used to end by leaving what it found in the working tree, where it
 waited for somebody to notice. `--pr` is the other half: the corpus directories,
-and nothing else, are committed on a `fuzz-soak/<utc-stamp>` branch, pushed, and
-opened as a pull request, so a finding arrives where review already happens. The
-commit is built in a throwaway git worktree, so an unrelated edit in the tree the
-pass ran in is never swept in and the checkout is never switched; the branch is
-left on the remote rather than in the checkout, so a nightly cannot bury the
-branches you work on. Corpus entries are named after their contents, so the set of
-names fingerprints a haul exactly: an identical haul is proposed once, and a night
-that finds nothing new is silent instead of opening the same pull request again.
-The pull request goes through the GitHub API with the credential git already
-pushes with (set `GITHUB_TOKEN` or `GH_TOKEN` to choose one explicitly); a
-non-GitHub remote or an unusable credential still pushes the branch and reports
-its compare URL. None of it can fail a pass — the haul is still in the working
-tree either way — and `--propose` runs the same step by hand on the corpus as it
-stands.
+and nothing else, are committed and pushed, and review gets a pull request for
+them, so a finding arrives where review already happens. There is one rolling
+branch, `fuzz-soak/corpus`, that each haul adds a commit to, with its pull request
+updated in place — review has a single place to look, the branch doubles as the
+record of what each firing found, and a night whose corpus moves ahead of an
+unmerged haul cannot open a second request beside it. The branch is appended to
+and never rewritten, which is both the safe shape and the only one this repository
+permits: its `protect-all-branches` ruleset refuses a non-fast-forward push (and a
+deletion) on every branch, so the push is a fast-forward, and nothing anybody else
+puts on that branch is ever lost. Commits are built in a throwaway git worktree,
+so an unrelated edit in the tree the pass ran in is never swept in, the checkout is
+never switched, and only the corpus paths are ever staged; the branch is left on
+the remote rather than in the checkout, so a nightly cannot bury the branches you
+work on. Corpus entries are named after their contents, so the set of names
+fingerprints a haul exactly: an unchanged haul is proposed once, and a night that
+finds nothing new adds no commit. The pull request goes through the GitHub API with
+the credential git already pushes with (set `GITHUB_TOKEN` or `GH_TOKEN` to choose
+one explicitly); a non-GitHub remote or an unusable credential still pushes the
+branch and reports its compare URL. None of it can fail a pass — the haul is still
+in the working tree either way — and `--propose` runs the same step by hand on the
+corpus as it stands.
 
 A single pass answers "did anything change since yesterday", not the question
 that matters after a few weeks: is the fuzzer still finding anything at all?

@@ -33,10 +33,11 @@
 #                       Runs nothing and installs nothing. Non-zero on a problem,
 #                       so a broken install is caught the day it breaks rather
 #                       than after a week of passes that never started.
-#     --pr              after the pass, hand what it found to a reviewer: one
-#                       fuzz-soak/<utc-stamp> branch holding only the corpus, and
-#                       a pull request for it. Nothing to hand over is not an
-#                       error. A failure here never fails the pass.
+#     --pr              after the pass, hand what it found to a reviewer: the
+#                       corpus, and nothing else, on one rolling fuzz-soak/corpus
+#                       branch whose pull request is updated in place. Nothing to
+#                       hand over is not an error. A failure here never fails the
+#                       pass.
 #     --propose         do just that, for the corpus as it stands, and stop.
 #
 # Env: FUZZ_SOAK_DIR   state directory (default <repo>/.fuzz-soak, gitignored).
@@ -58,13 +59,21 @@
 #
 # What a pass finds is otherwise left in the working tree, waiting for somebody
 # to notice it. --pr is the other half: it takes the corpus directories and
-# nothing else, commits them on their own branch, pushes that branch, and opens
-# a pull request for it. The commit is built in a throwaway git worktree, so an
-# unrelated edit in the tree you are sitting in is never swept in and your
-# checkout is never switched out from under you. The pull request goes through
-# the GitHub API with the credential git already pushes with (set GITHUB_TOKEN or
-# GH_TOKEN to choose one explicitly); with no usable token on a non-GitHub remote
-# the branch is still pushed and its compare URL is reported instead.
+# nothing else, commits them, pushes them, and makes sure review has a pull
+# request for them. It is one rolling branch, fuzz-soak/corpus, that each haul
+# adds a commit to, with its pull request updated in place — so review has one
+# place to look, showing the corpus the soak proposes now, instead of a fresh
+# request every night the corpus moves ahead of a haul nobody has merged yet. The
+# commits are built in a throwaway git worktree, so an unrelated edit in the tree
+# you are sitting in is never swept in and your checkout is never switched out
+# from under you. The push is always a fast-forward: the branch is appended to,
+# never rewritten — a rewrite would be refused anyway, because this repository's
+# protect-all-branches ruleset forbids non-fast-forward pushes on every branch —
+# so nothing anybody put on that branch is ever lost. The pull request goes
+# through the GitHub API with the credential git already pushes with (set
+# GITHUB_TOKEN or GH_TOKEN to choose one explicitly); with no usable token, or on
+# a non-GitHub remote, the branch is still pushed and its compare URL is reported
+# instead.
 #
 # Exit codes: 0 every target ran clean (or --doctor found nothing wrong), 1 a
 # target crashed, a step failed, or --doctor found a problem, 2 usage error (or
@@ -100,7 +109,7 @@ usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule] [--do
   --status          print the last report, then stop
   --print-schedule  print the scheduler incantation for this host, then stop
   --doctor          check the installed schedule can still run, then stop
-  --pr              run a pass, then branch + pull request what it found, then stop
+  --pr              run a pass, then update the haul's rolling branch + PR, then stop
   --propose         branch + pull request the corpus as it stands; run no pass
 USAGE
       exit 0
@@ -130,6 +139,12 @@ NAMES="$SOAK_DIR/corpus-names.txt"
 COVER_TMP="$SOAK_DIR/.coverage.out"
 LOCK="$SOAK_DIR/lock"
 HAUL_STATE="$SOAK_DIR/last-haul.state"
+# One rolling branch rather than one per firing. The soak rewrites this branch
+# from the base each time and the pull request under it is updated in place, so
+# review has a single place to look and it always shows the corpus as the soak
+# currently proposes it — instead of a fresh request every night the corpus
+# moves ahead of a haul nobody has merged yet.
+HAUL_BRANCH_NAME='fuzz-soak/corpus'
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 human() { # human SECONDS
@@ -411,6 +426,9 @@ HAUL_STATUS="skipped"
 HAUL_BRANCH=""
 HAUL_URL=""
 HAUL_NOTE=""
+# Handed to curl as a bearer header and to nothing else: never printed, never
+# written into the state directory.
+HAUL_TOKEN=""
 
 haul_skip() { HAUL_STATUS="skipped"; HAUL_NOTE="$*"; }
 haul_fail() { HAUL_STATUS="failed"; HAUL_NOTE="$*"; }
@@ -439,8 +457,10 @@ haul_fingerprint() {
   git status --porcelain -- "$@" | LC_ALL=C sort | git hash-object --stdin
 }
 
+# A rolling pull request keeps one title: the pass that produced the current
+# contents is named in the body, which is refreshed with each haul.
 haul_title() {
-  printf 'test(fuzz): the soak corpus haul from %s' "$(haul_fact timestamp 'a scheduled pass')"
+  printf 'test(fuzz): the soak corpus haul'
 }
 
 haul_body() { # haul_body BASE_SHA BASE_BRANCH
@@ -449,15 +469,18 @@ haul_body() { # haul_body BASE_SHA BASE_BRANCH
   # the first firing of this shipped a body that had run `go test` and substituted
   # its output, and an empty base, because they were not.
   cat <<EOF
-The scheduled fuzz soak found corpus entries and minimized them, and this is
-that haul — the corpus directories and nothing else. Every entry is named after
-the sha256 of its own contents, so a file name here is exact, and \`go test\`
-replays the whole corpus, so these are pinned against the code that found them.
+The scheduled fuzz soak found corpus entries and minimized them. This branch is
+where each pass hands them over: one commit per pass that changed anything, so
+the newest seed out of the fuzzer is the newest commit here, and a seed a later
+pass minimized away is a deletion in the commit after it. The corpus directories
+are all it carries. Every entry is named after the sha256 of its own contents, so
+a file name here is exact, and \`go test\` replays the whole corpus, so these are
+pinned against the code that found them.
 
-- pass: $(haul_fact timestamp '(no pass recorded on this machine)')
+- newest pass: $(haul_fact timestamp '(no pass recorded on this machine)')
 - corpus: $(haul_fact corpus '?') file(s)
 - coverage: $(haul_fact coverage '?') covered block(s) across ./...
-- base: \`$1\` on \`$2\`
+- built on: \`$1\` on \`$2\`
 
 A shrinking corpus with flat coverage is normal: minimization keeps a covering
 subset, so entries leave as well as arrive.
@@ -490,8 +513,119 @@ haul_cleanup() { # haul_cleanup BRANCH
   git -C "$REPO_ROOT" branch -D "$1" >/dev/null 2>&1 || true
 }
 
+# One GitHub API call. Prints the response body and then, on its own last line,
+# the HTTP status code. The two have to travel together: the callers capture this
+# in a command substitution, which runs in a subshell, and nothing a function
+# assigns there survives to be read afterwards. Split an answer with
+# haul_api_body and haul_api_status. The token is never printed and never written
+# down.
+haul_api() { # haul_api METHOD PATH [JSON_BODY]
+  local method="$1" path="$2" data="${3:-}"
+  local args=(-sS -X "$method"
+    -H "Authorization: Bearer $HAUL_TOKEN"
+    -H 'Accept: application/vnd.github+json')
+  if [ -n "$data" ]; then
+    args+=(-H 'Content-Type: application/json' --data "$data")
+  fi
+  local resp
+  resp="$(curl "${args[@]}" -w '\n%{http_code}' "https://api.github.com$path" 2>&1)" || resp='
+000'
+  printf '%s' "$resp"
+}
+
+haul_api_body() { printf '%s' "${1%$'\n'*}"; }
+haul_api_status() { printf '%s' "${1##*$'\n'}"; }
+
+# The pull request's own html_url. The API puts it before any other url in the
+# document, so the first one on the wire is the request itself.
+pr_url() { # pr_url JSON
+  printf '%s\n' "$1" \
+    | sed -n 's/.*"html_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+# The hand-off, once the branch is on the remote. One rolling branch means one
+# rolling pull request: when review already has one for this branch it is updated
+# in place rather than a second request being opened beside it, which is what a
+# nightly used to do every time the corpus moved ahead of a haul nobody had
+# merged. The title is fixed and the body is regenerated each haul, so the request
+# always describes the pass whose corpus it currently carries.
+#
+# Nothing here turns a pushed branch into a failed haul. No curl, no github.com, no
+# credential, an API that answers a code it should not: each of those leaves the
+# branch pushed and reports the compare URL instead.
+propose_pull_request() { # propose_pull_request BASE_SHA BASE_BRANCH BRANCH URL
+  local base_sha="$1" base_branch="$2" branch="$3" url="$4"
+  local number existing_json body payload resp code attempt
+
+  HAUL_STATUS='proposed'
+  HAUL_URL=""
+
+  if ! command -v curl >/dev/null 2>&1 || ! github_slug "$url"; then
+    HAUL_NOTE="pushed $branch (not a github.com remote, so no pull request was opened)"
+    return 0
+  fi
+  HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
+  HAUL_NOTE="pushed $branch; no GitHub credential was available, so the compare URL is the hand-off"
+
+  HAUL_TOKEN="$(github_token)"
+  [ -n "$HAUL_TOKEN" ] || return 0
+
+  # Is there already an open request for this branch? Asking first is the whole
+  # difference between one rolling request and a pile of them.
+  number=""
+  existing_json="$(haul_api GET "/repos/$owner/$repo/pulls?head=$owner:$branch&state=open")"
+  if [ "$(haul_api_status "$existing_json")" = "200" ]; then
+    number="$(haul_api_body "$existing_json" \
+      | sed -n 's/^[[:space:]]*"number":[[:space:]]*\([0-9][0-9]*\).*$/\1/p' | head -1)"
+  fi
+
+  body="$(haul_body "$base_sha" "$base_branch")"
+  if [ -n "$number" ]; then
+    # head is not updatable, and does not need to be: the branch was already
+    # rewritten under the request by the push above.
+    payload="$(printf '{"title":"%s","body":"%s"}' \
+      "$(printf '%s' "$(haul_title)" | json_string)" \
+      "$(printf '%s' "$body" | json_string)")"
+    resp="$(haul_api PATCH "/repos/$owner/$repo/pulls/$number" "$payload")"
+    code="$(haul_api_status "$resp")"
+    if [ "$code" = "200" ]; then
+      HAUL_URL="$(pr_url "$(haul_api_body "$resp")")"
+      [ -n "$HAUL_URL" ] || HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
+      HAUL_NOTE="pushed $branch and updated pull request #$number"
+    else
+      HAUL_NOTE="pushed $branch, but updating pull request #$number answered $code, so the compare URL is the hand-off"
+    fi
+    return 0
+  fi
+
+  payload="$(printf '{"title":"%s","head":"%s","base":"%s","body":"%s"}' \
+    "$(printf '%s' "$(haul_title)" | json_string)" \
+    "$branch" "$base_branch" \
+    "$(printf '%s' "$body" | json_string)")"
+  # A creation is retried once. A request for a branch that was pushed seconds
+  # ago is refused while the API still sees the ref as it was — seen once here: a
+  # 400 for a brand-new branch, with the same request answering 201 minutes
+  # later. Anything that fails twice is reported and the compare URL is the
+  # hand-off, exactly as before.
+  code=""
+  for attempt in 1 2; do
+    resp="$(haul_api POST "/repos/$owner/$repo/pulls" "$payload")"
+    code="$(haul_api_status "$resp")"
+    if [ "$code" = "201" ]; then break; fi
+    if [ "$attempt" = 1 ]; then sleep 2; fi
+  done
+  if [ "$code" = "201" ]; then
+    HAUL_URL="$(pr_url "$(haul_api_body "$resp")")"
+    [ -n "$HAUL_URL" ] || HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
+    HAUL_NOTE="pushed $branch and opened a pull request"
+  else
+    HAUL_NOTE="pushed $branch, but the pull request API answered $code, so the compare URL is the hand-off"
+  fi
+  return 0
+}
+
 propose_haul() {
-  local remote url base_branch base_sha stamp branch wt p msg body payload resp code
+  local remote url base_branch base_sha branch wt p msg fingerprint parent
   local paths=()
 
   command -v git >/dev/null 2>&1 || { haul_skip 'git is not on PATH'; return 0; }
@@ -516,8 +650,27 @@ propose_haul() {
 
   base_branch="$(git rev-parse --abbrev-ref HEAD)"
   base_sha="$(git rev-parse HEAD)"
-  branch="fuzz-soak/$(date -u +%Y%m%d-%H%M%S)"
+  branch="$HAUL_BRANCH_NAME"
   wt="$SOAK_DIR/pr-worktree"
+
+  # Where this haul's commit goes. The branch accumulates: each haul adds one
+  # commit to what is already on it and the pull request is updated in place. It
+  # cannot be rewritten, and should not be — the repository's protect-all-branches
+  # ruleset forbids a non-fast-forward push and a deletion on every branch, so a
+  # rewrite is refused by the remote, and an automated writer has no business
+  # rewriting history anyway. Appending is also the more useful shape for review:
+  # the branch is a record of what each firing found, the newest seed the fuzzer
+  # produced is the newest commit, and a seed a later pass minimized away is a
+  # deletion in the commit after it.
+  #
+  # One fetch says what the branch holds now without moving any ref. Nothing
+  # there yet — the first haul, or a branch the last merge cleaned up — means this
+  # haul starts from the commit the pass ran against.
+  parent="$base_sha"
+  if GIT_TERMINAL_PROMPT=0 git -C "$REPO_ROOT" fetch --quiet "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+    parent="$(git -C "$REPO_ROOT" rev-parse FETCH_HEAD 2>/dev/null || true)"
+    [ -n "$parent" ] || parent="$base_sha"
+  fi
 
   # A worktree, not this checkout. Staging here would sweep up whatever else the
   # tree holds, and committing here would move the branch the user is on.
@@ -525,7 +678,7 @@ propose_haul() {
   rm -rf "$wt"
   git worktree prune >/dev/null 2>&1 || true
   mkdir -p "$(dirname "$wt")"
-  if ! git worktree add -B "$branch" "$wt" "$base_sha" >/dev/null 2>&1; then
+  if ! git worktree add -B "$branch" "$wt" "$parent" >/dev/null 2>&1; then
     haul_fail "could not make a worktree at $wt for the haul"
     return 0
   fi
@@ -539,7 +692,7 @@ propose_haul() {
   git -C "$wt" add -A -- "${paths[@]}" >/dev/null 2>&1 || true
   if git -C "$wt" diff --cached --quiet; then
     haul_cleanup "$branch"
-    haul_skip 'the corpus matching HEAD came out identical: nothing to hand over'
+    haul_skip "$branch already carries this corpus: nothing to hand over"
     return 0
   fi
 
@@ -551,56 +704,19 @@ propose_haul() {
   fi
 
   # GIT_TERMINAL_PROMPT=0: an unattended pass must fail rather than wait at a
-  # prompt nobody is there to answer.
-  if ! GIT_TERMINAL_PROMPT=0 git -C "$wt" push --quiet --set-upstream "$remote" "$branch" >/dev/null 2>&1; then
+  # prompt nobody is there to answer. A plain push, never a force: the commit sits
+  # on top of what the branch already holds, so it is a fast-forward, and if
+  # somebody pushed in the meantime the remote refuses it rather than losing
+  # either side — the next pass picks the branch up where it now stands.
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$wt" push --quiet "$remote" "$branch" >/dev/null 2>&1; then
     haul_cleanup "$branch"
     haul_fail "could not push $branch to $remote: the haul is still in the working tree"
     return 0
   fi
   HAUL_BRANCH="$branch"
 
-  # Past the push, the hand-off has happened. Everything below only decides how
-  # loud it is: a compare URL is a fine answer, not a failure.
-  if ! command -v curl >/dev/null 2>&1 || ! github_slug "$url"; then
-    HAUL_STATUS='proposed'
-    HAUL_NOTE="pushed $branch to $remote (not a github.com remote, so no pull request was opened)"
-  else
-    local token
-    token="$(github_token)"
-    if [ -z "$token" ]; then
-      HAUL_STATUS='proposed'
-      HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
-      HAUL_NOTE="pushed $branch; no GitHub credential was available, so the compare URL is the hand-off"
-    else
-      body="$(haul_body "$base_sha" "$base_branch")"
-      payload="$(printf '{"title":"%s","head":"%s","base":"%s","body":"%s"}' \
-        "$(printf '%s' "$(haul_title)" | json_string)" \
-        "$branch" "$base_branch" \
-        "$(printf '%s' "$body" | json_string)")"
-      resp="$(curl -sS -X POST \
-        -H "Authorization: Bearer $token" \
-        -H 'Accept: application/vnd.github+json' \
-        -H 'Content-Type: application/json' \
-        --data "$payload" \
-        -w '\n%{http_code}' \
-        "https://api.github.com/repos/$owner/$repo/pulls" 2>&1)" || resp='
-000'
-      code="${resp##*$'\n'}"
-      case "$code" in
-        201)
-          HAUL_STATUS='proposed'
-          HAUL_URL="$(printf '%s' "${resp%$'\n'*}" \
-            | sed -n 's/.*"html_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-          HAUL_NOTE="pushed $branch and opened a pull request"
-          ;;
-        *)
-          HAUL_STATUS='proposed'
-          HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
-          HAUL_NOTE="pushed $branch, but the pull request API answered $code, so the compare URL is the hand-off"
-          ;;
-      esac
-    fi
-  fi
+  # Past the push the hand-off has happened; only how loud it is remains.
+  propose_pull_request "$base_sha" "$base_branch" "$branch" "$url"
 
   { printf 'fingerprint=%s\n' "$fingerprint"
     printf 'branch=%s\n' "$HAUL_BRANCH"

@@ -149,8 +149,9 @@ locally: a timed pass over the same targets that saves and minimizes what it
 finds and reports the change since the last pass — and because a schedule that
 quietly stops starting looks exactly like a quiet week, `--doctor` checks that
 its launcher, its registration, and its `PATH` still let it run at all. A pass
-also proposes what it found: the corpus on a branch of its own, with a pull
-request, so a finding does not sit in a working tree waiting to be noticed.
+also proposes what it found: the corpus on one rolling branch whose pull request
+is updated in place, so a finding does not sit in a working tree waiting to be
+noticed — and review has one request to read, not one per night.
 
 ### Product roadmap after the evidence gates
 
