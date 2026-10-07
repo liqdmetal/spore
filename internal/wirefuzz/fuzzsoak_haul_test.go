@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -136,6 +137,79 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// soakFunc pulls one shell function out of the soak, so a test can call it
+// without running the script it lives in.
+func soakFunc(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../scripts/fuzz-soak.sh")
+	if err != nil {
+		t.Fatalf("reading the soak: %v", err)
+	}
+	re := regexp.MustCompile(`(?ms)^` + regexp.QuoteMeta(name) + `\(\) \{.*?^\}$`)
+	m := re.FindString(string(raw))
+	if m == "" {
+		t.Fatalf("could not find %s() in the soak", name)
+	}
+	return m
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// TestFuzzSoakHaulBodyIsNotExecuted guards a bug the first real firing shipped.
+// The pull request body is an unquoted heredoc, so every backtick in it is a
+// command substitution: unescaped, it ran `go test`, pasted that output over the
+// prose, and left the base commit blank. The escape is a single backslash, which
+// no diff makes visible, so this calls the real function and reads what it
+// produces.
+func TestFuzzSoakHaulBodyIsNotExecuted(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; the soak is a bash script")
+	}
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "last.state")
+	err := os.WriteFile(state, []byte("timestamp=2026-01-02T03:04:05Z\ncorpus=98\ncoverage=1212\n"), 0o644)
+	if err != nil {
+		t.Fatalf("writing state: %v", err)
+	}
+
+	probe := "STATE=" + shellQuote(filepath.ToSlash(state)) + "\n" +
+		soakFunc(t, "state_get") + "\n" +
+		soakFunc(t, "haul_fact") + "\n" +
+		soakFunc(t, "haul_body") + "\n" +
+		"haul_body abc1234 main\n"
+	script := filepath.Join(dir, "probe.sh")
+	if err := os.WriteFile(script, []byte(probe), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+
+	// Run it somewhere that is not a Go module: a substituted `go test` fails
+	// there, and says so into the body, which is how the bug announced itself.
+	cmd := exec.Command("bash", filepath.ToSlash(script))
+	cmd.Dir = t.TempDir()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the probe: %v\n%s", err, out)
+	}
+	body := string(out)
+
+	if !strings.Contains(body, "`abc1234` on `main`") {
+		t.Errorf("the body does not quote the base it was handed:\n%s", body)
+	}
+	for _, want := range []string{"2026-01-02T03:04:05Z", "98 file(s)", "1212 covered block(s)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the body is missing %q:\n%s", want, body)
+		}
+	}
+	for _, unwanted := range []string{"setup failed", "no test files", "[no test files]"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("the body contains %q, so a backtick in it was executed:\n%s", unwanted, body)
+		}
+	}
 }
 
 // TestFuzzSoakHaulHandsTheCorpusOver is the acceptance test: the corpus, and

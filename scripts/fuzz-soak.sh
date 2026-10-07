@@ -444,16 +444,20 @@ haul_title() {
 }
 
 haul_body() { # haul_body BASE_SHA BASE_BRANCH
+  # The heredoc is unquoted so the haul_fact calls expand — which also means every
+  # backtick in it is a command substitution. They are escaped, not decorative:
+  # the first firing of this shipped a body that had run `go test` and substituted
+  # its output, and an empty base, because they were not.
   cat <<EOF
 The scheduled fuzz soak found corpus entries and minimized them, and this is
 that haul — the corpus directories and nothing else. Every entry is named after
-the sha256 of its own contents, so a file name here is exact, and `go test`
+the sha256 of its own contents, so a file name here is exact, and \`go test\`
 replays the whole corpus, so these are pinned against the code that found them.
 
 - pass: $(haul_fact timestamp '(no pass recorded on this machine)')
 - corpus: $(haul_fact corpus '?') file(s)
 - coverage: $(haul_fact coverage '?') covered block(s) across ./...
-- base: `$1` on `$2`
+- base: \`$1\` on \`$2\`
 
 A shrinking corpus with flat coverage is normal: minimization keeps a covering
 subset, so entries leave as well as arrive.
