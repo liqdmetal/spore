@@ -10,16 +10,27 @@
 # Go loads as seed corpus on the next `go test` or `go test -fuzz`. A saved
 # corpus therefore compounds, survives a cache wipe, and travels with the clone.
 #
-#   usage: scripts/fuzz-corpus.sh [--status] [--save] [--minimize] [-q]
+#   usage: scripts/fuzz-corpus.sh [--status] [--save] [--minimize] [--reclaim] [-q]
 #     --status      (default) per-target counts — saved, cached, and new; read-only
 #     --save        copy every cached entry the repo lacks, then minimize
 #     --minimize    drop entries that add no coverage (no cache copy)
 #     --no-minimize with --save: copy only, keep the whole corpus
+#     --reclaim     drop cached copies of entries a commit already carries
 #     -q            print nothing unless something is new (used by the runners)
 #
 # Entries are named after the sha256 of their contents, so "new" is exact: a
 # file of that name in the repo is the same input. A save never rewrites or
 # deletes an entry, and never touches a crash reproducer Go wrote there.
+#
+# The two stores also drift the other way. Go loads testdata/fuzz as seed corpus,
+# so once a commit carries an entry the cache's copy of it is a second copy of
+# something the clone keeps for good — while what the cache is uniquely good for
+# is the window before that, an input the fuzzer has found that no commit carries
+# yet. --reclaim closes that half: it drops the cached copies of entries HEAD
+# already has, and leaves the rest. Asked of HEAD rather than of the working tree,
+# and of a file being tracked rather than merely present, because an entry a haul
+# has proposed and nobody has merged is in the tree *and* in the cache — and after
+# the soak restores the tree, the cache is the only local copy of it left.
 #
 # A corpus that only ever grows stops being reviewable: the first harvest here
 # added 515 files, 202 of them from one target. --minimize keeps a *covering*
@@ -46,21 +57,24 @@ cd "$REPO_ROOT"
 
 SAVE=0
 MINIMIZE=0
+RECLAIM=0
 QUIET=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --status) SAVE=0; MINIMIZE=0; shift ;;
+    --status) SAVE=0; MINIMIZE=0; RECLAIM=0; shift ;;
     --save) SAVE=1; MINIMIZE=1; shift ;;
     --minimize) MINIMIZE=1; shift ;;
     --no-minimize) MINIMIZE=0; shift ;;
+    --reclaim) RECLAIM=1; shift ;;
     -q | --quiet) QUIET=1; shift ;;
     -h | --help)
       cat <<'USAGE'
-usage: scripts/fuzz-corpus.sh [--status] [--save] [--minimize] [-q]
+usage: scripts/fuzz-corpus.sh [--status] [--save] [--minimize] [--reclaim] [-q]
   --status       list saved/cached/new counts per target (default)
   --save         copy new cached inputs into testdata/fuzz/<Target>/, then minimize
   --minimize     drop corpus entries that add no coverage
   --no-minimize  with --save, skip the coverage pass and keep every entry
+  --reclaim      drop cached copies of entries a commit already carries
   -q             print nothing unless something is new
 USAGE
       exit 0
@@ -299,8 +313,48 @@ AWK
   done
 }
 
+# The cached entries a commit already carries, one cache path per line. The name is
+# the identity — an entry is named after the sha256 of its contents — and a tracked
+# file of that name is the same input, so the repository's copy is the durable one.
+#
+# Read-only: --status counts with it, --reclaim deletes what it prints.
+cached_merged() {
+  local entry pkg target dest src rel f name
+  command -v git >/dev/null 2>&1 || return 0
+  git rev-parse --git-dir >/dev/null 2>&1 || return 0
+  for entry in "${TARGETS[@]}"; do
+    pkg="${entry%%:*}"
+    target="${entry##*:}"
+    dest="$pkg/testdata/fuzz/$target"
+    src="$CACHE/$pkg/$target"
+    [ -d "$src" ] || continue
+    # TARGETS spells its package "./internal/x", and git reports the path it has
+    # without that prefix, so the lookup is keyed by the normalized one.
+    rel="${dest#./}"
+    local -A tracked=()
+    while IFS= read -r f; do tracked["$f"]=1; done < <(git ls-tree -r --name-only HEAD -- "$dest" 2>/dev/null)
+    for f in "$src"/*; do
+      [ -f "$f" ] || continue
+      name="$(basename "$f")"
+      if [ -n "${tracked["$rel/$name"]:-}" ]; then printf '%s\n' "$f"; fi
+    done
+  done
+}
+
+RECLAIMED=0
+reclaim() {
+  local f
+  # An `if`, not `rm -f ... &&`: a loop whose last command failed would take the
+  # function's exit status with it, and this runs under `set -e`.
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    if rm -f "$f"; then RECLAIMED=$((RECLAIMED + 1)); fi
+  done < <(cached_merged)
+}
+
 if [ "$SAVE" -eq 1 ]; then harvest; fi
 if [ "$MINIMIZE" -eq 1 ]; then minimize; fi
+if [ "$RECLAIM" -eq 1 ]; then reclaim; fi
 
 rows=""
 new_total=0
@@ -332,6 +386,13 @@ if [ "$QUIET" -eq 1 ]; then
 fi
 
 printf '== fuzz corpus (repo testdata/fuzz vs the build cache)\n%s' "$rows"
+MERGED_N="$(cached_merged | wc -l)"
+if [ "$MERGED_N" -gt 0 ]; then
+  echo "$MERGED_N cached entr(ies) a commit already carries — --reclaim drops those copies"
+fi
+if [ "$RECLAIM" -eq 1 ]; then
+  echo "reclaimed $RECLAIMED cached cop(ies) of entries a commit already carries; the repo is the durable one"
+fi
 if [ "$MINIMIZE" -eq 1 ]; then
   echo "keep $MIN_KEPT entr(ies) covering the same code; dropped $MIN_DROPPED redundant one(s) from the repo and the cache"
   if [ "$FAILED_KEPT" -gt 0 ]; then

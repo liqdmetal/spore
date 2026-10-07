@@ -22,14 +22,17 @@ import (
 // answers the way a broken replay does instead of building the module.
 
 // stubCalves stubs the pass's expensive callees and returns a PATH whose first
-// entry is a `go` that refuses to run, so the pass never builds anything.
+// entry is a `go` that refuses to run, so the pass never builds anything. The
+// harvester stub writes down how it was called, because a no-op that says nothing
+// would hide the flags the pass asks it for — the reclaim among them.
 func (sb sandbox) stubCalves(t *testing.T) string {
 	t.Helper()
-	for _, name := range []string{"fuzz-smoke.sh", "fuzz-corpus.sh"} {
-		path := filepath.Join(sb.repo, "scripts", name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatalf("stubbing %s: %v", name, err)
-		}
+	harvester := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../.fuzz-corpus.argv\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(sb.repo, "scripts", "fuzz-corpus.sh"), []byte(harvester), 0o755); err != nil {
+		t.Fatalf("stubbing fuzz-corpus.sh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sb.repo, "scripts", "fuzz-smoke.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("stubbing fuzz-smoke.sh: %v", err)
 	}
 	bin := filepath.Join(filepath.Dir(sb.repo), "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -78,6 +81,16 @@ func TestFuzzSoakPassHandsItsFindingsOverAndTidiesUp(t *testing.T) {
 	}
 	if !strings.Contains(out, "restored to HEAD here") {
 		t.Errorf("the pass did not say it had restored the tree:\n%s", out)
+	}
+	// The pass is where the two corpus stores drift apart — a haul takes the corpus
+	// out of the tree, and the merge puts it into a commit — so it has to ask the
+	// harvester for the reclaim as well as the save.
+	argv, err := os.ReadFile(filepath.Join(sb.repo, ".fuzz-corpus.argv"))
+	if err != nil {
+		t.Fatalf("the pass never ran the harvester: %v", err)
+	}
+	if !strings.Contains(string(argv), "--save") || !strings.Contains(string(argv), "--reclaim") {
+		t.Errorf("the pass asked the harvester for %q, want both --save and --reclaim", strings.TrimSpace(string(argv)))
 	}
 	// The pass's change was a deletion, so the branch carries the deletion: the
 	// commit names the path and the tree does not have the file.

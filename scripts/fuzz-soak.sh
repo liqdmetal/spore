@@ -1070,10 +1070,16 @@ case "$FUZZ_RC" in
 esac
 
 # --- 2. keep what it found ---------------------------------------------------
+# --reclaim is the other half of the harvest, and this is where the two stores
+# drift apart: a haul takes the corpus out of the tree, and the merge puts it into
+# a commit — the moment the build cache's copy of an entry becomes a second copy
+# of something the repo keeps for good. Reclaiming on every pass keeps the cache
+# to what it is uniquely good for: the inputs no commit carries yet, which after a
+# restore are its only local copy.
 CORPUS_RC=0
-bash "$REPO_ROOT/scripts/fuzz-corpus.sh" --save > "$CORPUSLOG" 2>&1 || CORPUS_RC=$?
+bash "$REPO_ROOT/scripts/fuzz-corpus.sh" --save --reclaim > "$CORPUSLOG" 2>&1 || CORPUS_RC=$?
 if [ "$CORPUS_RC" -ne 0 ]; then
-  echo "fuzz-soak: harvest/minimize exited $CORPUS_RC (see $CORPUSLOG)" >&2
+  echo "fuzz-soak: harvest/minimize/reclaim exited $CORPUS_RC (see $CORPUSLOG)" >&2
   [ "$STATUS" = "GREEN" ] && STATUS="ERROR"
 fi
 

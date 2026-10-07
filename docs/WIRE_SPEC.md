@@ -370,6 +370,19 @@ them straight back — git history still holds them. Coverage is preserved by
 construction, and the pass refuses to delete anything it cannot prove is
 redundant.
 
+The cache drifts the other way too, and a pass reclaims that half as well. Once a
+commit carries an entry the repository is the durable copy — Go loads
+`testdata/fuzz` as seed corpus, so a merged entry still replays and still seeds
+the search — and the cache's copy of it is a second copy of something the clone
+keeps for good. `--reclaim` drops those and leaves the rest, which keeps the cache
+to the window it is uniquely good for. It asks `HEAD` rather than the working
+tree, and of a file being *tracked* rather than merely present, because an entry a
+haul has proposed and nobody has merged is in the tree *and* in the cache — and
+after the soak restores the tree, the cache is the only local copy of it. The
+nightly soak runs `--save --reclaim`, since a pass is where the two stores drift
+apart: the haul takes the corpus out of the tree, and the merge puts it into a
+commit.
+
 **Soak:** with the workflows gone nothing fuzzes on its own, so the deep pass
 still depended on somebody remembering it. `scripts/fuzz-soak.sh` is what a
 scheduler calls instead: one pass fuzzes every target for 60s (the deep
