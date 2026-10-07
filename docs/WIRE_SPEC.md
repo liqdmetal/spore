@@ -427,9 +427,14 @@ fingerprints a haul exactly: an unchanged haul is proposed once, and a night tha
 finds nothing new adds no commit. The pull request goes through the GitHub API with
 the credential git already pushes with (set `GITHUB_TOKEN` or `GH_TOKEN` to choose
 one explicitly); a non-GitHub remote or an unusable credential still pushes the
-branch and reports its compare URL. None of it can fail a pass — the haul is still
-in the working tree either way — and `--propose` runs the same step by hand on the
-corpus as it stands.
+branch and reports its compare URL. None of it can fail a pass. Once the branch
+really has the corpus the checkout is restored to `HEAD`, so a finding stops
+sitting in `git status` the moment it has a pull request — and a hand-off that
+failed restores nothing, leaving the corpus in the working tree, which is then the
+only place it exists. The entries come back on their own: the fuzz cache keeps
+compounding and `fuzz-corpus.sh --save` harvests it into `testdata` before each
+pass hauls anything, so a restored tree is regenerated before the next haul.
+`--propose` runs the same step by hand on the corpus as it stands.
 
 A single pass answers "did anything change since yesterday", not the question
 that matters after a few weeks: is the fuzzer still finding anything at all?

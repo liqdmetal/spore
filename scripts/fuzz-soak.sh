@@ -83,6 +83,17 @@
 # a non-GitHub remote, the branch is still pushed and its compare URL is reported
 # instead.
 #
+# Once a haul has been pushed the corpus has a second home, and the checkout does
+# not have to keep showing it: the tree is restored to HEAD, so a finding stops
+# sitting in git status the moment it has a pull request, instead of every pass
+# leaving the checkout dirtier than the last. Only a push that succeeded restores
+# anything — a hand-off that failed leaves the corpus exactly where it was, which
+# is the only place it exists. Nothing is lost by the restore: the branch carries
+# what the tree carried, and the entries come back on their own, because the fuzz
+# cache keeps compounding and fuzz-corpus.sh --save harvests every cached input
+# the repo lacks into testdata before a pass hauls anything — so the next haul
+# still starts from a superset of the branch.
+#
 # Exit codes: 0 every target ran clean (or --doctor found nothing wrong), 1 a
 # target crashed, a step failed, or --doctor found a problem, 2 usage error (or
 # --status with nothing to show).
@@ -447,6 +458,9 @@ HAUL_STATUS="skipped"
 HAUL_BRANCH=""
 HAUL_URL=""
 HAUL_NOTE=""
+# What became of the working tree once the haul was pushed: restoring it is the
+# tidy half of the hand-off, never a condition of it.
+HAUL_RESTORE=""
 # Handed to curl as a bearer header and to nothing else: never printed, never
 # written into the state directory.
 HAUL_TOKEN=""
@@ -645,6 +659,36 @@ propose_pull_request() { # propose_pull_request BASE_SHA BASE_BRANCH BRANCH URL
   return 0
 }
 
+# Restore the corpus to HEAD in this checkout, now that the branch carries it.
+#
+# Called from exactly one place — after a push that succeeded. An unhanded-over
+# haul is never restored, because the working tree is then the only place it
+# exists, and a failed hand-off has to stay harmless.
+#
+# The pathspec is the corpus directories and nothing else, the same one the haul
+# stages, so an unrelated edit somebody has open is untouched. git clean does not
+# reach an ignored file (that would take -x), and the entries it does remove are
+# the corpus files the branch has just taken.
+restore_hauled_corpus() {
+  local paths=() p left
+  while IFS= read -r p; do paths+=("$p"); done < <(corpus_pathspecs)
+  HAUL_RESTORE=""
+  [ "${#paths[@]}" -gt 0 ] || return 0
+
+  # Tracked entries come back from HEAD (a minimized-away seed is a deletion);
+  # untracked ones are the pass's findings, and the branch has them now.
+  git -C "$REPO_ROOT" checkout -- "${paths[@]}" >/dev/null 2>&1 || true
+  git -C "$REPO_ROOT" clean -fdq -- "${paths[@]}" >/dev/null 2>&1 || true
+
+  left="$(git -C "$REPO_ROOT" status --porcelain -- "${paths[@]}" 2>/dev/null | wc -l)"
+  if [ "$left" -eq 0 ]; then
+    HAUL_RESTORE="the corpus is restored to HEAD here: it is on $HAUL_BRANCH now, so it stops sitting in git status"
+  else
+    HAUL_RESTORE="could not restore the corpus here: $left path(s) still differ from HEAD"
+  fi
+  return 0
+}
+
 propose_haul() {
   local remote url base_branch base_sha branch wt p msg fingerprint parent
   local paths=()
@@ -745,6 +789,10 @@ propose_haul() {
     printf 'timestamp=%s\n' "$(now_iso)"
   } > "$HAUL_STATE"
 
+  # Past the push, so the corpus has another home now and this one can go back to
+  # the way it was. A push that failed returned above, leaving the tree alone.
+  restore_hauled_corpus
+
   haul_cleanup "$branch"
   return 0
 }
@@ -768,6 +816,7 @@ if [ "$PROPOSE_ONLY" -eq 1 ]; then
       echo "fuzz-soak: haul — $HAUL_NOTE"
       echo "fuzz-soak: haul — branch $HAUL_BRANCH"
       if [ -n "$HAUL_URL" ]; then echo "fuzz-soak: haul — $HAUL_URL"; fi
+      if [ -n "$HAUL_RESTORE" ]; then echo "fuzz-soak: haul — $HAUL_RESTORE"; fi
       exit 0
       ;;
     failed)
@@ -843,8 +892,33 @@ corpus_names() {
   done | sort
 }
 
+# What this box knew before a pass: the tree, plus what the last pass left. On a
+# quiet night those are the same set. They part company when the last pass handed
+# its corpus over, because a successful haul restores the tree to HEAD and the
+# entries it took are then only in that snapshot (and in the fuzz cache, which the
+# harvest copies back). Taking the union is what keeps a pass's delta about what it
+# found rather than about what the last haul took away: without it, every night
+# would report the same unmerged entries as found again, for as long as the request
+# stayed open.
+corpus_known_before() { # corpus_known_before PREV_NAMES_FILE
+  { corpus_names; if [ -f "$1" ]; then cat "$1"; fi; } | sort -u
+}
+
 count_files() { find internal/*/testdata/fuzz/Fuzz*/ -maxdepth 1 -type f 2>/dev/null | wc -l; }
 count_targets() { find internal/*/testdata/fuzz/Fuzz*/ -maxdepth 0 -type d 2>/dev/null | wc -l; }
+
+# The targets the report tabulates. Named from what the pass found ($NAMES) and
+# only then from what the tree holds now, because a successful haul restores the
+# corpus: the report is about the pass that ran, not about the checkout it left
+# behind, and a target whose entries all went away is still worth naming.
+corpus_targets() {
+  { for d in internal/*/testdata/fuzz/Fuzz*/; do
+      [ -d "$d" ] || continue
+      basename "$d"
+    done
+    if [ -f "$NAMES" ]; then cut -d/ -f1 "$NAMES"; fi
+  } | sort -u
+}
 
 # Covered statement blocks across the module, as the corpus replays them, and —
 # when it cannot — why not: one TSV line, the value then the reason, exactly like
@@ -928,8 +1002,8 @@ echo "fuzz-soak: pass starting $START_ISO — ${TIME}s per target, then save + m
 PREV_NAMES="$SOAK_DIR/corpus-names.prev.txt"
 if [ -f "$NAMES" ]; then cp "$NAMES" "$PREV_NAMES"; else : > "$PREV_NAMES"; fi
 NAMES_BEFORE="$SOAK_DIR/corpus-names.before.txt"
-corpus_names > "$NAMES_BEFORE"
-COUNT_BEFORE="$(count_files)"
+corpus_known_before "$PREV_NAMES" > "$NAMES_BEFORE"
+COUNT_BEFORE="$(wc -l < "$NAMES_BEFORE")"
 TARGETS_N="$(count_targets)"
 
 # --- 1. the deep pass --------------------------------------------------------
@@ -1033,7 +1107,10 @@ fi
 if [ "$PROPOSE_PR" -eq 1 ]; then
   propose_haul
   case "$HAUL_STATUS" in
-    proposed) echo "fuzz-soak: haul — $HAUL_NOTE" ;;
+    proposed)
+      echo "fuzz-soak: haul — $HAUL_NOTE"
+      if [ -n "$HAUL_RESTORE" ]; then echo "fuzz-soak: haul — $HAUL_RESTORE"; fi
+      ;;
     failed) echo "fuzz-soak: haul — $HAUL_NOTE" >&2 ;;
     *) echo "fuzz-soak: haul — not proposed: $HAUL_NOTE" ;;
   esac
@@ -1078,9 +1155,7 @@ fi
   printf -- '- crashes: %s\n' "${CRASHES:-none}"
 
   printf '\n## Per target\n\n| target | corpus | found | minimized |\n|---|---|---|---|\n'
-  for d in internal/*/testdata/fuzz/Fuzz*/; do
-    [ -d "$d" ] || continue
-    t="$(basename "$d")"
+  for t in $(corpus_targets); do
     printf '| %s | %s | %s | %s |\n' "$t" \
       "$(grep -c "^$t/" "$NAMES" || true)" \
       "$(comm -13 <(grep "^$t/" "$NAMES_BEFORE" || true) <(grep "^$t/" "$NAMES" || true) | wc -l)" \
@@ -1104,6 +1179,7 @@ fi
         printf -- '- branch: `%s`\n' "$HAUL_BRANCH"
         if [ -n "$HAUL_URL" ]; then printf -- '- %s\n' "$HAUL_URL"; fi
         printf -- '- %s\n' "$HAUL_NOTE"
+        if [ -n "$HAUL_RESTORE" ]; then printf -- '- %s\n' "$HAUL_RESTORE"; fi
         ;;
       failed)
         printf -- '- **could not hand it over:** %s\n' "$HAUL_NOTE"

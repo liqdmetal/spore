@@ -151,7 +151,10 @@ quietly stops starting looks exactly like a quiet week, `--doctor` checks that
 its launcher, its registration, and its `PATH` still let it run at all. A pass
 also proposes what it found: the corpus on one rolling branch whose pull request
 is updated in place, so a finding does not sit in a working tree waiting to be
-noticed — and review has one request to read, not one per night.
+noticed — and review has one request to read, not one per night. Once the branch
+carries it the working tree is restored to `HEAD`, so a finding stops sitting in
+`git status` too, and a night that hands nothing over leaves the corpus exactly
+where it was.
 
 ### Product roadmap after the evidence gates
 

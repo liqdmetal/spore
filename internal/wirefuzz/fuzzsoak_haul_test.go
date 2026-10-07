@@ -528,8 +528,8 @@ func TestFuzzSoakHaulRollsThePullRequest(t *testing.T) {
 }
 
 // TestFuzzSoakHaulHandsTheCorpusOver is the acceptance test: the corpus, and
-// only the corpus, on the rolling branch — leaving the working tree exactly as
-// it was found.
+// only the corpus, on the rolling branch — and then out of git status, because a
+// finding that has a pull request does not need to keep sitting in the checkout.
 func TestFuzzSoakHaulHandsTheCorpusOver(t *testing.T) {
 	sb := newSandbox(t)
 	dropped := sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
@@ -579,17 +579,34 @@ func TestFuzzSoakHaulHandsTheCorpusOver(t *testing.T) {
 		t.Errorf("the haul is %s commits on top of main, want 1", got)
 	}
 
-	// A haul is a copy, not a move: the tree keeps its findings, and the checkout
-	// stays where it was.
+	// The checkout stays where it was, but the corpus does not: once it is on the
+	// branch the tree is restored to HEAD, so the pass stops leaving the checkout
+	// dirtier every night. Nothing is lost by that — the commit checked above
+	// carries exactly what the tree carried — and the restore is the corpus's own
+	// pathspec, so nothing else the tree holds is touched.
 	if got := gitIn(t, sb.repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Errorf("the haul left the checkout on %s, want main", got)
 	}
 	status := gitIn(t, sb.repo, "status", "--porcelain")
-	if !strings.Contains(status, "testdata/fuzz") {
-		t.Errorf("the haul moved the corpus out of the working tree; status is:\n%s", status)
+	if strings.Contains(status, "testdata/fuzz") {
+		t.Errorf("the hauled corpus is still sitting in the working tree; status is:\n%s", status)
 	}
 	if !strings.Contains(status, "ROADMAP.md") {
-		t.Errorf("the haul disturbed an unrelated edit; status is:\n%s", status)
+		t.Errorf("the restore touched an unrelated edit; status is:\n%s", status)
+	}
+	// An empty status for those paths is also the byte-for-byte proof: git reports
+	// a difference for content, mode and deletion alike. The entry is back where
+	// HEAD has it, which is why the restore cannot lose one.
+	if _, err := os.Stat(filepath.Join(sb.repo, filepath.FromSlash(dropped))); err != nil {
+		t.Errorf("the entry the haul carried away is not back (%s): %v", dropped, err)
+	}
+	// The branch and the restored tree disagree here on purpose — the haul recorded
+	// that the pass minimized this seed away, and HEAD still has it — and that is
+	// what the fingerprint rail is for: if the next pass minimizes the same seed
+	// again, the tree is dirty in exactly the way it already proposed and the haul
+	// is skipped rather than re-committed.
+	if sb.branchHas(t, haulBranch, dropped) {
+		t.Errorf("the branch still carries %s, which the haul recorded as minimized away", dropped)
 	}
 	// ...and it does not leave a branch behind in the tree it borrowed.
 	if local := gitIn(t, sb.repo, "branch", "--format=%(refname:short)"); local != "main" {
@@ -623,13 +640,16 @@ func TestFuzzSoakHaulRollsOneBranchForward(t *testing.T) {
 		t.Errorf("want one commit on a fresh rolling branch, got %s", got)
 	}
 
-	// The same entries are not handed over twice: a quiet night stays quiet.
+	// The same entries are not handed over twice. The first haul restored the tree,
+	// so a second --propose has nothing in front of it to hand over and leaves the
+	// branch exactly where it is: a quiet night stays quiet either way, and the
+	// rail is the branch tip, not the wording.
 	out, code = sb.propose(t)
 	if code != 0 {
 		t.Errorf("re-proposing exited %d:\n%s", code, out)
 	}
-	if !strings.Contains(out, "already proposed") {
-		t.Errorf("the same entries were handed over twice, want it to say they are already proposed:\n%s", out)
+	if !strings.Contains(out, "nothing to propose") {
+		t.Errorf("a restored tree was handed over again, want it to say there is nothing to propose:\n%s", out)
 	}
 	if got := gitIn(t, sb.repo, "--git-dir="+sb.bare, "rev-parse", haulBranch); got != first {
 		t.Errorf("an unchanged haul rewrote the branch (%s -> %s)", first, got)
@@ -737,5 +757,198 @@ func TestFuzzSoakHaulDeclinesWithNothingToHandOver(t *testing.T) {
 	}
 	if got := sb.haulBranches(t); len(got) != 0 {
 		t.Errorf("a quiet tree still pushed %v", got)
+	}
+}
+
+// TestFuzzSoakHaulRestoresTheFindingItProposed is the case the restore exists
+// for: the fuzzer writes a new entry under testdata/fuzz, the pass hauls it, and
+// it stops sitting in git status — its home is the branch now. The order is the
+// point, and this checks it the only way that matters: the branch is asked for the
+// finding first, and only then is the tree allowed not to have it.
+func TestFuzzSoakHaulRestoresTheFindingItProposed(t *testing.T) {
+	sb := newSandbox(t)
+	finding := "internal/wirefuzz/testdata/fuzz/FuzzFrameParse/00000000feedface"
+	full := filepath.Join(sb.repo, filepath.FromSlash(finding))
+	if err := os.WriteFile(full, []byte("go test fuzz v1\n[]byte(\"a finding\")\n"), 0o644); err != nil {
+		t.Fatalf("writing the finding: %v", err)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); !strings.Contains(status, finding) {
+		t.Fatalf("the fixture is not a new finding; status is:\n%s", status)
+	}
+
+	out, code := sb.propose(t)
+	if code != 0 || !strings.Contains(out, haulBranch) {
+		t.Fatalf("the haul did not propose (exit %d):\n%s", code, out)
+	}
+	if !sb.branchHas(t, haulBranch, finding) {
+		t.Fatalf("the branch does not carry %s, so the restore below would have lost it", finding)
+	}
+	if _, err := os.Stat(full); !os.IsNotExist(err) {
+		t.Errorf("the finding is still sitting in the working tree after it was handed over (stat: %v)", err)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); strings.Contains(status, "testdata/fuzz") {
+		t.Errorf("the corpus is still in git status after the haul:\n%s", status)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); !strings.Contains(status, "ROADMAP.md") {
+		t.Errorf("the restore touched an edit that was not corpus; status is:\n%s", status)
+	}
+	if !strings.Contains(out, "restored to HEAD") {
+		t.Errorf("--propose did not say the tree had been tidied:\n%s", out)
+	}
+}
+
+// TestFuzzSoakReportNamesEveryTargetThePassFound holds the report's per-target
+// table to what the pass found rather than to what the tree happens to hold. That
+// matters because a successful haul restores the corpus: asking the disk alone
+// would drop a row for the pass that found it, and drop a whole new target — the
+// interesting case — entirely. It is called on the real function.
+func TestFuzzSoakReportNamesEveryTargetThePassFound(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; corpus_targets is a bash function")
+	}
+
+	dir := t.TempDir()
+	for _, d := range []string{
+		"internal/one/testdata/fuzz/FuzzOnDisk",
+		"internal/two/testdata/fuzz/FuzzBoth",
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(d)), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", d, err)
+		}
+	}
+	// The pass's snapshot: a target the tree still has, and one it no longer does
+	// — restored away, or a directory the haul carried off whole.
+	names := filepath.Join(dir, "corpus-names.txt")
+	if err := os.WriteFile(names, []byte("FuzzBoth/a\nFuzzBoth/b\nFuzzGone/c\n"), 0o644); err != nil {
+		t.Fatalf("writing the snapshot: %v", err)
+	}
+
+	probe := "NAMES=" + shellQuote(filepath.ToSlash(names)) + "\n" +
+		soakFunc(t, "corpus_targets") + "\ncorpus_targets\n"
+	script := filepath.Join(dir, "probe.sh")
+	if err := os.WriteFile(script, []byte(probe), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+	cmd := exec.Command("bash", filepath.ToSlash(script))
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the probe: %v\n%s", err, out)
+	}
+
+	const want = "FuzzBoth,FuzzGone,FuzzOnDisk"
+	if got := strings.Join(strings.Fields(string(out)), ","); got != want {
+		t.Errorf("the report would tabulate %s, want %s (the tree's targets and the pass's, with no repeats)", got, want)
+	}
+}
+
+// TestFuzzSoakPassStartsFromWhatTheBoxKnew holds the pass's "before" snapshot to
+// the durable corpus rather than to the checkout. A successful haul restores the
+// tree, so the entries it handed over are absent from the tree and present only in
+// the last pass's snapshot — and in the fuzz cache, which the pass's harvest copies
+// back. Taking the union is what stops the next pass reporting those entries as
+// found again, night after night, for as long as the request stayed open. It is
+// called on the real function, over a real tree.
+func TestFuzzSoakPassStartsFromWhatTheBoxKnew(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; corpus_known_before is a bash function")
+	}
+
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "internal", "one", "testdata", "fuzz", "FuzzA", "aaaa")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatalf("creating the corpus: %v", err)
+	}
+	if err := os.WriteFile(entry, []byte("go test fuzz v1\n[]byte(\"x\")\n"), 0o644); err != nil {
+		t.Fatalf("writing the entry: %v", err)
+	}
+	// The last pass's snapshot: one entry the tree kept, one the haul carried away,
+	// and one repeated — the union must count it once.
+	prev := filepath.Join(dir, "prev.txt")
+	if err := os.WriteFile(prev, []byte("FuzzA/aaaa\nFuzzA/bbbb\nFuzzGone/cccc\n"), 0o644); err != nil {
+		t.Fatalf("writing the snapshot: %v", err)
+	}
+
+	probe := soakFunc(t, "corpus_names") + "\n" + soakFunc(t, "corpus_known_before") + "\n" +
+		"corpus_known_before " + shellQuote(filepath.ToSlash(prev)) + "\n"
+	script := filepath.Join(dir, "probe.sh")
+	if err := os.WriteFile(script, []byte(probe), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+	cmd := exec.Command("bash", filepath.ToSlash(script))
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the probe: %v\n%s", err, out)
+	}
+
+	const want = "FuzzA/aaaa*FuzzA/bbbb*FuzzGone/cccc"
+	if got := strings.Join(strings.Fields(string(out)), "*"); got != want {
+		t.Errorf("the pass would start from %s, want %s (what the tree holds unioned with what the last pass left)", got, want)
+	}
+}
+
+// TestFuzzSoakHaulDoesNotReCommitWhatItAlreadyMinimized pins the interaction the
+// restore creates and the recorded fingerprint absorbs. A minimize-drop is
+// proposed once; the restore then puts the seed back where HEAD has it, so the
+// next pass minimizes the very same seed again and the tree is dirty in exactly
+// the way it was last night. Without the fingerprint that would be a fresh commit
+// every night, on a branch this repository's ruleset forbids rewriting.
+func TestFuzzSoakHaulDoesNotReCommitWhatItAlreadyMinimized(t *testing.T) {
+	sb := newSandbox(t)
+	sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	if out, code := sb.propose(t); code != 0 || !strings.Contains(out, haulBranch) {
+		t.Fatalf("the first haul did not propose (exit %d):\n%s", code, out)
+	}
+	tip := gitIn(t, sb.repo, "--git-dir="+sb.bare, "rev-parse", haulBranch)
+
+	// The restore brought that seed back, so minimizing it away looks new again —
+	// and it is the same entry, because the directory is back to its HEAD listing.
+	sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	out, code := sb.propose(t)
+	if code != 0 {
+		t.Errorf("re-proposing a minimized seed exited %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "already proposed") {
+		t.Errorf("a seed this branch already recorded as minimized was proposed again:\n%s", out)
+	}
+	if got := gitIn(t, sb.repo, "--git-dir="+sb.bare, "rev-parse", haulBranch); got != tip {
+		t.Errorf("the branch moved for a haul it already had (%s -> %s)", tip, got)
+	}
+	if got := gitIn(t, sb.repo, "--git-dir="+sb.bare, "rev-list", "--count", "main.."+haulBranch); got != "1" {
+		t.Errorf("want one commit on the branch, got %s", got)
+	}
+}
+
+// TestFuzzSoakHaulKeepsTheCorpusWhenTheHandOverFails is what makes the restore
+// safe to have at all. The tree is only tidied once the branch really has the
+// corpus, so a remote that cannot be pushed to must leave the findings exactly
+// where they were: restoring there would be a soak deleting the only copy of what
+// it had just found, and reporting that as a hand-off.
+func TestFuzzSoakHaulKeepsTheCorpusWhenTheHandOverFails(t *testing.T) {
+	sb := newSandbox(t)
+	dropped := sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	finding := "internal/wirefuzz/testdata/fuzz/FuzzFrameParse/00000000deadbeef"
+	full := filepath.Join(sb.repo, filepath.FromSlash(finding))
+	if err := os.WriteFile(full, []byte("go test fuzz v1\n[]byte(\"a finding\")\n"), 0o644); err != nil {
+		t.Fatalf("writing the finding: %v", err)
+	}
+	gitIn(t, sb.repo, "remote", "set-url", "origin", filepath.Join(filepath.Dir(sb.repo), "gone.git"))
+
+	out, code := sb.propose(t)
+	if code == 0 {
+		t.Errorf("--propose exited 0 with nowhere to push:\n%s", out)
+	}
+	if !strings.Contains(out, "could not push") {
+		t.Errorf("the failed hand-off was not explained:\n%s", out)
+	}
+	if _, err := os.Stat(full); err != nil {
+		t.Errorf("a failed hand-off removed the finding it could not hand over: %v", err)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); !strings.Contains(status, dropped) {
+		t.Errorf("a failed hand-off restored %s, so the minimization the pass recorded is gone:\n%s", dropped, status)
+	}
+	if got := sb.haulBranches(t); len(got) != 0 {
+		t.Errorf("a failed hand-off still left %v on the remote", got)
 	}
 }
