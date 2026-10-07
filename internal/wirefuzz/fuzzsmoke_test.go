@@ -111,6 +111,28 @@ func targetsListedIn(t *testing.T, script string) map[string]string {
 	return out
 }
 
+// TestFuzzSoakDelegatesToTheSharedTargets guards the soak against growing a
+// third, private target list. scripts/fuzz-soak.sh drives the runner and the
+// harvester rather than calling `go test -fuzz` itself, and that is what keeps
+// one list authoritative; a list typed into it would be invisible to every
+// other check here.
+func TestFuzzSoakDelegatesToTheSharedTargets(t *testing.T) {
+	const script = "../../scripts/fuzz-soak.sh"
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("%s unreadable: %v (the scheduled soak drives the runner and the harvester)", script, err)
+	}
+	body := string(raw)
+	for _, want := range []string{"scripts/fuzz-smoke.sh", "scripts/fuzz-corpus.sh"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s no longer calls %s — the soak must drive the shared scripts, not fuzz on its own", script, want)
+		}
+	}
+	if m := regexp.MustCompile(`\./internal/[a-z]+:Fuzz[A-Za-z0-9_]+`).FindString(body); m != "" {
+		t.Errorf("%s carries its own target list (%q); the list belongs to fuzz-smoke.sh and fuzz-corpus.sh alone", script, m)
+	}
+}
+
 // TestFuzzCorpusEntriesAreContentAddressed guards the property the corpus store
 // is built on: Go names a saved entry after the sha256 of its bytes, which is
 // what makes a save additive and exact, and what lets scripts/fuzz-corpus.sh

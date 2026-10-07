@@ -60,3 +60,6 @@ Thumbs.db
 
 # local gate-latency log (scripts/gates.sh)
 .gate-timings.csv
+
+# local fuzz-soak state, ledger and raw logs (scripts/fuzz-soak.sh)
+.fuzz-soak/

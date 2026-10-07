@@ -370,6 +370,19 @@ them straight back — git history still holds them. Coverage is preserved by
 construction, and the pass refuses to delete anything it cannot prove is
 redundant.
 
+**Soak:** with the workflows gone nothing fuzzes on its own, so the deep pass
+still depended on somebody remembering it. `scripts/fuzz-soak.sh` is what a
+scheduler calls instead: one pass fuzzes every target for 60s (the deep
+pre-flight), harvests and minimizes whatever it found, then reports what changed
+since the previous pass — corpus size, covered blocks, and whether a target
+crashed. Its state is machine-local and gitignored (`.fuzz-soak/`): an
+append-only ledger, the last report, and the raw fuzz log behind it. It takes a
+lock so two passes cannot overlap, keeps any entry that fails on its own (a
+reproducer is never redundant), and exits non-zero when a target crashed so a
+scheduler's mail carries the failure. `--print-schedule` prints the cron or Task
+Scheduler incantation for the host; nothing installs it for you. Like `--deep`,
+it is minutes long and no gate runs it.
+
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
 legacy flow cannot feed the downloaded corpus to the non-std-lib Go

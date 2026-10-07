@@ -144,6 +144,9 @@ the pre-push gate runs `scripts/fuzz-smoke.sh` over the wirefuzz and
 ratchetwire targets, after both the ClusterFuzzLite pipelines (retired with
 the CI workflows) and the OSS-Fuzz upstream submission (declined as
 premature, google/oss-fuzz PR 16145) — same libFuzzer binaries, no service.
+What those pipelines did on a schedule, `scripts/fuzz-soak.sh` now does
+locally: a timed pass over the same targets that saves and minimizes what it
+finds and reports the change since the last pass.
 
 ### Product roadmap after the evidence gates
 

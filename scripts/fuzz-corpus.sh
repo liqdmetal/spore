@@ -30,7 +30,8 @@
 # anything the union does not need is dropped from the repo *and* from the
 # cache, so the two stores agree and the next save does not copy it straight
 # back. Coverage is preserved by construction, and the pass refuses to delete
-# unless it can prove the kept entries cover the same union. Git history still
+# unless it can prove the kept entries cover the same union. An entry that fails
+# on its own run is a crash reproducer, and is kept whatever the cover says. Git history still
 # has every dropped input, and the fuzzer re-finds one if a change to the code
 # makes it interesting again.
 #
@@ -140,9 +141,11 @@ harvest() {
 
 MIN_KEPT=0
 MIN_DROPPED=0
+FAILED_KEPT=0
 minimize() {
   local bucket_awk greedy_awk jobs p pkey bin entry pkg target dest name f
-  local base base_set sets list out greedy_out kept_file summary all_n union_n kept_n
+  local base base_set sets list out failed greedy_out kept_file summary all_n union_n kept_n
+  local rc failed_n files_n
   bucket_awk="$SCRATCH/bucket.awk"
   greedy_awk="$SCRATCH/greedy.awk"
 
@@ -226,10 +229,16 @@ AWK
     [ -s "$list" ] || continue
 
     # One isolated run per entry, in parallel; $5 (the name) is unused here.
+    # Each run's exit status is kept beside its profile: an entry that fails on
+    # its own is a crash reproducer, and a reproducer is never redundant.
     xargs -P "$jobs" -n 5 bash -c \
-      'cd "$1" && "$2" -test.run "$3" -test.coverprofile="$4" >/dev/null 2>&1' _ < "$list" || true
+      'cd "$1" && "$2" -test.run "$3" -test.coverprofile="$4" >/dev/null 2>&1; echo $? > "$4.status"' _ < "$list" || true
 
+    failed="$SCRATCH/failed.$pkey.$target"
+    : > "$failed"
     while read -r _pkg _bin _re out name; do
+      rc="$(tr -dc '0-9' < "${out}.status" 2>/dev/null || true)"
+      [ -n "$rc" ] && [ "$rc" != "0" ] && printf '%s\n' "$name" >> "$failed"
       if [ -f "$out" ]; then
         awk -f "$bucket_awk" "$out" | sort -u > "$SCRATCH/one.$pkey.$target.set"
         comm -23 "$SCRATCH/one.$pkey.$target.set" "$base_set" > "$sets/$name.set"
@@ -250,6 +259,22 @@ AWK
 
     kept_file="$SCRATCH/kept.$pkey.$target"
     grep '^KEEP ' "$greedy_out" | while read -r _ path; do basename "$path" .set; done > "$kept_file"
+    # A reproducer outranks the set cover: its whole value is that it fails, so
+    # "covers nothing new" is not a reason to delete it. Keep it and say so, or
+    # a soak could quietly minimize away the evidence of the bug it just found.
+    if [ -s "$failed" ]; then
+      while IFS= read -r name; do
+        grep -qxF "$name" "$kept_file" || printf '%s\n' "$name" >> "$kept_file"
+        FAILED_KEPT=$((FAILED_KEPT + 1))
+      done < "$failed"
+      # Every entry failing is not a pile of reproducers: Go fails the whole
+      # target for each run, so one bad file (or a broken harness) would keep
+      # the entire corpus and quietly make minimization useless here.
+      files_n="$(find "$dest" -maxdepth 1 -type f | wc -l)"
+      if [ "$(wc -l < "$failed")" -eq "$files_n" ]; then
+        echo "fuzz-corpus: every entry for $target fails on its own — that is a broken harness or an unreadable corpus file, not $files_n reproducers" >&2
+      fi
+    fi
     # An entry that covers nothing new is redundant, but a target with no
     # coverage at all should still keep one seed rather than none.
     if [ ! -s "$kept_file" ]; then
@@ -309,6 +334,9 @@ fi
 printf '== fuzz corpus (repo testdata/fuzz vs the build cache)\n%s' "$rows"
 if [ "$MINIMIZE" -eq 1 ]; then
   echo "keep $MIN_KEPT entr(ies) covering the same code; dropped $MIN_DROPPED redundant one(s) from the repo and the cache"
+  if [ "$FAILED_KEPT" -gt 0 ]; then
+    echo "kept $FAILED_KEPT entry(ies) that fail on their own — a reproducer is never redundant"
+  fi
 fi
 if [ "$SAVE" -eq 1 ]; then
   echo "saved $ADDED new input(s) across ${#TARGETS[@]} target(s); corpus now $saved_total file(s)"
