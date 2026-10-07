@@ -423,7 +423,10 @@ fi
   if [ -n "$TRENDS" ]; then
     printf '```\n%s\n```\n' "$TRENDS"
   else
-    printf 'nothing flagged — coverage is still setting new bests and every pass ended GREEN.\n'
+    # An empty flag set means exactly three things — nothing else. In particular
+    # it does NOT mean coverage is still climbing: a pass can repeat the last
+    # best and stay unflagged for the first FUZZ_STALL_PASSES passes.
+    printf 'nothing flagged — no stall, no coverage loss, and every pass ended GREEN.\n'
   fi
 
   printf '\n## Reproduce this pass\n\n```\nscripts/fuzz-smoke.sh -t %s\nscripts/fuzz-corpus.sh --save\nscripts/fuzz-soak-trends.sh\n```\n' "$TIME"
