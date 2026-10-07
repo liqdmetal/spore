@@ -105,7 +105,7 @@ human() { # human SECONDS
 # ---- status and schedule are read-only, and never touch the lock ------------
 
 print_schedule() {
-  local bashexe soak_win
+  local bashexe soak_win gobin gowin gopath go_prelude go_export
   if command -v cygpath >/dev/null 2>&1; then
     bashexe="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo 'C:\Program Files\Git\bin\bash.exe')"
     soak_win="$(cygpath -w "$SOAK_DIR" 2>/dev/null || echo "$SOAK_DIR")"
@@ -113,6 +113,28 @@ print_schedule() {
     bashexe='C:\Program Files\Git\bin\bash.exe'
     soak_win="$SOAK_DIR"
   fi
+
+  # A scheduler hands the task a minimal environment, not this shell's. Where
+  # the only go on the box is a toolchain inside the module cache — which is
+  # what a box without a system Go install looks like — a launcher that just
+  # calls the script dies with "go not found on PATH" a second in, and the task
+  # reports that as a failure nobody reads. Set PATH in both worlds: cmd needs
+  # the Windows form, and the login shell below would otherwise start clean.
+  gobin="$(command -v go 2>/dev/null || true)"
+  if [ -n "$gobin" ]; then
+    gopath="$(dirname "$gobin")"
+    if command -v cygpath >/dev/null 2>&1; then
+      gowin="$(cygpath -w "$gopath")"
+    else
+      gowin="$gopath"
+    fi
+    go_prelude="set PATH=$gowin;%PATH%"
+    go_export="export PATH=$gopath:\$PATH && "
+  else
+    go_prelude="rem no go on PATH here; the launcher inherits the scheduler's"
+    go_export=""
+  fi
+
   case "$(uname -s 2>/dev/null || echo unknown)" in
     MINGW* | MSYS* | CYGWIN* | Windows*)
       # schtasks mangles nested quotes in /tr, so the scheduled command is a
@@ -125,7 +147,10 @@ administrator rights, and printing this installs nothing:
 
   cat > "$SOAK_DIR/run-soak.cmd" <<'CMD'
   @echo off
-  "$bashexe" -lc "cd $REPO_ROOT && bash scripts/fuzz-soak.sh >> $SOAK_DIR/soak.log 2>&1"
+  rem spore nightly fuzz soak; regenerate this file with scripts/fuzz-soak.sh --print-schedule
+  $go_prelude
+  "$bashexe" -lc "cd $REPO_ROOT && ${go_export}bash scripts/fuzz-soak.sh >> $SOAK_DIR/soak.log 2>&1"
+  exit /b %ERRORLEVEL%
   CMD
 
 2. schedule it:

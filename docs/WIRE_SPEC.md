@@ -383,6 +383,16 @@ scheduler's mail carries the failure. `--print-schedule` prints the cron or Task
 Scheduler incantation for the host; nothing installs it for you. Like `--deep`,
 it is minutes long and no gate runs it.
 
+A scheduler hands a task a minimal environment, not the one you are sitting in,
+so the printed launcher sets `PATH` itself — without that, a box whose only Go is
+a toolchain inside the module cache dies with `go not found on PATH` about a
+second in, and the task reports the failure as a number nobody reads. On Windows
+the scheduled command is a launcher file that lives in the state directory, so
+wiping `.fuzz-soak/` also removes it and the task stops starting; the launcher
+says how to regenerate it, and `--print-schedule` prints it again. A firing's
+corpus changes are left in the working tree on purpose: committing what the
+fuzzer found is a human's call, not the soak's.
+
 A single pass answers "did anything change since yesterday", not the question
 that matters after a few weeks: is the fuzzer still finding anything at all?
 A saturated corpus and a quietly broken harness look identical in one pass.
