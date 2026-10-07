@@ -22,12 +22,21 @@
 # It is minutes long, so — like --deep — nothing in scripts/gates.sh runs it.
 #
 #   usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule]
+#                                [--doctor]
 #     --time SECONDS    fuzz seconds per target (default 60, the deep pass)
 #     --status          print the last report and recent ledger rows; run nothing
 #     --print-schedule  print the scheduler incantation for this host. Nothing is
 #                       installed by it: paste it yourself, or ask for it to be.
+#     --doctor          check that the installed schedule can still run: the
+#                       launcher is current, the task is registered and points at
+#                       it, and go resolves in a scheduler's minimal environment.
+#                       Runs nothing and installs nothing. Non-zero on a problem,
+#                       so a broken install is caught the day it breaks rather
+#                       than after a week of passes that never started.
 #
-# Env: FUZZ_SOAK_DIR  state directory (default <repo>/.fuzz-soak, gitignored).
+# Env: FUZZ_SOAK_DIR   state directory (default <repo>/.fuzz-soak, gitignored).
+#      FUZZ_SOAK_TASK  the registered task's name (default spore-fuzz-soak). Set
+#                      it empty to run --doctor with no task to inspect.
 #
 # State under FUZZ_SOAK_DIR:
 #   log.tsv            append-only ledger, one row per pass
@@ -41,8 +50,9 @@
 # a single pass cannot see (coverage that has stopped setting new bests, passes
 # that did not end GREEN), and each pass quotes those flags in its report.
 #
-# Exit codes: 0 every target ran clean, 1 a target crashed or a step failed,
-# 2 usage error (or --status with nothing to show).
+# Exit codes: 0 every target ran clean (or --doctor found nothing wrong), 1 a
+# target crashed, a step failed, or --doctor found a problem, 2 usage error (or
+# --status with nothing to show).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +61,7 @@ cd "$REPO_ROOT"
 TIME=60
 SHOW_STATUS=0
 PRINT_SCHEDULE=0
+SHOW_DOCTOR=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -t | --time)
@@ -60,12 +71,14 @@ while [ $# -gt 0 ]; do
       ;;
     --status) SHOW_STATUS=1; shift ;;
     --print-schedule) PRINT_SCHEDULE=1; shift ;;
+    --doctor) SHOW_DOCTOR=1; shift ;;
     -h | --help)
       cat <<'USAGE'
-usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule]
+usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule] [--doctor]
   --time SECONDS    fuzz seconds per target (default 60, the deep pass)
   --status          print the last report, then stop
   --print-schedule  print the scheduler incantation for this host, then stop
+  --doctor          check the installed schedule can still run, then stop
 USAGE
       exit 0
       ;;
@@ -102,16 +115,23 @@ human() { # human SECONDS
   else printf '%ds' "$s"; fi
 }
 
-# ---- status and schedule are read-only, and never touch the lock ------------
+# ---- status, schedule and doctor are read-only, and never touch the lock ----
 
-print_schedule() {
-  local bashexe soak_win gobin gowin gopath go_prelude go_export
+# The task's name. Unset takes the default; empty means "there is no task to
+# inspect", which lets --doctor run against a state directory no scheduler knows
+# about — including the one a test builds.
+TASK_NAME="${FUZZ_SOAK_TASK-spore-fuzz-soak}"
+
+# The fields the launcher and --doctor both need, derived once from this machine
+# so "the launcher matches the config" has a single meaning and cannot drift
+# between the printer and the checker.
+scheduler_env() {
   if command -v cygpath >/dev/null 2>&1; then
-    bashexe="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo 'C:\Program Files\Git\bin\bash.exe')"
-    soak_win="$(cygpath -w "$SOAK_DIR" 2>/dev/null || echo "$SOAK_DIR")"
+    BASHEXE_WIN="$(cygpath -w "$(command -v bash)" 2>/dev/null || echo 'C:\Program Files\Git\bin\bash.exe')"
+    SOAK_WIN="$(cygpath -w "$SOAK_DIR" 2>/dev/null || echo "$SOAK_DIR")"
   else
-    bashexe='C:\Program Files\Git\bin\bash.exe'
-    soak_win="$SOAK_DIR"
+    BASHEXE_WIN='C:\Program Files\Git\bin\bash.exe'
+    SOAK_WIN="$SOAK_DIR"
   fi
 
   # A scheduler hands the task a minimal environment, not this shell's. Where
@@ -120,20 +140,39 @@ print_schedule() {
   # calls the script dies with "go not found on PATH" a second in, and the task
   # reports that as a failure nobody reads. Set PATH in both worlds: cmd needs
   # the Windows form, and the login shell below would otherwise start clean.
-  gobin="$(command -v go 2>/dev/null || true)"
-  if [ -n "$gobin" ]; then
-    gopath="$(dirname "$gobin")"
+  GO_BIN="$(command -v go 2>/dev/null || true)"
+  if [ -n "$GO_BIN" ]; then
+    GO_DIR="$(dirname "$GO_BIN")"
     if command -v cygpath >/dev/null 2>&1; then
-      gowin="$(cygpath -w "$gopath")"
+      GO_DIR_WIN="$(cygpath -w "$GO_DIR")"
     else
-      gowin="$gopath"
+      GO_DIR_WIN="$GO_DIR"
     fi
-    go_prelude="set PATH=$gowin;%PATH%"
-    go_export="export PATH=$gopath:\$PATH && "
+    GO_PRELUDE="set PATH=$GO_DIR_WIN;%PATH%"
+    GO_EXPORT="export PATH=$GO_DIR:\$PATH && "
   else
-    go_prelude="rem no go on PATH here; the launcher inherits the scheduler's"
-    go_export=""
+    GO_DIR=""
+    GO_DIR_WIN=""
+    GO_PRELUDE="rem no go on PATH here; the launcher inherits the scheduler's"
+    GO_EXPORT=""
   fi
+}
+
+# The launcher file, byte for byte. --print-schedule embeds this text and
+# --doctor diffs the installed file against it, so the two cannot disagree about
+# what the launcher is supposed to hold.
+launcher_cmd() {
+  scheduler_env
+  printf '@echo off\n'
+  printf 'rem spore nightly fuzz soak; regenerate this file with scripts/fuzz-soak.sh --print-schedule\n'
+  printf '%s\n' "$GO_PRELUDE"
+  printf '"%s" -lc "cd %s && %sbash scripts/fuzz-soak.sh >> %s/soak.log 2>&1"\n' \
+    "$BASHEXE_WIN" "$REPO_ROOT" "$GO_EXPORT" "$SOAK_DIR"
+  printf 'exit /b %%ERRORLEVEL%%\n'
+}
+
+print_schedule() {
+  scheduler_env
 
   case "$(uname -s 2>/dev/null || echo unknown)" in
     MINGW* | MSYS* | CYGWIN* | Windows*)
@@ -146,25 +185,22 @@ administrator rights, and printing this installs nothing:
 1. write the launcher the scheduler will call:
 
   cat > "$SOAK_DIR/run-soak.cmd" <<'CMD'
-  @echo off
-  rem spore nightly fuzz soak; regenerate this file with scripts/fuzz-soak.sh --print-schedule
-  $go_prelude
-  "$bashexe" -lc "cd $REPO_ROOT && ${go_export}bash scripts/fuzz-soak.sh >> $SOAK_DIR/soak.log 2>&1"
-  exit /b %ERRORLEVEL%
+$(launcher_cmd | sed 's/^/  /')
   CMD
 
 2. schedule it:
 
-  schtasks /create /tn spore-fuzz-soak /sc daily /st 03:30 /f /tr "$soak_win\\run-soak.cmd"
+  schtasks /create /tn $TASK_NAME /sc daily /st 03:30 /f /tr "$SOAK_WIN\\run-soak.cmd"
 
-Inspect it, then read the last pass:
+Then prove it can still run, and read the last pass:
 
-  schtasks /query /tn spore-fuzz-soak /v /fo LIST
+  bash scripts/fuzz-soak.sh --doctor
+  schtasks /query /tn $TASK_NAME /v /fo LIST
   bash scripts/fuzz-soak.sh --status
 
 Undo it:
 
-  schtasks /delete /tn spore-fuzz-soak /f
+  schtasks /delete /tn $TASK_NAME /f
 EOF
       ;;
     *)
@@ -200,7 +236,94 @@ EOF
   esac
 }
 
+# ---- doctor: can the installed schedule still run? --------------------------
+
+# A scheduled soak fails the quiet way. The task stays registered and the ledger
+# keeps its last row, so nothing looks wrong until somebody reads a timestamp —
+# and by then it has been days. Three things have to hold, and each breaks on its
+# own: a moved checkout or a moved toolchain leaves the launcher stale, the task
+# can be lost or left pointing somewhere else, and go has to resolve in the
+# minimal environment a scheduler hands a task, which is the failure that started
+# all this. Each check is instant, and none of them runs a pass.
+doctor() {
+  local problems=0 passed=0
+  local q runs status next shell_exe
+  local launcher="$SOAK_DIR/run-soak.cmd"
+
+  ok() { printf '  ok:   %s\n' "$*"; passed=$((passed + 1)); }
+  bad() { printf '  FAIL: %s\n' "$*" >&2; problems=$((problems + 1)); }
+  note() { printf '  note: %s\n' "$*"; }
+
+  scheduler_env
+  echo "fuzz-soak: doctor — can the installed schedule still run? (state: $SOAK_DIR)"
+
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW* | MSYS* | CYGWIN* | Windows*)
+      # --- the launcher the task starts ---------------------------------------
+      if [ ! -f "$launcher" ]; then
+        bad "no launcher at $launcher — the task has nothing to start"
+        note "regenerate it: bash scripts/fuzz-soak.sh --print-schedule"
+      elif cmp -s <(launcher_cmd) <(tr -d '\r' < "$launcher"); then
+        ok "launcher is current: byte for byte what --print-schedule prints"
+      else
+        bad "launcher is stale — it is not what --print-schedule prints now"
+        diff <(launcher_cmd) <(tr -d '\r' < "$launcher") 2>/dev/null | head -8 | sed 's/^/        /' >&2 || true
+      fi
+
+      # --- the task that starts it --------------------------------------------
+      if [ -z "$TASK_NAME" ]; then
+        note "FUZZ_SOAK_TASK is empty: no task was named, so none was checked"
+      elif ! command -v schtasks >/dev/null 2>&1; then
+        note "no schtasks on this host: the registration is not checkable from here"
+      elif ! q="$(MSYS_NO_PATHCONV=1 schtasks /query /tn "$TASK_NAME" /v /fo LIST 2>&1)"; then
+        bad "task $TASK_NAME is not registered — nothing will fire"
+      else
+        runs="$(printf '%s\n' "$q" | sed -n 's/^Task To Run:[[:space:]]*//p' | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+        status="$(printf '%s\n' "$q" | sed -n 's/^Status:[[:space:]]*//p' | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+        next="$(printf '%s\n' "$q" | sed -n 's/^Next Run Time:[[:space:]]*//p' | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+        if [ -z "$runs" ]; then
+          bad "task $TASK_NAME is registered but names no command to run"
+        elif [ "$(printf '%s' "$runs" | tr 'A-Z' 'a-z')" != "$(printf '%s' "$SOAK_WIN\\run-soak.cmd" | tr 'A-Z' 'a-z')" ]; then
+          bad "task $TASK_NAME runs $runs, not $SOAK_WIN\\run-soak.cmd"
+        else
+          ok "task $TASK_NAME runs the launcher (status ${status:-?}, next run ${next:-?})"
+        fi
+      fi
+      ;;
+    *)
+      note "this host is POSIX: the schedule is a cron line or a systemd timer, which --print-schedule prints and this script cannot read back"
+      ;;
+  esac
+
+  # --- go, in the environment a scheduler actually hands the task -------------
+  # The launcher works by putting one directory on PATH, and nothing else. If go
+  # does not resolve with only that directory, the task starts and dies about a
+  # second in — which is exactly how the first install here failed.
+  if [ -z "$GO_DIR" ]; then
+    bad "go is not on PATH here, so the launcher --print-schedule would write could not run"
+  else
+    shell_exe=""
+    if command -v bash >/dev/null 2>&1; then shell_exe="$(command -v bash)"
+    elif command -v sh >/dev/null 2>&1; then shell_exe="$(command -v sh)"
+    fi
+    if [ -z "$shell_exe" ]; then
+      note "no shell available to probe go with"
+    elif PATH="$GO_DIR" "$shell_exe" -c 'go version' >/dev/null 2>&1; then
+      ok "go runs with only the launcher's directory on PATH ($GO_DIR)"
+    else
+      bad "go does not run with PATH=$GO_DIR alone — the launcher's PATH line cannot save it"
+    fi
+  fi
+
+  echo "fuzz-soak: doctor: $passed ok, $problems problem(s)"
+  [ "$problems" -eq 0 ]
+}
+
 if [ "$PRINT_SCHEDULE" -eq 1 ]; then print_schedule; exit 0; fi
+
+if [ "$SHOW_DOCTOR" -eq 1 ]; then
+  if doctor; then exit 0; else exit 1; fi
+fi
 
 if [ "$SHOW_STATUS" -eq 1 ]; then
   if [ ! -f "$REPORT" ]; then

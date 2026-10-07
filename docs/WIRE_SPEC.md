@@ -393,6 +393,17 @@ says how to regenerate it, and `--print-schedule` prints it again. A firing's
 corpus changes are left in the working tree on purpose: committing what the
 fuzzer found is a human's call, not the soak's.
 
+An installed schedule is the one part of the soak nothing else watches — a task
+that stops starting stays registered and leaves the ledger's last row standing,
+so it reads as a quiet week instead of a break. `--doctor` asks whether it can
+still run, in three checks that fail independently: the launcher exists and is
+still byte for byte what `--print-schedule` prints (a moved checkout or a moved
+toolchain makes it stale), the task is still registered and still points at that
+file, and `go` resolves with only the launcher's directory on `PATH`, which is
+how the first install here died. It prints a line per check, runs nothing,
+installs nothing, and exits non-zero on a problem, so a break is caught the day
+it happens rather than after a week of passes that never started.
+
 A single pass answers "did anything change since yesterday", not the question
 that matters after a few weeks: is the fuzzer still finding anything at all?
 A saturated corpus and a quietly broken harness look identical in one pass.
