@@ -920,6 +920,100 @@ func TestFuzzSoakHaulDoesNotReCommitWhatItAlreadyMinimized(t *testing.T) {
 	}
 }
 
+// restoreProbe calls the real restore_hauled_corpus in the sandbox against one
+// branch, and returns the note it leaves behind. The step is called directly
+// because the states worth testing it in — a branch that is missing a file, a
+// branch that carries more than the tree — are the ones a haul cannot be asked to
+// produce on demand.
+func (sb sandbox) restoreProbe(t *testing.T, branch string) string {
+	t.Helper()
+	probe := "REPO_ROOT=" + shellQuote(filepath.ToSlash(sb.repo)) + "\n" +
+		"cd \"$REPO_ROOT\"\n" +
+		soakFunc(t, "corpus_pathspecs") + "\n" +
+		soakFunc(t, "restore_hauled_corpus") + "\n" +
+		"HAUL_RESTORE=\"\"\n" +
+		"restore_hauled_corpus " + shellQuote(branch) + "\n" +
+		"printf 'restore=%s\\n' \"$HAUL_RESTORE\"\n"
+	script := filepath.Join(t.TempDir(), "probe.sh")
+	if err := os.WriteFile(script, []byte(probe), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+	out, err := exec.Command("bash", filepath.ToSlash(script)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the probe: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// TestFuzzSoakHaulRestoreChecksTheBranchBeforeTidyingUp is the guard on the only
+// step in the soak that deletes anything local. A successful push says the remote's
+// branch is this commit; it does not say this commit has the corpus in it, and the
+// copy into the worktree and the git add that stages it are both allowed to have
+// missed a file without anything looking broken. A haul that cannot show the branch
+// carries a file the restore would delete must leave the tree exactly where it was.
+func TestFuzzSoakHaulRestoreChecksTheBranchBeforeTidyingUp(t *testing.T) {
+	sb := newSandbox(t)
+	sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	if out, code := sb.propose(t); code != 0 || !strings.Contains(out, haulBranch) {
+		t.Fatalf("the haul did not propose (exit %d):\n%s", code, out)
+	}
+
+	// A finding the branch has never seen: exactly the state a missed copy leaves.
+	finding := "internal/wirefuzz/testdata/fuzz/FuzzFrameParse/00000000deadbeef"
+	full := filepath.Join(sb.repo, filepath.FromSlash(finding))
+	if err := os.WriteFile(full, []byte("go test fuzz v1\n[]byte(\"a finding\")\n"), 0o644); err != nil {
+		t.Fatalf("writing the finding: %v", err)
+	}
+
+	out := sb.restoreProbe(t, haulBranch)
+	if !strings.Contains(out, "left the corpus in the tree") {
+		t.Errorf("the restore tidied up for a branch that does not carry the finding:\n%s", out)
+	}
+	// ...and for that reason, not for one of the ways this can bail out when it
+	// cannot tell: a refusal that says "it would not list" would satisfy the line
+	// above while never having asked the branch anything.
+	if !strings.Contains(out, "does not carry") {
+		t.Errorf("the restore refused for a reason other than the branch missing the finding:\n%s", out)
+	}
+	if _, err := os.Stat(full); err != nil {
+		t.Errorf("the restore deleted a finding the branch does not carry: %v", err)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); !strings.Contains(status, finding) {
+		t.Errorf("the finding is not where it was left; status is:\n%s", status)
+	}
+}
+
+// TestFuzzSoakHaulRestoreAcceptsABranchThatCarriesMore holds the other half of the
+// same guard, because a check that is too strict is its own bug: an unmerged haul
+// leaves the branch holding entries the tree has and entries it no longer has —
+// what the branch deleted is still in HEAD, and the restore brings it back. Every
+// file the restore could destroy has to be on the branch; anything beyond that is
+// the branch's business, and refusing over it would stop the restore from ever
+// running in the ordinary unmerged state.
+func TestFuzzSoakHaulRestoreAcceptsABranchThatCarriesMore(t *testing.T) {
+	sb := newSandbox(t)
+	// A haul that recorded a deletion, which the restore put back: the branch now
+	// carries less than the tree, and later more than it, at the same time.
+	sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	if out, code := sb.propose(t); code != 0 || !strings.Contains(out, haulBranch) {
+		t.Fatalf("the haul did not propose (exit %d):\n%s", code, out)
+	}
+
+	// A newer meeting with the fuzzer, dropped again and not yet handed over.
+	dropped := sb.dropCorpusEntry(t, "FuzzFrameParse")
+	if _, err := os.Stat(filepath.Join(sb.repo, filepath.FromSlash(dropped))); !os.IsNotExist(err) {
+		t.Fatalf("the fixture is not a deletion (%s): %v", dropped, err)
+	}
+
+	out := sb.restoreProbe(t, haulBranch)
+	if !strings.Contains(out, "restored to HEAD") {
+		t.Errorf("the restore refused a branch that carries more than the tree:\n%s", out)
+	}
+	if status := gitIn(t, sb.repo, "status", "--porcelain"); strings.Contains(status, "testdata/fuzz") {
+		t.Errorf("the corpus is still in git status; status is:\n%s", status)
+	}
+}
+
 // TestFuzzSoakHaulKeepsTheCorpusWhenTheHandOverFails is what makes the restore
 // safe to have at all. The tree is only tidied once the branch really has the
 // corpus, so a remote that cannot be pushed to must leave the findings exactly

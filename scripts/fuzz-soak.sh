@@ -88,11 +88,17 @@
 # sitting in git status the moment it has a pull request, instead of every pass
 # leaving the checkout dirtier than the last. Only a push that succeeded restores
 # anything — a hand-off that failed leaves the corpus exactly where it was, which
-# is the only place it exists. Nothing is lost by the restore: the branch carries
-# what the tree carried, and the entries come back on their own, because the fuzz
+# is the only place it exists — and a successful push is only the first of the two
+# conditions. The other is checked against the commit that was pushed: every file
+# the restore would delete has to be carried there, so a haul whose copy into the
+# worktree or whose staging quietly missed a file leaves the tree alone rather
+# than deleting the only copy of it. Nothing is lost by the restore: the branch
+# carries what the tree carried, and the entries come back on their own, because the fuzz
 # cache keeps compounding and fuzz-corpus.sh --save harvests every cached input
 # the repo lacks into testdata before a pass hauls anything — so the next haul
-# still starts from a superset of the branch.
+# still starts from a superset of the branch. (Which is why entries the branch has
+# and the tree does not are not the restore's business: only what the tree holds
+# and HEAD does not can be destroyed by it, and only that is asked of the branch.)
 #
 # Exit codes: 0 every target ran clean (or --doctor found nothing wrong), 1 a
 # target crashed, a step failed, or --doctor found a problem, 2 usage error (or
@@ -669,11 +675,57 @@ propose_pull_request() { # propose_pull_request BASE_SHA BASE_BRANCH BRANCH URL
 # stages, so an unrelated edit somebody has open is untouched. git clean does not
 # reach an ignored file (that would take -x), and the entries it does remove are
 # the corpus files the branch has just taken.
-restore_hauled_corpus() {
-  local paths=() p left
+restore_hauled_corpus() { # restore_hauled_corpus BRANCH
+  local branch="${1:-$HAUL_BRANCH}" paths=() p left at_risk have missing
   while IFS= read -r p; do paths+=("$p"); done < <(corpus_pathspecs)
   HAUL_RESTORE=""
   [ "${#paths[@]}" -gt 0 ] || return 0
+
+  # The branch has to demonstrably carry what this is about to delete, and the push
+  # having succeeded only says the remote's branch is this commit — not that this
+  # commit has the corpus in it. The two come apart where it matters: the copy into
+  # the worktree, and the git add -A that stages it, are both allowed to have
+  # missed a file without anything looking broken, and then the tree's copy of it
+  # is the only one left.
+  #
+  # What is at risk is exactly the content the tree holds and HEAD does not: an
+  # untracked finding, which git clean would remove, or a modified tracked file,
+  # which git checkout would overwrite. A deletion has no content to lose, and a
+  # file that already matches HEAD comes back byte for byte — and an entry the
+  # branch has that the tree does not is the branch's own business, since an
+  # unmerged haul makes that the ordinary state. So this is a subset test over the
+  # handful of files that are at risk, not over the corpus, and a haul that fails
+  # it leaves the tree exactly where it was.
+  #
+  # Names compare rather than blobs because a corpus entry is named after the
+  # sha256 of its own contents and is only ever added or deleted, never edited in
+  # place: having the name is having the bytes. A modified tracked file would be
+  # the one case where that is loose, and the pass never makes one.
+  #
+  # A check that cannot be made is a check that failed: every branch below leaves
+  # the corpus alone rather than tidying up on a guess.
+  #
+  # The `if` inside the loop is load-bearing. ls-files lists an entry the pass
+  # deleted as readily as one it just wrote, so `[ -e ] &&` there would end the
+  # loop on a failed test, and pipefail would read that as a listing that failed —
+  # a refusal the first time any seed was ever minimized away, dressed up as a
+  # sentence about a branch that was never asked anything.
+  if ! at_risk="$(git -C "$REPO_ROOT" ls-files -mo --exclude-standard -- "${paths[@]}" 2>/dev/null \
+      | while IFS= read -r p; do if [ -e "$p" ]; then printf '%s\n' "$p"; fi; done | LC_ALL=C sort)"; then
+    HAUL_RESTORE="left the corpus in the tree: it would not list, so there is no way to know $branch carries it"
+    return 0
+  fi
+  if printf '%s\n' "$at_risk" | grep -q .; then
+    if ! have="$(git -C "$REPO_ROOT" ls-tree -r --name-only "$branch" -- "${paths[@]}" 2>/dev/null | LC_ALL=C sort)"; then
+      HAUL_RESTORE="left the corpus in the tree: $branch could not be read, so there is no way to know it carries the corpus"
+      return 0
+    fi
+    missing="$(comm -23 <(printf '%s\n' "$at_risk") <(printf '%s\n' "$have"))"
+    if printf '%s\n' "$missing" | grep -q .; then
+      HAUL_RESTORE="left the corpus in the tree: $branch does not carry $(printf '%s\n' "$missing" | grep -c .) file(s) the restore would have deleted"
+      return 0
+    fi
+  fi
 
   # Tracked entries come back from HEAD (a minimized-away seed is a deletion);
   # untracked ones are the pass's findings, and the branch has them now.
@@ -682,7 +734,7 @@ restore_hauled_corpus() {
 
   left="$(git -C "$REPO_ROOT" status --porcelain -- "${paths[@]}" 2>/dev/null | wc -l)"
   if [ "$left" -eq 0 ]; then
-    HAUL_RESTORE="the corpus is restored to HEAD here: it is on $HAUL_BRANCH now, so it stops sitting in git status"
+    HAUL_RESTORE="the corpus is restored to HEAD here: it is on $branch now, so it stops sitting in git status"
   else
     HAUL_RESTORE="could not restore the corpus here: $left path(s) still differ from HEAD"
   fi
@@ -790,8 +842,9 @@ propose_haul() {
   } > "$HAUL_STATE"
 
   # Past the push, so the corpus has another home now and this one can go back to
-  # the way it was. A push that failed returned above, leaving the tree alone.
-  restore_hauled_corpus
+  # the way it was — once this commit is shown to carry it. A push that failed
+  # returned above, leaving the tree alone.
+  restore_hauled_corpus "$branch"
 
   haul_cleanup "$branch"
   return 0

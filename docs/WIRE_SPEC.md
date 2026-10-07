@@ -429,9 +429,13 @@ the credential git already pushes with (set `GITHUB_TOKEN` or `GH_TOKEN` to choo
 one explicitly); a non-GitHub remote or an unusable credential still pushes the
 branch and reports its compare URL. None of it can fail a pass. Once the branch
 really has the corpus the checkout is restored to `HEAD`, so a finding stops
-sitting in `git status` the moment it has a pull request — and a hand-off that
-failed restores nothing, leaving the corpus in the working tree, which is then the
-only place it exists. The entries come back on their own: the fuzz cache keeps
+sitting in `git status` the moment it has a pull request. A hand-off that failed
+restores nothing, leaving the corpus in the working tree, which is then the only
+place it exists — and a push is only the first of the two conditions, because a
+push that succeeded says the remote's branch is that commit, not that the commit
+carries the corpus: every file the restore would delete is checked against the
+pushed commit's tree first, and a haul that cannot show the branch has one leaves
+the tree alone. The entries come back on their own: the fuzz cache keeps
 compounding and `fuzz-corpus.sh --save` harvests it into `testdata` before each
 pass hauls anything, so a restored tree is regenerated before the next haul.
 `--propose` runs the same step by hand on the corpus as it stands.
