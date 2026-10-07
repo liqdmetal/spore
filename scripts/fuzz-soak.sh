@@ -16,7 +16,8 @@
 # never prompts, it keeps the raw fuzz log next to the report, and it exits
 # non-zero when a target crashed so a scheduler's mail carries the failure. A
 # crash reproducer is never minimized away: fuzz-corpus.sh keeps any entry that
-# fails on its own run.
+# fails on its own run. A *stalled* coverage trend is reported but is not a
+# failure: the passes succeeded, the fuzzer has just stopped finding new code.
 #
 # It is minutes long, so — like --deep — nothing in scripts/gates.sh runs it.
 #
@@ -35,6 +36,10 @@
 #   last-fuzz.log      raw output of the last fuzz pass
 #   last-corpus.log    output of the last harvest/minimize
 #   corpus-names.txt   the corpus the last pass left behind
+#
+# The ledger is also what scripts/fuzz-soak-trends.sh reads: it flags the things
+# a single pass cannot see (coverage that has stopped setting new bests, passes
+# that did not end GREEN), and each pass quotes those flags in its report.
 #
 # Exit codes: 0 every target ran clean, 1 a target crashed or a step failed,
 # 2 usage error (or --status with nothing to show).
@@ -184,6 +189,8 @@ if [ "$SHOW_STATUS" -eq 1 ]; then
     echo "recent passes ($LEDGER):"
     printf '  %-20s %-6s %8s %8s %9s %9s %8s\n' "timestamp" "status" "corpus" "found" "minimized" "coverage" "secs"
     tail -n +2 "$LEDGER" | tail -n 5 | awk -F'\t' '{ printf "  %-20s %-6s %8s %8s %9s %9s %8s\n", $1, $4, $6, $7, $8, $9, $11 }'
+    echo
+    echo "multi-pass view: scripts/fuzz-soak-trends.sh"
   fi
   exit 0
 fi
@@ -314,6 +321,41 @@ fi
 END_EPOCH="$(date +%s)"
 DURATION="$((END_EPOCH - START_EPOCH))"
 
+# The ledger row and the state are written first, so the trend reader sees this
+# pass; the report is then allowed to quote the reader's verdict on it.
+if [ ! -s "$LEDGER" ]; then
+  printf 'timestamp\tmode\tfuzz_seconds\tstatus\tcorpus_before\tcorpus_after\tfound\tminimized\tcoverage\tcoverage_delta\tduration_s\n' > "$LEDGER"
+fi
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$START_ISO" "$MODE" "$TIME" "$STATUS" "$COUNT_BEFORE" "$COUNT_AFTER" \
+  "$ADDED" "$DROPPED" "$COVERAGE" "$COVER_DELTA" "$DURATION" >> "$LEDGER"
+
+{
+  printf 'timestamp=%s\n' "$START_ISO"
+  printf 'epoch=%s\n' "$END_EPOCH"
+  printf 'status=%s\n' "$STATUS"
+  printf 'corpus=%s\n' "$COUNT_AFTER"
+  printf 'coverage=%s\n' "$COVERAGE"
+  printf 'fuzz_seconds=%s\n' "$TIME"
+  printf 'targets=%s\n' "$TARGETS_N"
+  printf 'crashes=%s\n' "${CRASHES:-none}"
+} > "$STATE"
+
+# What no single pass can see: whether the corpus is still moving at all. A
+# quiet week and a quietly broken harness look identical in one pass; they do
+# not in the ledger, so the pass quotes the reader rather than guessing.
+TRENDS=""
+TREND_SHELL=""
+if [ -f "$REPO_ROOT/scripts/fuzz-soak-trends.sh" ]; then
+  if command -v sh >/dev/null 2>&1; then TREND_SHELL="sh"
+  elif command -v bash >/dev/null 2>&1; then TREND_SHELL="bash"
+  fi
+  if [ -n "$TREND_SHELL" ]; then
+    TRENDS="$(FUZZ_SOAK_LEDGER="$LEDGER" "$TREND_SHELL" \
+      "$REPO_ROOT/scripts/fuzz-soak-trends.sh" --flags-only 2>/dev/null || true)"
+  fi
+fi
+
 # --- the report --------------------------------------------------------------
 {
   printf '# fuzz soak — %s\n\n' "$START_ISO"
@@ -352,32 +394,25 @@ DURATION="$((END_EPOCH - START_EPOCH))"
       "$(comm -23 <(grep "^$t/" "$NAMES_BEFORE" || true) <(grep "^$t/" "$NAMES" || true) | wc -l)"
   done
 
-  printf '\n## Reproduce this pass\n\n```\nscripts/fuzz-smoke.sh -t %s\nscripts/fuzz-corpus.sh --save\n```\n' "$TIME"
+  printf '\n## Trends across passes\n\n'
+  if [ -n "$TRENDS" ]; then
+    printf '```\n%s\n```\n' "$TRENDS"
+  else
+    printf 'nothing flagged — coverage is still setting new bests and every pass ended GREEN.\n'
+  fi
+
+  printf '\n## Reproduce this pass\n\n```\nscripts/fuzz-smoke.sh -t %s\nscripts/fuzz-corpus.sh --save\nscripts/fuzz-soak-trends.sh\n```\n' "$TIME"
 } > "$REPORT"
-
-if [ ! -s "$LEDGER" ]; then
-  printf 'timestamp\tmode\tfuzz_seconds\tstatus\tcorpus_before\tcorpus_after\tfound\tminimized\tcoverage\tcoverage_delta\tduration_s\n' > "$LEDGER"
-fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$START_ISO" "$MODE" "$TIME" "$STATUS" "$COUNT_BEFORE" "$COUNT_AFTER" \
-  "$ADDED" "$DROPPED" "$COVERAGE" "$COVER_DELTA" "$DURATION" >> "$LEDGER"
-
-{
-  printf 'timestamp=%s\n' "$START_ISO"
-  printf 'epoch=%s\n' "$END_EPOCH"
-  printf 'status=%s\n' "$STATUS"
-  printf 'corpus=%s\n' "$COUNT_AFTER"
-  printf 'coverage=%s\n' "$COVERAGE"
-  printf 'fuzz_seconds=%s\n' "$TIME"
-  printf 'targets=%s\n' "$TARGETS_N"
-  printf 'crashes=%s\n' "${CRASHES:-none}"
-} > "$STATE"
 
 # The coverage harness is instrumented separately, so the profile is scratch.
 rm -f "$COVER_TMP"
 
 cat "$REPORT"
 echo
+if [ -n "$TRENDS" ]; then
+  echo "fuzz-soak: trends (scripts/fuzz-soak-trends.sh)"
+  printf '%s\n' "$TRENDS"
+fi
 echo "fuzz-soak: report $REPORT"
 echo "fuzz-soak: ledger $LEDGER (row appended for $START_ISO)"
 if [ "$STATUS" != "GREEN" ]; then

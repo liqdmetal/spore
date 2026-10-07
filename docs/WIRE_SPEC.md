@@ -383,6 +383,17 @@ scheduler's mail carries the failure. `--print-schedule` prints the cron or Task
 Scheduler incantation for the host; nothing installs it for you. Like `--deep`,
 it is minutes long and no gate runs it.
 
+A single pass answers "did anything change since yesterday", not the question
+that matters after a few weeks: is the fuzzer still finding anything at all?
+A saturated corpus and a quietly broken harness look identical in one pass.
+`scripts/fuzz-soak-trends.sh` reads the whole ledger and tells them apart —
+`STALLED` when no pass has set a new coverage best in five passes, `FAILING`
+when a pass did not end GREEN, `FELL` when measured coverage went backwards,
+and an `UNMEASURED` note when the last pass could not measure coverage at all
+(usually a reproducer sitting in the corpus, failing the replay). Each soak pass
+quotes the flags in its own report; a stall is deliberately not a non-zero exit
+— the passes themselves succeeded, and a saturated fuzzer is not a failure.
+
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
 legacy flow cannot feed the downloaded corpus to the non-std-lib Go
