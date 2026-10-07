@@ -50,12 +50,20 @@
 #   last-report.md     the human report for the last pass
 #   last-fuzz.log      raw output of the last fuzz pass
 #   last-corpus.log    output of the last harvest/minimize
+#   last-coverage.log  the replay behind the coverage count, kept because it is
+#                      the evidence a pass that could not measure points at
 #   corpus-names.txt   the corpus the last pass left behind
 #   last-haul.state    the haul already proposed (fingerprint, branch, url)
 #
 # The ledger is also what scripts/fuzz-soak-trends.sh reads: it flags the things
 # a single pass cannot see (coverage that has stopped setting new bests, passes
 # that did not end GREEN), and each pass quotes those flags in its report.
+#
+# A pass that cannot measure coverage records *why* in the ledger's last column,
+# as "<kind>: <detail>". A reproducer sitting in the corpus and a failing test in
+# the package are opposite things — the corpus working as intended, and the
+# measurement itself broken — and they look identical in a coverage cell holding
+# only "n/a", which is exactly long enough for the reader to blame the wrong one.
 #
 # What a pass finds is otherwise left in the working tree, waiting for somebody
 # to notice it. --pr is the other half: it takes the corpus directories and
@@ -137,6 +145,7 @@ RAWLOG="$SOAK_DIR/last-fuzz.log"
 CORPUSLOG="$SOAK_DIR/last-corpus.log"
 NAMES="$SOAK_DIR/corpus-names.txt"
 COVER_TMP="$SOAK_DIR/.coverage.out"
+COVERLOG="$SOAK_DIR/last-coverage.log"
 LOCK="$SOAK_DIR/lock"
 HAUL_STATE="$SOAK_DIR/last-haul.state"
 # One rolling branch rather than one per firing. The soak rewrites this branch
@@ -152,6 +161,18 @@ human() { # human SECONDS
   if [ "$s" -ge 3600 ]; then printf '%dh%dm' "$((s / 3600))" "$((s % 3600 / 60))"
   elif [ "$s" -ge 60 ]; then printf '%dm%ds' "$((s / 60))" "$((s % 60))"
   else printf '%ds' "$s"; fi
+}
+
+# How a pass describes its coverage, wherever it is quoted — the report, the
+# commit that carries a haul, the pull request body. One place decides it, so the
+# count, the reason it is missing and the log behind it cannot drift apart, and
+# nothing can quietly go back to reporting a missing number as a number. The note
+# is the same string the ledger carries, so it never has to be re-derived.
+coverage_phrase() { # coverage_phrase VALUE NOTE
+  case "${1:-?}" in
+    n/a) printf 'not measured — %s' "${2:-the pass did not record why}" ;;
+    *) printf '%s covered block(s) across ./...' "${1:-?}" ;;
+  esac
 }
 
 # The last pass's numbers, as the pass wrote them. --propose reads them too, so
@@ -479,7 +500,7 @@ pinned against the code that found them.
 
 - newest pass: $(haul_fact timestamp '(no pass recorded on this machine)')
 - corpus: $(haul_fact corpus '?') file(s)
-- coverage: $(haul_fact coverage '?') covered block(s) across ./...
+- coverage: $(coverage_phrase "$(haul_fact coverage '')" "$(haul_fact coverage_note '')")
 - built on: \`$1\` on \`$2\`
 
 A shrinking corpus with flat coverage is normal: minimization keeps a covering
@@ -499,8 +520,8 @@ haul_commit_message() {
   printf 'else, as one pass left them. A corpus entry is a regression seed, and every\n'
   printf 'entry is named after the sha256 of its own contents, so a name here is exact.\n'
   if [ -n "$corpus" ] || [ -n "$coverage" ]; then
-    printf '\ncorpus %s file(s), coverage %s covered block(s) across ./...\n' \
-      "${corpus:-?}" "${coverage:-?}"
+    printf '\ncorpus %s file(s), coverage %s\n' \
+      "${corpus:-?}" "$(coverage_phrase "$coverage" "$(haul_fact coverage_note '')")"
   fi
 }
 
@@ -825,18 +846,72 @@ corpus_names() {
 count_files() { find internal/*/testdata/fuzz/Fuzz*/ -maxdepth 1 -type f 2>/dev/null | wc -l; }
 count_targets() { find internal/*/testdata/fuzz/Fuzz*/ -maxdepth 0 -type d 2>/dev/null | wc -l; }
 
-# Covered statement blocks across the module, as the corpus replays them.
-# "n/a" when the measurement cannot be taken — most often because the corpus now
-# holds a reproducer, which fails the very replay being measured.
+# Covered statement blocks across the module, as the corpus replays them, and —
+# when it cannot — why not: one TSV line, the value then the reason, exactly like
+# the API helper's status code riding on its own last line. It has to travel that
+# way because the pass reads this through a command substitution, which runs in a
+# subshell: nothing a function assigns in one survives to be read afterwards. The
+# tab is always printed, empty reason included, and that is what makes the split
+# in the pass total.
 measure_coverage() {
-  local pkgs=() p
+  local pkgs=() p note
   while IFS= read -r p; do pkgs+=("$p"); done < <(corpus_packages)
-  if [ "${#pkgs[@]}" -eq 0 ]; then printf 'n/a'; return 0; fi
-  if ! go test -coverpkg=./... -covermode=set -coverprofile="$COVER_TMP" "${pkgs[@]}" >/dev/null 2>&1; then
-    printf 'n/a'
+  if [ "${#pkgs[@]}" -eq 0 ]; then
+    printf '%s\t%s' 'n/a' 'no-corpus: no package carries a corpus to measure'
     return 0
   fi
-  awk 'NR > 1 && $NF + 0 > 0' "$COVER_TMP" | wc -l
+  # The replay's output is kept rather than discarded: it is the only place the
+  # reason lives, and the report points at it as the evidence behind the summary.
+  if ! go test -coverpkg=./... -covermode=set -coverprofile="$COVER_TMP" "${pkgs[@]}" > "$COVERLOG" 2>&1; then
+    note="$(coverage_note "$COVERLOG" | tr -d '\r' | tr '\t' ' ')"
+    printf '%s\t%s' 'n/a' "$note"
+    return 0
+  fi
+  printf '%s\t%s' "$(awk 'NR > 1 && $NF + 0 > 0' "$COVER_TMP" | wc -l)" ''
+}
+
+# The failing test names in a go test log, joined for a ledger cell: at most
+# three, then "...", so one bad run cannot make the column enormous.
+coverage_names() {
+  awk 'NR > 3 { more = 1; next } { printf "%s%s", (seen++ ? ", " : ""), $0 } END { if (more) printf ", ..." }'
+}
+
+# Why a coverage measurement could not be taken, as one "<kind>: <detail>" line.
+# The kind is what the trend reader matches on, and it is the whole point: "n/a"
+# hides two opposite things. The shapes below are what go test really prints.
+#
+#   --- FAIL: FuzzFrameParse (0.00s)        the target, then the entry under it
+#       --- FAIL: FuzzFrameParse/seed#2 (0.00s)
+#   --- FAIL: TestFuzzSoakHaul... (0.00s)   an ordinary test, nothing to do with
+#                                           the corpus
+#   FAIL  ./internal/wirefuzz [build failed]  nothing was replayed at all
+coverage_note() { # coverage_note LOGFILE
+  local log="$1" fails tests corpus detail
+  if grep -q 'panic: test timed out' "$log"; then
+    printf 'timeout: go test did not finish'
+    return 0
+  fi
+  if grep -q '\[build failed\]\|cannot find package\|no required module' "$log"; then
+    printf 'build-error: the package did not build, so nothing was replayed'
+    return 0
+  fi
+  fails="$(grep -E '^[[:space:]]*--- FAIL: ' "$log" 2>/dev/null | sed 's/^[[:space:]]*--- FAIL: //; s/ (.*//' || true)"
+  if [ -n "$fails" ]; then
+    # A fuzz target name, or an entry under one: a corpus file or a seed.
+    tests="$(printf '%s\n' "$fails" | grep -vE '^Fuzz[A-Za-z0-9_]+(/.*)?$' | coverage_names || true)"
+    corpus="$(printf '%s\n' "$fails" | grep -E '^Fuzz[A-Za-z0-9_]+/' | coverage_names || true)"
+    if [ -n "$tests" ]; then
+      detail="$tests fails, which is not a corpus entry"
+      if [ -n "$corpus" ]; then detail="$detail; the replay also failed on $corpus"; fi
+      printf 'test-failure: %s' "$detail"
+      return 0
+    fi
+    if [ -z "$corpus" ]; then corpus="$(printf '%s\n' "$fails" | coverage_names)"; fi
+    printf 'reproducer: %s fails on its own, so the replay it would be measured against cannot finish' "$corpus"
+    return 0
+  fi
+  detail="$(grep -m1 -v '^[[:space:]]*$' "$log" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' | cut -c1-160 || true)"
+  printf 'other: go test failed — %s' "${detail:-see the log}"
 }
 
 command -v go >/dev/null 2>&1 || { echo "fuzz-soak: go not found on PATH" >&2; exit 1; }
@@ -885,7 +960,20 @@ SINCE_FOUND="$(comm -13 "$PREV_NAMES" "$NAMES" | wc -l)"
 SINCE_GONE="$(comm -23 "$PREV_NAMES" "$NAMES" | wc -l)"
 PREV_CORPUS="$(wc -l < "$PREV_NAMES")"
 
-COVERAGE="$(measure_coverage)"
+# One line out, two halves in: the value, then the reason there is not one. A
+# missing tab would otherwise put the whole line in the value and leave the note
+# silently empty, which is the bug this shape exists to make impossible.
+COVERAGE_OUT="$(measure_coverage)"
+case "$COVERAGE_OUT" in
+  *$'\t'*)
+    COVERAGE="${COVERAGE_OUT%%$'\t'*}"
+    COVERAGE_NOTE="${COVERAGE_OUT#*$'\t'}"
+    ;;
+  *)
+    COVERAGE="$COVERAGE_OUT"
+    COVERAGE_NOTE=""
+    ;;
+esac
 PREV_COVERAGE="$(state_get coverage)"
 PREV_ISO="$(state_get timestamp)"
 PREV_EPOCH="$(state_get epoch)"
@@ -902,11 +990,14 @@ DURATION="$((END_EPOCH - START_EPOCH))"
 # The ledger row and the state are written first, so the trend reader sees this
 # pass; the report is then allowed to quote the reader's verdict on it.
 if [ ! -s "$LEDGER" ]; then
-  printf 'timestamp\tmode\tfuzz_seconds\tstatus\tcorpus_before\tcorpus_after\tfound\tminimized\tcoverage\tcoverage_delta\tduration_s\n' > "$LEDGER"
+  printf 'timestamp\tmode\tfuzz_seconds\tstatus\tcorpus_before\tcorpus_after\tfound\tminimized\tcoverage\tcoverage_delta\tduration_s\tcoverage_note\n' > "$LEDGER"
 fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+# The last column is the reason a coverage cell says n/a, in the pass's own
+# words. Rows written before it existed leave it empty, which the reader reads as
+# "did not record why" rather than guessing.
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$START_ISO" "$MODE" "$TIME" "$STATUS" "$COUNT_BEFORE" "$COUNT_AFTER" \
-  "$ADDED" "$DROPPED" "$COVERAGE" "$COVER_DELTA" "$DURATION" >> "$LEDGER"
+  "$ADDED" "$DROPPED" "$COVERAGE" "$COVER_DELTA" "$DURATION" "$COVERAGE_NOTE" >> "$LEDGER"
 
 {
   printf 'timestamp=%s\n' "$START_ISO"
@@ -914,6 +1005,7 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   printf 'status=%s\n' "$STATUS"
   printf 'corpus=%s\n' "$COUNT_AFTER"
   printf 'coverage=%s\n' "$COVERAGE"
+  printf 'coverage_note=%s\n' "$COVERAGE_NOTE"
   printf 'fuzz_seconds=%s\n' "$TIME"
   printf 'targets=%s\n' "$TARGETS_N"
   printf 'crashes=%s\n' "${CRASHES:-none}"
@@ -956,7 +1048,10 @@ fi
   printf -- '- raw log: %s\n' "$(basename "$RAWLOG")"
   printf -- '- corpus: %s -> %s file(s) (+%s found, -%s minimized)\n' \
     "$COUNT_BEFORE" "$COUNT_AFTER" "$ADDED" "$DROPPED"
-  printf -- '- coverage: %s covered block(s) across ./...\n' "$COVERAGE"
+  printf -- '- coverage: %s\n' "$(coverage_phrase "$COVERAGE" "$COVERAGE_NOTE")"
+  if [ -n "$COVERAGE_NOTE" ]; then
+    printf -- '- replay log: %s\n' "$(basename "$COVERLOG")"
+  fi
   if [ -n "$CRASHES" ]; then
     printf -- '- **crash:** %s — the reproducer is in the corpus and was kept\n' "$CRASHES"
   fi
@@ -965,13 +1060,20 @@ fi
   if [ -z "$PREV_ISO" ]; then
     printf -- '- no earlier pass on this machine: nothing to compare against yet\n'
     printf -- '- corpus: %s file(s)\n' "$COUNT_AFTER"
-    printf -- '- coverage: %s covered block(s)\n' "$COVERAGE"
+    printf -- '- coverage: %s\n' "$(coverage_phrase "$COVERAGE" "$COVERAGE_NOTE")"
   else
     printf -- '- since: %s (%s ago)\n' "$PREV_ISO" "$(human "$((START_EPOCH - PREV_EPOCH))")"
     printf -- '- corpus: %s -> %s file(s) (+%s, -%s)\n' \
       "$PREV_CORPUS" "$COUNT_AFTER" "$SINCE_FOUND" "$SINCE_GONE"
-    printf -- '- coverage: %s -> %s covered block(s) (%s)\n' \
-      "$PREV_COVERAGE" "$COVERAGE" "$COVER_DELTA"
+    if [ "$COVERAGE" = "n/a" ]; then
+      # The reason, not an arrow to nowhere: a pass that could not measure has
+      # nothing to compare, and "1210 -> n/a covered block(s)" says neither why
+      # nor what it means.
+      printf -- '- coverage: not measured this pass — %s\n' "${COVERAGE_NOTE:-the pass did not record why}"
+    else
+      printf -- '- coverage: %s -> %s covered block(s) (%s)\n' \
+        "$PREV_COVERAGE" "$COVERAGE" "$COVER_DELTA"
+    fi
   fi
   printf -- '- crashes: %s\n' "${CRASHES:-none}"
 

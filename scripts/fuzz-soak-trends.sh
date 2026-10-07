@@ -12,8 +12,12 @@
 #   STALLED  no pass has set a new coverage best in FUZZ_STALL_PASSES passes
 #   FAILING  a pass did not end GREEN (its most recent one is named)
 #   FELL     measured coverage went DOWN between two passes
-#   UNMEASURED  the last pass could not measure coverage — usually a reproducer
-#            sitting in the corpus, which fails the very replay being measured
+#   UNMEASURED  the last pass could not measure coverage. Why is the ledger's
+#            last column, and the two answers mean opposite things: a reproducer
+#            in the corpus (the corpus working as intended — worth saying, not a
+#            flag) and anything else, a failing test or a package that did not
+#            build (the measurement itself broken — a flag). A row written
+#            before the soak recorded why says exactly that instead of guessing.
 #
 #   usage: fuzz-soak-trends.sh [--flags-only]
 #     --flags-only  print just the flags (nothing at all when clean), for a
@@ -57,8 +61,9 @@ esac
 
 # Rows are the ledger's own TSV: timestamp, mode, fuzz_seconds, status,
 # corpus_before, corpus_after, found, minimized, coverage, coverage_delta,
-# duration_s. Coverage is a block count or "n/a" when a reproducer in the corpus
-# made the replay fail, so it is matched rather than assumed numeric.
+# duration_s, coverage_note. Coverage is a block count or "n/a", so it is matched
+# rather than assumed numeric. coverage_note is why there is no count — a
+# "<kind>: <detail>" line the pass wrote — and is absent on rows older than it.
 awk -F'\t' -v stall="$STALL" -v window="$WINDOW" -v flags_only="$FLAGS_ONLY" '
 NR == 1 {
   if ($1 != "timestamp") { printf "not a fuzz-soak ledger: %s\n", FILENAME > "/dev/stderr"; bad = 1; exit 2 }
@@ -68,6 +73,7 @@ bad { next }
 {
   n++
   ts[n] = $1; status[n] = $4; corpus[n] = $6; found[n] = $7; minimized[n] = $8; cov[n] = $9
+  note[n] = $12
   if ($4 != "GREEN") { fails++; fail_ts = $1; fail_status = $4 }
 }
 END {
@@ -115,7 +121,17 @@ END {
     flags++
   }
   if (unmeasured) {
-    printf "  UNMEASURED: the last pass could not measure coverage — a reproducer in the corpus fails the replay\n"
+    # The reason is quoted, never assumed: with only "n/a" to go on, this used to
+    # blame a reproducer for what was really a failing test, and the two want
+    # opposite things from a reader.
+    if (note[n] ~ /^reproducer:/) {
+      printf "  UNMEASURED: the last pass could not measure coverage — %s\n", note[n]
+    } else if (note[n] != "") {
+      printf "  UNMEASURED: the last pass could not measure coverage, and not because of a reproducer — %s\n", note[n]
+      flags++
+    } else {
+      printf "  UNMEASURED: the last pass could not measure coverage, and did not record why\n"
+    }
   }
 
   if (!flags_only) {

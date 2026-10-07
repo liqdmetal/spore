@@ -96,12 +96,22 @@ func newSandbox(t *testing.T) sandbox {
 	return sb
 }
 
+// soakDir is where the sandbox's --propose keeps its state. It is the sandbox's
+// own, never the ambient one: a soak pass measures coverage by running this
+// package's tests, so a test that inherited the pass's state directory would read
+// state that is not its own — and find the pass's live lock there, which is a
+// refusal, not a haul.
+func (sb sandbox) soakDir() string {
+	return filepath.Join(filepath.Dir(sb.repo), "haul-soak")
+}
+
 // propose runs --propose in the sandbox and returns its combined output.
 // --propose is read-only, so a non-zero exit is the caller's to assert on.
 func (sb sandbox) propose(t *testing.T) (string, int) {
 	t.Helper()
 	cmd := exec.Command("bash", "scripts/fuzz-soak.sh", "--propose")
 	cmd.Dir = sb.repo
+	cmd.Env = append(os.Environ(), "FUZZ_SOAK_DIR="+sb.soakDir())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
@@ -252,6 +262,7 @@ func TestFuzzSoakHaulBodyIsNotExecuted(t *testing.T) {
 
 	probe := "STATE=" + shellQuote(filepath.ToSlash(state)) + "\n" +
 		soakFunc(t, "state_get") + "\n" +
+		soakFunc(t, "coverage_phrase") + "\n" +
 		soakFunc(t, "haul_fact") + "\n" +
 		soakFunc(t, "haul_body") + "\n" +
 		"haul_body abc1234 main\n"
@@ -282,6 +293,53 @@ func TestFuzzSoakHaulBodyIsNotExecuted(t *testing.T) {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("the body contains %q, so a backtick in it was executed:\n%s", unwanted, body)
 		}
+	}
+}
+
+// TestFuzzSoakHaulBodyCarriesTheReasonCoverageIsMissing keeps the pull request
+// honest about a pass that measured nothing: the body is the one place a reviewer
+// reads the haul without the report, so "n/a covered block(s)" there — or worse,
+// a reproducer named for what was really a failing test — would be the same lie in
+// a new place.
+func TestFuzzSoakHaulBodyCarriesTheReasonCoverageIsMissing(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; the soak is a bash script")
+	}
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "last.state")
+	note := "test-failure: TestFuzzSoakHaulHandsTheCorpusOver fails, which is not a corpus entry"
+	err := os.WriteFile(state, []byte("timestamp=2026-01-02T03:04:05Z\ncorpus=98\ncoverage=n/a\ncoverage_note="+note+"\n"), 0o644)
+	if err != nil {
+		t.Fatalf("writing state: %v", err)
+	}
+
+	probe := "STATE=" + shellQuote(filepath.ToSlash(state)) + "\n" +
+		soakFunc(t, "state_get") + "\n" +
+		soakFunc(t, "coverage_phrase") + "\n" +
+		soakFunc(t, "haul_fact") + "\n" +
+		soakFunc(t, "haul_body") + "\n" +
+		"haul_body abc1234 main\n"
+	script := filepath.Join(dir, "probe.sh")
+	if err := os.WriteFile(script, []byte(probe), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+	cmd := exec.Command("bash", filepath.ToSlash(script))
+	cmd.Dir = t.TempDir()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the probe: %v\n%s", err, out)
+	}
+	body := string(out)
+
+	if !strings.Contains(body, "not measured — "+note) {
+		t.Errorf("the body does not say why coverage is missing:\n%s", body)
+	}
+	if strings.Contains(body, "n/a covered block(s)") {
+		t.Errorf("the body still counts a measurement it does not have:\n%s", body)
+	}
+	if strings.Contains(body, "reproducer") {
+		t.Errorf("the body blames a reproducer for a failing test:\n%s", body)
 	}
 }
 
@@ -639,6 +697,30 @@ func TestFuzzSoakHaulBuildsOnWhatIsThere(t *testing.T) {
 	}
 	if local := gitIn(t, sb.repo, "branch", "--format=%(refname:short)"); local != "main" {
 		t.Errorf("the haul left local branches behind: %s", local)
+	}
+}
+
+// TestFuzzSoakHaulDeclinesWhileAPassIsInFlight pins the interaction a pass walks
+// into by measuring coverage: the measurement runs this package's tests, which run
+// --propose, while the pass itself holds the lock. The corpus is still being
+// minimized at that moment, so the haul that would be proposed is not the corpus
+// that is about to exist.
+func TestFuzzSoakHaulDeclinesWhileAPassIsInFlight(t *testing.T) {
+	sb := newSandbox(t)
+	sb.dropCorpusEntry(t, "FuzzFabricRPC2Frame")
+	if err := os.MkdirAll(filepath.Join(sb.soakDir(), "lock"), 0o755); err != nil {
+		t.Fatalf("taking the lock: %v", err)
+	}
+
+	out, code := sb.propose(t)
+	if code != 2 {
+		t.Errorf("--propose exited %d with a pass in flight, want 2:\n%s", code, out)
+	}
+	if !strings.Contains(out, "holds") {
+		t.Errorf("--propose did not explain that a pass is running:\n%s", out)
+	}
+	if got := sb.haulBranches(t); len(got) != 0 {
+		t.Errorf("a pass in flight still handed the corpus over: %v", got)
 	}
 }
 

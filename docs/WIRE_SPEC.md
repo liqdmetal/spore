@@ -376,12 +376,15 @@ scheduler calls instead: one pass fuzzes every target for 60s (the deep
 pre-flight), harvests and minimizes whatever it found, then reports what changed
 since the previous pass — corpus size, covered blocks, and whether a target
 crashed. Its state is machine-local and gitignored (`.fuzz-soak/`): an
-append-only ledger, the last report, and the raw fuzz log behind it. It takes a
-lock so two passes cannot overlap, keeps any entry that fails on its own (a
-reproducer is never redundant), and exits non-zero when a target crashed so a
-scheduler's mail carries the failure. `--print-schedule` prints the cron or Task
-Scheduler incantation for the host; nothing installs it for you. Like `--deep`,
-it is minutes long and no gate runs it.
+append-only ledger, the last report, and the raw fuzz log behind it. A pass that
+cannot measure coverage says why: the replay's own output is kept beside the
+report, and the ledger's last column tells a reproducer in the corpus apart from
+a failing test in the package, instead of recording both as the same `n/a`.
+It takes a lock so two passes cannot overlap, keeps any entry that fails on its
+own (a reproducer is never redundant), and exits non-zero when a target crashed
+so a scheduler's mail carries the failure. `--print-schedule` prints the cron or
+Task Scheduler incantation for the host; nothing installs it for you. Like
+`--deep`, it is minutes long and no gate runs it.
 
 A scheduler hands a task a minimal environment, not the one you are sitting in,
 so the printed launcher sets `PATH` itself — without that, a box whose only Go is
@@ -434,10 +437,13 @@ A saturated corpus and a quietly broken harness look identical in one pass.
 `scripts/fuzz-soak-trends.sh` reads the whole ledger and tells them apart —
 `STALLED` when no pass has set a new coverage best in five passes, `FAILING`
 when a pass did not end GREEN, `FELL` when measured coverage went backwards,
-and an `UNMEASURED` note when the last pass could not measure coverage at all
-(usually a reproducer sitting in the corpus, failing the replay). Each soak pass
-quotes the flags in its own report; a stall is deliberately not a non-zero exit
-— the passes themselves succeeded, and a saturated fuzzer is not a failure.
+and `UNMEASURED` when the last pass could not measure coverage at all. Those two
+reasons are opposite — a reproducer in the corpus, which is the corpus working as
+intended, and a failing test in the package, which is the measurement itself
+broken — so the reader quotes whichever one the ledger recorded rather than
+assuming, and only the second is a flag. Each soak pass quotes the flags in its
+own report; a stall is deliberately not a non-zero exit — the passes themselves
+succeeded, and a saturated fuzzer is not a failure.
 
 **Reading the coverage numbers fairly** (measured 2026-09-21): the Go
 dashboard's coverage build exercises the inline seeds only — the stock
