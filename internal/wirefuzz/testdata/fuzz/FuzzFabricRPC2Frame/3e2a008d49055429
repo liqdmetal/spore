@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("\xb900\xb900\xb900\xb900\xb900\xb900\xb900900")
