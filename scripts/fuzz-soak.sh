@@ -22,7 +22,7 @@
 # It is minutes long, so — like --deep — nothing in scripts/gates.sh runs it.
 #
 #   usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule]
-#                                [--doctor]
+#                                [--doctor] [--pr] [--propose]
 #     --time SECONDS    fuzz seconds per target (default 60, the deep pass)
 #     --status          print the last report and recent ledger rows; run nothing
 #     --print-schedule  print the scheduler incantation for this host. Nothing is
@@ -33,6 +33,11 @@
 #                       Runs nothing and installs nothing. Non-zero on a problem,
 #                       so a broken install is caught the day it breaks rather
 #                       than after a week of passes that never started.
+#     --pr              after the pass, hand what it found to a reviewer: one
+#                       fuzz-soak/<utc-stamp> branch holding only the corpus, and
+#                       a pull request for it. Nothing to hand over is not an
+#                       error. A failure here never fails the pass.
+#     --propose         do just that, for the corpus as it stands, and stop.
 #
 # Env: FUZZ_SOAK_DIR   state directory (default <repo>/.fuzz-soak, gitignored).
 #      FUZZ_SOAK_TASK  the registered task's name (default spore-fuzz-soak). Set
@@ -45,10 +50,21 @@
 #   last-fuzz.log      raw output of the last fuzz pass
 #   last-corpus.log    output of the last harvest/minimize
 #   corpus-names.txt   the corpus the last pass left behind
+#   last-haul.state    the haul already proposed (fingerprint, branch, url)
 #
 # The ledger is also what scripts/fuzz-soak-trends.sh reads: it flags the things
 # a single pass cannot see (coverage that has stopped setting new bests, passes
 # that did not end GREEN), and each pass quotes those flags in its report.
+#
+# What a pass finds is otherwise left in the working tree, waiting for somebody
+# to notice it. --pr is the other half: it takes the corpus directories and
+# nothing else, commits them on their own branch, pushes that branch, and opens
+# a pull request for it. The commit is built in a throwaway git worktree, so an
+# unrelated edit in the tree you are sitting in is never swept in and your
+# checkout is never switched out from under you. The pull request goes through
+# the GitHub API with the credential git already pushes with (set GITHUB_TOKEN or
+# GH_TOKEN to choose one explicitly); with no usable token on a non-GitHub remote
+# the branch is still pushed and its compare URL is reported instead.
 #
 # Exit codes: 0 every target ran clean (or --doctor found nothing wrong), 1 a
 # target crashed, a step failed, or --doctor found a problem, 2 usage error (or
@@ -62,6 +78,8 @@ TIME=60
 SHOW_STATUS=0
 PRINT_SCHEDULE=0
 SHOW_DOCTOR=0
+PROPOSE_PR=0
+PROPOSE_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -t | --time)
@@ -72,13 +90,18 @@ while [ $# -gt 0 ]; do
     --status) SHOW_STATUS=1; shift ;;
     --print-schedule) PRINT_SCHEDULE=1; shift ;;
     --doctor) SHOW_DOCTOR=1; shift ;;
+    --pr) PROPOSE_PR=1; shift ;;
+    --propose) PROPOSE_ONLY=1; shift ;;
     -h | --help)
       cat <<'USAGE'
 usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule] [--doctor]
+                             [--pr] [--propose]
   --time SECONDS    fuzz seconds per target (default 60, the deep pass)
   --status          print the last report, then stop
   --print-schedule  print the scheduler incantation for this host, then stop
   --doctor          check the installed schedule can still run, then stop
+  --pr              run a pass, then branch + pull request what it found, then stop
+  --propose         branch + pull request the corpus as it stands; run no pass
 USAGE
       exit 0
       ;;
@@ -106,6 +129,7 @@ CORPUSLOG="$SOAK_DIR/last-corpus.log"
 NAMES="$SOAK_DIR/corpus-names.txt"
 COVER_TMP="$SOAK_DIR/.coverage.out"
 LOCK="$SOAK_DIR/lock"
+HAUL_STATE="$SOAK_DIR/last-haul.state"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 human() { # human SECONDS
@@ -113,6 +137,13 @@ human() { # human SECONDS
   if [ "$s" -ge 3600 ]; then printf '%dh%dm' "$((s / 3600))" "$((s % 3600 / 60))"
   elif [ "$s" -ge 60 ]; then printf '%dm%ds' "$((s / 60))" "$((s % 60))"
   else printf '%ds' "$s"; fi
+}
+
+# The last pass's numbers, as the pass wrote them. --propose reads them too, so
+# a haul made without a pass still describes the pass that produced the corpus.
+state_get() { # state_get KEY
+  [ -f "$STATE" ] || return 0
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$STATE"
 }
 
 # ---- status, schedule and doctor are read-only, and never touch the lock ----
@@ -166,7 +197,7 @@ launcher_cmd() {
   printf '@echo off\n'
   printf 'rem spore nightly fuzz soak; regenerate this file with scripts/fuzz-soak.sh --print-schedule\n'
   printf '%s\n' "$GO_PRELUDE"
-  printf '"%s" -lc "cd %s && %sbash scripts/fuzz-soak.sh >> %s/soak.log 2>&1"\n' \
+  printf '"%s" -lc "cd %s && %sbash scripts/fuzz-soak.sh --pr >> %s/soak.log 2>&1"\n' \
     "$BASHEXE_WIN" "$REPO_ROOT" "$GO_EXPORT" "$SOAK_DIR"
   printf 'exit /b %%ERRORLEVEL%%\n'
 }
@@ -319,10 +350,294 @@ doctor() {
   [ "$problems" -eq 0 ]
 }
 
+# ---- the haul: hand what a pass found to a reviewer -------------------------
+
+# A pass used to end by leaving its findings in the working tree, where they wait
+# for somebody to notice. This is the other half: the corpus directories, and
+# nothing else, on a branch of their own, with a pull request attached.
+#
+# Nothing here fails a pass. No git, no remote, no credential, nothing new — each
+# of those is a sentence in the report and a haul still sitting in the working
+# tree, exactly as before.
+
+# The git pathspecs that are the corpus: the fuzz data directory of every package
+# that has one. Named per package rather than handed to git as a glob, so the
+# pathspec cannot reach anything else that happens to be called testdata/fuzz.
+corpus_pathspecs() {
+  local d
+  for d in internal/*/testdata/fuzz; do
+    [ -d "$d" ] || continue
+    printf '%s\n' "$d"
+  done
+}
+
+# A token for the GitHub API, preferring one set for us. Otherwise ask git for
+# the credential it already pushes with — same store, same login, nothing new to
+# configure. Never printed and never written down; only ever handed to curl.
+github_token() {
+  if [ -n "${GITHUB_TOKEN:-}" ]; then printf '%s' "$GITHUB_TOKEN"; return 0; fi
+  if [ -n "${GH_TOKEN:-}" ]; then printf '%s' "$GH_TOKEN"; return 0; fi
+  local fill=(git credential fill)
+  if command -v timeout >/dev/null 2>&1; then fill=(timeout 15 git credential fill); fi
+  printf 'protocol=https\nhost=github.com\n\n' \
+    | GIT_TERMINAL_PROMPT=0 "${fill[@]}" 2>/dev/null \
+    | sed -n 's/^password=//p'
+}
+
+# owner/repo for a github.com remote, left in $owner/$repo; false for anything
+# else, so a local path or an internal mirror degrades to a pushed branch.
+github_slug() { # github_slug URL
+  local slug
+  case "$1" in
+    https://github.com/* | http://github.com/* | git@github.com:* | ssh://git@github.com/*) ;;
+    *) return 1 ;;
+  esac
+  slug="${1#*github.com}"
+  slug="${slug#[:/]}"
+  slug="${slug%.git}"
+  owner="${slug%%/*}"
+  repo="${slug#*/}"
+  [ -n "$owner" ] && [ -n "$repo" ] && [ "$repo" != "$slug" ]
+}
+
+# A JSON string literal for arbitrary text, without jq. The pull request body is
+# the only field that needs it.
+json_string() {
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' \
+    | awk 'BEGIN { ORS="" } { if (NR > 1) printf "\\n"; printf "%s", $0 }'
+}
+
+HAUL_STATUS="skipped"
+HAUL_BRANCH=""
+HAUL_URL=""
+HAUL_NOTE=""
+
+haul_skip() { HAUL_STATUS="skipped"; HAUL_NOTE="$*"; }
+haul_fail() { HAUL_STATUS="failed"; HAUL_NOTE="$*"; }
+
+# A fact from the pass that produced this corpus, with a fallback for the case
+# where --propose runs against a tree no pass has touched yet.
+haul_fact() { # haul_fact KEY DEFAULT
+  local v
+  v="$(state_get "$1")"
+  if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
+# What the last haul carried. Without it a nightly would re-propose the same
+# corpus every night until somebody merged it — the pileup that makes an
+# automated pull request worth ignoring.
+haul_state_get() { # haul_state_get KEY
+  [ -f "$HAUL_STATE" ] || return 0
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$HAUL_STATE"
+}
+
+# The delta's identity. Corpus entries are named after their contents, so the
+# set of names *is* the contents: two hauls with the same fingerprint are the
+# same entries, whatever changed in between. git hash-object rather than
+# sha256sum, because git is already required here.
+haul_fingerprint() {
+  git status --porcelain -- "$@" | LC_ALL=C sort | git hash-object --stdin
+}
+
+haul_title() {
+  printf 'test(fuzz): the soak corpus haul from %s' "$(haul_fact timestamp 'a scheduled pass')"
+}
+
+haul_body() { # haul_body BASE_SHA BASE_BRANCH
+  cat <<EOF
+The scheduled fuzz soak found corpus entries and minimized them, and this is
+that haul — the corpus directories and nothing else. Every entry is named after
+the sha256 of its own contents, so a file name here is exact, and `go test`
+replays the whole corpus, so these are pinned against the code that found them.
+
+- pass: $(haul_fact timestamp '(no pass recorded on this machine)')
+- corpus: $(haul_fact corpus '?') file(s)
+- coverage: $(haul_fact coverage '?') covered block(s) across ./...
+- base: `$1` on `$2`
+
+A shrinking corpus with flat coverage is normal: minimization keeps a covering
+subset, so entries leave as well as arrive.
+EOF
+}
+
+haul_commit_message() {
+  local stamp corpus coverage
+  stamp="$(haul_fact timestamp '')"
+  corpus="$(haul_fact corpus '')"
+  coverage="$(haul_fact coverage '')"
+  printf 'test(fuzz): the soak corpus haul'
+  if [ -n "$stamp" ]; then printf ' from %s' "$stamp"; fi
+  printf '\n\n'
+  printf 'Automated by scripts/fuzz-soak.sh --pr: the corpus directories, and nothing\n'
+  printf 'else, as one pass left them. A corpus entry is a regression seed, and every\n'
+  printf 'entry is named after the sha256 of its own contents, so a name here is exact.\n'
+  if [ -n "$corpus" ] || [ -n "$coverage" ]; then
+    printf '\ncorpus %s file(s), coverage %s covered block(s) across ./...\n' \
+      "${corpus:-?}" "${coverage:-?}"
+  fi
+}
+
+# The branch belongs on the remote, not in this checkout: a nightly soak that
+# left a local branch per firing would bury the branches the user works on. The
+# commit stays reachable through the pushed ref.
+haul_cleanup() { # haul_cleanup BRANCH
+  git -C "$REPO_ROOT" worktree remove --force "$SOAK_DIR/pr-worktree" >/dev/null 2>&1 || true
+  rm -rf "$SOAK_DIR/pr-worktree"
+  git -C "$REPO_ROOT" branch -D "$1" >/dev/null 2>&1 || true
+}
+
+propose_haul() {
+  local remote url base_branch base_sha stamp branch wt p msg body payload resp code
+  local paths=()
+
+  command -v git >/dev/null 2>&1 || { haul_skip 'git is not on PATH'; return 0; }
+  git rev-parse --git-dir >/dev/null 2>&1 || { haul_skip 'this is not a git checkout'; return 0; }
+
+  while IFS= read -r p; do paths+=("$p"); done < <(corpus_pathspecs)
+  [ "${#paths[@]}" -gt 0 ] || { haul_skip 'this tree carries no corpus'; return 0; }
+
+  [ -n "$(git status --porcelain -- "${paths[@]}")" ] \
+    || { haul_skip 'the corpus matches HEAD: nothing new to hand over'; return 0; }
+
+  local fingerprint
+  fingerprint="$(haul_fingerprint "${paths[@]}")"
+  if [ -n "$(haul_state_get fingerprint)" ] && [ "$fingerprint" = "$(haul_state_get fingerprint)" ]; then
+    haul_skip "already proposed on $(haul_state_get branch); these entries have not changed since"
+    return 0
+  fi
+
+  remote="$(git remote | head -1)"
+  [ -n "$remote" ] || { haul_skip 'no git remote to push a branch to'; return 0; }
+  url="$(git config --get "remote.$remote.url" || true)"
+
+  base_branch="$(git rev-parse --abbrev-ref HEAD)"
+  base_sha="$(git rev-parse HEAD)"
+  branch="fuzz-soak/$(date -u +%Y%m%d-%H%M%S)"
+  wt="$SOAK_DIR/pr-worktree"
+
+  # A worktree, not this checkout. Staging here would sweep up whatever else the
+  # tree holds, and committing here would move the branch the user is on.
+  git worktree remove --force "$wt" >/dev/null 2>&1 || true
+  rm -rf "$wt"
+  git worktree prune >/dev/null 2>&1 || true
+  mkdir -p "$(dirname "$wt")"
+  if ! git worktree add -B "$branch" "$wt" "$base_sha" >/dev/null 2>&1; then
+    haul_fail "could not make a worktree at $wt for the haul"
+    return 0
+  fi
+
+  for p in "${paths[@]}"; do
+    rm -rf "$wt/$p"
+    mkdir -p "$(dirname "$wt/$p")"
+    cp -R "$REPO_ROOT/$p" "$wt/$p"
+  done
+
+  git -C "$wt" add -A -- "${paths[@]}" >/dev/null 2>&1 || true
+  if git -C "$wt" diff --cached --quiet; then
+    haul_cleanup "$branch"
+    haul_skip 'the corpus matching HEAD came out identical: nothing to hand over'
+    return 0
+  fi
+
+  msg="$(haul_commit_message)"
+  if ! git -C "$wt" commit -q -m "$msg" >/dev/null 2>&1; then
+    haul_cleanup "$branch"
+    haul_fail 'could not commit the corpus in the worktree'
+    return 0
+  fi
+
+  # GIT_TERMINAL_PROMPT=0: an unattended pass must fail rather than wait at a
+  # prompt nobody is there to answer.
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$wt" push --quiet --set-upstream "$remote" "$branch" >/dev/null 2>&1; then
+    haul_cleanup "$branch"
+    haul_fail "could not push $branch to $remote: the haul is still in the working tree"
+    return 0
+  fi
+  HAUL_BRANCH="$branch"
+
+  # Past the push, the hand-off has happened. Everything below only decides how
+  # loud it is: a compare URL is a fine answer, not a failure.
+  if ! command -v curl >/dev/null 2>&1 || ! github_slug "$url"; then
+    HAUL_STATUS='proposed'
+    HAUL_NOTE="pushed $branch to $remote (not a github.com remote, so no pull request was opened)"
+  else
+    local token
+    token="$(github_token)"
+    if [ -z "$token" ]; then
+      HAUL_STATUS='proposed'
+      HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
+      HAUL_NOTE="pushed $branch; no GitHub credential was available, so the compare URL is the hand-off"
+    else
+      body="$(haul_body "$base_sha" "$base_branch")"
+      payload="$(printf '{"title":"%s","head":"%s","base":"%s","body":"%s"}' \
+        "$(printf '%s' "$(haul_title)" | json_string)" \
+        "$branch" "$base_branch" \
+        "$(printf '%s' "$body" | json_string)")"
+      resp="$(curl -sS -X POST \
+        -H "Authorization: Bearer $token" \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'Content-Type: application/json' \
+        --data "$payload" \
+        -w '\n%{http_code}' \
+        "https://api.github.com/repos/$owner/$repo/pulls" 2>&1)" || resp='
+000'
+      code="${resp##*$'\n'}"
+      case "$code" in
+        201)
+          HAUL_STATUS='proposed'
+          HAUL_URL="$(printf '%s' "${resp%$'\n'*}" \
+            | sed -n 's/.*"html_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          HAUL_NOTE="pushed $branch and opened a pull request"
+          ;;
+        *)
+          HAUL_STATUS='proposed'
+          HAUL_URL="https://github.com/$owner/$repo/compare/$base_branch...$branch?expand=1"
+          HAUL_NOTE="pushed $branch, but the pull request API answered $code, so the compare URL is the hand-off"
+          ;;
+      esac
+    fi
+  fi
+
+  { printf 'fingerprint=%s\n' "$fingerprint"
+    printf 'branch=%s\n' "$HAUL_BRANCH"
+    printf 'url=%s\n' "$HAUL_URL"
+    printf 'timestamp=%s\n' "$(now_iso)"
+  } > "$HAUL_STATE"
+
+  haul_cleanup "$branch"
+  return 0
+}
+
 if [ "$PRINT_SCHEDULE" -eq 1 ]; then print_schedule; exit 0; fi
 
 if [ "$SHOW_DOCTOR" -eq 1 ]; then
   if doctor; then exit 0; else exit 1; fi
+fi
+
+if [ "$PROPOSE_ONLY" -eq 1 ]; then
+  # Refuse while a pass is in flight: the corpus it is still minimizing is not
+  # the corpus to propose.
+  if [ -d "$LOCK" ]; then
+    echo "fuzz-soak: a pass holds $LOCK — the corpus is still moving; propose once it finishes" >&2
+    exit 2
+  fi
+  propose_haul
+  case "$HAUL_STATUS" in
+    proposed)
+      echo "fuzz-soak: haul — $HAUL_NOTE"
+      echo "fuzz-soak: haul — branch $HAUL_BRANCH"
+      if [ -n "$HAUL_URL" ]; then echo "fuzz-soak: haul — $HAUL_URL"; fi
+      exit 0
+      ;;
+    failed)
+      echo "fuzz-soak: haul — $HAUL_NOTE" >&2
+      exit 1
+      ;;
+    *)
+      echo "fuzz-soak: haul — nothing to propose: $HAUL_NOTE"
+      exit 0
+      ;;
+  esac
 fi
 
 if [ "$SHOW_STATUS" -eq 1 ]; then
@@ -402,11 +717,6 @@ measure_coverage() {
     return 0
   fi
   awk 'NR > 1 && $NF + 0 > 0' "$COVER_TMP" | wc -l
-}
-
-state_get() { # state_get KEY
-  [ -f "$STATE" ] || return 0
-  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$STATE"
 }
 
 command -v go >/dev/null 2>&1 || { echo "fuzz-soak: go not found on PATH" >&2; exit 1; }
@@ -504,6 +814,19 @@ if [ -f "$REPO_ROOT/scripts/fuzz-soak-trends.sh" ]; then
   fi
 fi
 
+# --- 4. hand it over ---------------------------------------------------------
+# The pass has said what it found; this is where that stops waiting for somebody
+# to notice the working tree. A failure here is reported and never fatal: the
+# haul is still in the tree, and the pass itself succeeded.
+if [ "$PROPOSE_PR" -eq 1 ]; then
+  propose_haul
+  case "$HAUL_STATUS" in
+    proposed) echo "fuzz-soak: haul — $HAUL_NOTE" ;;
+    failed) echo "fuzz-soak: haul — $HAUL_NOTE" >&2 ;;
+    *) echo "fuzz-soak: haul — not proposed: $HAUL_NOTE" ;;
+  esac
+fi
+
 # --- the report --------------------------------------------------------------
 {
   printf '# fuzz soak — %s\n\n' "$START_ISO"
@@ -550,6 +873,23 @@ fi
     # it does NOT mean coverage is still climbing: a pass can repeat the last
     # best and stay unflagged for the first FUZZ_STALL_PASSES passes.
     printf 'nothing flagged — no stall, no coverage loss, and every pass ended GREEN.\n'
+  fi
+
+  if [ "$PROPOSE_PR" -eq 1 ]; then
+    printf '\n## Haul\n\n'
+    case "$HAUL_STATUS" in
+      proposed)
+        printf -- '- branch: `%s`\n' "$HAUL_BRANCH"
+        if [ -n "$HAUL_URL" ]; then printf -- '- %s\n' "$HAUL_URL"; fi
+        printf -- '- %s\n' "$HAUL_NOTE"
+        ;;
+      failed)
+        printf -- '- **could not hand it over:** %s\n' "$HAUL_NOTE"
+        ;;
+      *)
+        printf -- '- not proposed: %s\n' "$HAUL_NOTE"
+        ;;
+    esac
   fi
 
   printf '\n## Reproduce this pass\n\n```\nscripts/fuzz-smoke.sh -t %s\nscripts/fuzz-corpus.sh --save\nscripts/fuzz-soak-trends.sh\n```\n' "$TIME"

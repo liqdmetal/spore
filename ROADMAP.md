@@ -148,7 +148,9 @@ What those pipelines did on a schedule, `scripts/fuzz-soak.sh` now does
 locally: a timed pass over the same targets that saves and minimizes what it
 finds and reports the change since the last pass — and because a schedule that
 quietly stops starting looks exactly like a quiet week, `--doctor` checks that
-its launcher, its registration, and its `PATH` still let it run at all.
+its launcher, its registration, and its `PATH` still let it run at all. A pass
+also proposes what it found: the corpus on a branch of its own, with a pull
+request, so a finding does not sit in a working tree waiting to be noticed.
 
 ### Product roadmap after the evidence gates
 
