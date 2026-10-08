@@ -110,7 +110,17 @@ type SessionLedgerEntry struct {
 }
 
 type syncLedger struct {
-	Sessions map[string]SessionLedgerEntry `json:"sessions"`
+	Sessions   map[string]SessionLedgerEntry `json:"sessions"`
+	SendEvents map[string]bool               `json:"send_events,omitempty"`
+}
+
+func (l *syncLedger) ensureMaps() {
+	if l.Sessions == nil {
+		l.Sessions = map[string]SessionLedgerEntry{}
+	}
+	if l.SendEvents == nil {
+		l.SendEvents = map[string]bool{}
+	}
 }
 
 func loadLedger(dir string) (*syncLedger, error) {
@@ -126,9 +136,7 @@ func loadLedger(dir string) (*syncLedger, error) {
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("ratchetwire: corrupt %s: %w", ledgerFile, err)
 	}
-	if l.Sessions == nil {
-		l.Sessions = map[string]SessionLedgerEntry{}
-	}
+	l.ensureMaps()
 	return &l, nil
 }
 
@@ -363,6 +371,30 @@ func RecordSend(dir string, id [8]byte, dev *DeviceState) error {
 	e.LastWriter = dev.ID
 	e.MySends++
 	led.Sessions[hexID(id)] = e
+	return led.save(dir)
+}
+
+// RecordSendOnce notes an incident outbox send once per logical event so a
+// crash between ledger accounting and durable outbox marking cannot inflate
+// this device's send count on retry.
+func RecordSendOnce(dir string, id [8]byte, dev *DeviceState, eventID string) error {
+	if dev == nil || eventID == "" || len(eventID) > 128 {
+		return errors.New("ratchetwire: device and event ID are required")
+	}
+	led, err := loadLedger(dir)
+	if err != nil {
+		return err
+	}
+	led.ensureMaps()
+	key := hexID(id) + ":" + eventID
+	if led.SendEvents[key] {
+		return nil
+	}
+	e := led.Sessions[hexID(id)]
+	e.LastWriter = dev.ID
+	e.MySends++
+	led.Sessions[hexID(id)] = e
+	led.SendEvents[key] = true
 	return led.save(dir)
 }
 

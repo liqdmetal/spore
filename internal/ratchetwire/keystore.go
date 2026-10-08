@@ -20,6 +20,14 @@ type FileStateStore struct {
 	sequence  map[[8]byte]uint64
 }
 
+// StateDir returns the directory holding this endpoint's protected state.
+func (s *FileStateStore) StateDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.dir
+}
+
 func NewFileStateStore(dir string, key []byte) (*FileStateStore, error) {
 	if dir == "" {
 		return nil, errors.New("ratchetwire: empty keystore directory")

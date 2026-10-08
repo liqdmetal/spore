@@ -24,29 +24,220 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/incident"
 	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/notify"
 	"github.com/liqdmetal/spore/internal/ratchetwire"
 	"github.com/liqdmetal/spore/internal/receipts"
+	"github.com/liqdmetal/spore/internal/secure"
 )
 
 type e2Ingestor struct {
-	st         ratchetwire.BodyStore
-	ep         *ratchetwire.DurableEndpoint
-	ik, sk     []byte
-	op         *[32]byte
-	pool       *ratchetwire.OPKPool
-	carrier    ratchetwire.ChainCarrier
-	ackCtx     context.Context // context for auto-ack pointer posts
-	outDir     string
-	receipts   string // receipts ledger path ("" disables)
-	mdb        *maildb.MailDB
-	dispatcher *notify.Dispatcher // nil disables notifications
-	autoAck    bool
-	ackTTL     time.Duration
+	st            ratchetwire.BodyStore
+	ep            *ratchetwire.DurableEndpoint
+	ik, sk        []byte
+	op            *[32]byte
+	pool          *ratchetwire.OPKPool
+	incidentStore *incident.Store
+	stateDir      string
+	creator       string
+	creatorPinned string
+	carrier       ratchetwire.ChainCarrier
+	ackCtx        context.Context // context for auto-ack pointer posts
+	outDir        string
+	receipts      string // receipts ledger path ("" disables)
+	mdb           *maildb.MailDB
+	dispatcher    *notify.Dispatcher // nil disables notifications
+	autoAck       bool
+	ackTTL        time.Duration
+}
+
+func (g *e2Ingestor) incidentPeer(sid [8]byte) (maildb.Contact, []byte, error) {
+	if g.mdb == nil || g.ep == nil {
+		return maildb.Contact{}, nil, errors.New("incident: authenticated pinned contact store is unavailable")
+	}
+	session := g.ep.Sessions.Get(sid)
+	if session == nil {
+		return maildb.Contact{}, nil, errors.New("incident: unknown E2 session")
+	}
+	peerIK, ok := session.PeerIdentity()
+	if !ok {
+		return maildb.Contact{}, nil, errors.New("incident: E2 session lacks authenticated peer identity; establish a new session")
+	}
+	var match maildb.Contact
+	var pin []byte
+	for _, contact := range g.mdb.Contacts() {
+		if contact.Bundle == nil || contact.Bundle.IKPub != peerIK {
+			continue
+		}
+		candidate, err := hex.DecodeString(contact.Pinned)
+		if err != nil || len(candidate) != 32 || contact.Bundle.Verify(candidate) != nil {
+			continue
+		}
+		if match.Address != "" {
+			return maildb.Contact{}, nil, errors.New("incident: session identity ambiguously matches multiple contacts")
+		}
+		match, pin = contact, candidate
+	}
+	if match.Address == "" {
+		return maildb.Contact{}, nil, errors.New("incident: E2 peer is not an authenticated pinned contact")
+	}
+	return match, pin, nil
+}
+
+func (g *e2Ingestor) handleIncident(_ chain.Incoming, sid [8]byte, plain []byte) bool {
+	if !incident.IsIncidentEnvelope(plain) {
+		return false
+	}
+	if g.incidentStore == nil || g.creator == "" || g.creatorPinned == "" {
+		fmt.Fprintln(os.Stderr, "incident: message received but local identity/address is not configured (-incident-address and -state-key required)")
+		return true
+	}
+
+	contact, pinned, err := g.incidentPeer(sid)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return true
+	}
+
+	msg, err := incident.DecodeSignedMessage(plain, pinned)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "incident: rejected signed message:", err)
+		return true
+	}
+
+	if msg.Sender != contact.Address || !strings.EqualFold(msg.SenderPinned, contact.Pinned) {
+		fmt.Fprintln(os.Stderr, "incident: authenticated E2 peer does not match message sender")
+		return true
+	}
+
+	if msg.Recipient != g.creator || !strings.EqualFold(msg.RecipientPinned, g.creatorPinned) {
+		fmt.Fprintln(os.Stderr, "incident: message is not addressed to this local identity")
+		return true
+	}
+
+	if msg.Type == "invite" {
+		if msg.Creator != contact.Address || !strings.EqualFold(msg.CreatorPinned, contact.Pinned) {
+			fmt.Fprintln(os.Stderr, "incident: invitation creator does not match authenticated E2 peer")
+			return true
+		}
+		if _, err := g.incidentStore.ImportInvitation(msg, g.creator, g.creatorPinned, hex.EncodeToString(sid[:]), time.Now()); err != nil {
+			fmt.Fprintln(os.Stderr, "incident: invitation refused:", err)
+			return true
+		}
+		fmt.Printf("incident %s invited: %s (from %s)\n", msg.IncidentID, msg.Summary, contact.Address)
+		return true
+	}
+
+	if msg.Creator != g.creator || !strings.EqualFold(msg.CreatorPinned, g.creatorPinned) {
+		fmt.Fprintln(os.Stderr, "incident: response does not target this incident creator")
+		return true
+	}
+
+	status := incident.Acked
+	if msg.Type == "decline" {
+		status = incident.Declined
+	}
+	r, err := g.incidentStore.Respond(msg.IncidentID, contact.Address, hex.EncodeToString(pinned), status, msg.EventID, hex.EncodeToString(sid[:]), time.Now())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "incident: response refused:", err)
+		return true
+	}
+
+	fmt.Printf("incident %s: %s from %s; status %s\n", r.ID, msg.Type, contact.Address, r.Status)
+	return true
+}
+
+// sendIncidentOutbox retries the exact prepared pointer after a transport
+// failure. It persists a preparation marker before advancing the ratchet, so
+// a crash before the opaque pointer is durably saved blocks the outbox instead
+// of silently encrypting the same event at a later ratchet position.
+func (g *e2Ingestor) sendIncidentOutbox(c ratchetwire.ChainCarrier) error {
+	if g.incidentStore == nil || g.ep == nil {
+		return errors.New("incident: outbox requires an open encrypted store and E2 endpoint")
+	}
+	rows, err := g.incidentStore.List(time.Now())
+	if err != nil {
+		return err
+	}
+	device, err := ratchetwire.LoadOrCreateDevice(g.ep.StateDir())
+	if err != nil {
+		return err
+	}
+	var failures []string
+	for _, record := range rows {
+		pending, err := g.incidentStore.Pending(record.ID)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		for _, entry := range pending {
+			sidRaw, err := hex.DecodeString(entry.Session)
+			if err != nil || len(sidRaw) != 8 {
+				failures = append(failures, fmt.Sprintf("%s: invalid session ID", entry.EventID))
+				continue
+			}
+			var sid [8]byte
+			copy(sid[:], sidRaw)
+			if err := ratchetwire.CheckSendAllowed(g.ep.StateDir(), sid, device); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", entry.EventID, err))
+				continue
+			}
+			preparedNow := len(entry.Pointer) == 0
+			if preparedNow {
+				if entry.Accounted || entry.Preparing {
+					failures = append(failures, fmt.Sprintf("%s: pointer preparation was interrupted after it was durably started; refusing to advance the ratchet again", entry.EventID))
+					continue
+				}
+				if time.Now().Unix() >= record.ExpiresAt {
+					failures = append(failures, fmt.Sprintf("%s: expired before pointer preparation", entry.EventID))
+					continue
+				}
+				if err := g.incidentStore.BeginDeliveryPreparation(record.ID, entry.EventID); err != nil {
+					failures = append(failures, fmt.Sprintf("%s: start pointer preparation: %v", entry.EventID, err))
+					continue
+				}
+				_, pointer, err := g.ep.SendNext(sid, entry.Payload, time.Unix(record.ExpiresAt, 0))
+				if err != nil {
+					failures = append(failures, fmt.Sprintf("%s: prepare: %v", entry.EventID, err))
+					continue
+				}
+				if err := g.incidentStore.PrepareDelivery(record.ID, entry.EventID, entry.Session, pointer); err != nil {
+					failures = append(failures, fmt.Sprintf("%s: persist prepared pointer: %v", entry.EventID, err))
+					continue
+				}
+				entry.Pointer = pointer
+			}
+			if !entry.Accounted {
+				if err := ratchetwire.RecordSendOnce(g.ep.StateDir(), sid, device, entry.EventID); err != nil {
+					failures = append(failures, fmt.Sprintf("%s: record device send: %v", entry.EventID, err))
+					continue
+				}
+				if err := g.incidentStore.MarkAccounted(record.ID, entry.EventID); err != nil {
+					failures = append(failures, fmt.Sprintf("%s: record send accounting: %v", entry.EventID, err))
+					continue
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			_, err = c.PostPointer(ctx, entry.Recipient, entry.Pointer, 1)
+			cancel()
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: delivery pending: %v", entry.EventID, err))
+				continue
+			}
+			if err := g.incidentStore.MarkSent(record.ID, entry.EventID); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: delivered but status not saved: %v", entry.EventID, err))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d incident delivery item(s) remain pending: %s", len(failures), strings.Join(failures, "; "))
+	}
+	return nil
 }
 
 // ingest processes one successfully fetched frame. fromFabric marks pointers
@@ -94,6 +285,9 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 			fmt.Fprintf(os.Stderr, "e2: dropped fabric message from blocked sender %s\n", shortTx(inc.Sender))
 			return
 		}
+	}
+	if g.handleIncident(inc, frame.SessionID, plain) {
+		return
 	}
 	// Receipts are ratcheted messages like any other: detect the
 	// envelope and surface it as an ack line instead of a message.
@@ -276,6 +470,14 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 			return nil, nil, err
 		}
 	}
+	creatorSig, err := secure.SigPubOf(ik)
+	if err != nil {
+		return nil, nil, err
+	}
+	incidentDB, err := incident.Open(filepath.Join(stateDir, "incidents.enc"), stateKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	var dispatcher *notify.Dispatcher
 	webhookURL := fs.Lookup("ntfy").Value.String()
 	if webhookURL != "" || fs.Lookup("notify-email").Value.String() != "" || fs.Lookup("notify-sms").Value.String() != "" {
@@ -301,8 +503,13 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 	if err != nil {
 		return nil, nil, err
 	}
+	creator := flagValueOr(fs, "incident-address", "")
+	if creator == "" {
+		creator = flagValueOr(fs, "address", "")
+	}
+	creatorPinned := hex.EncodeToString(creatorSig)
 	return &e2Ingestor{
-		st: st, ep: ep, ik: ik, sk: sk, op: op, pool: pool,
+		st: st, ep: ep, ik: ik, sk: sk, op: op, pool: pool, incidentStore: incidentDB, stateDir: stateDir, creator: creator, creatorPinned: creatorPinned,
 		carrier: ratchetwire.ChainCarrier{}, // fabric path never auto-acks on-chain
 		ackCtx:  context.Background(),
 		outDir:  outDir, receipts: fs.Lookup("receipts").Value.String(),

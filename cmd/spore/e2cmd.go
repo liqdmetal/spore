@@ -420,6 +420,7 @@ func e2Common(fs *flag.FlagSet) {
 	fs.String("network", "", "carrier network")
 	fs.String("base-url", "", "carrier API base URL")
 	fs.String("address", "", "carrier wallet/address")
+	fs.String("incident-address", "", "local participant address used by the incident pager")
 	fs.String("chain-id", "", "Cosmos chain ID")
 	fs.String("post-path", "", "carrier post path")
 	fs.String("list-path", "", "carrier list path")

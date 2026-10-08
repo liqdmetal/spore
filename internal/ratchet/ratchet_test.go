@@ -59,6 +59,29 @@ func establishPair(t *testing.T, withOPK bool) pair {
 	if alice.ID() != bob.ID() {
 		t.Fatalf("session id mismatch: %x != %x", alice.ID(), bob.ID())
 	}
+	peerB, ok := alice.PeerIdentity()
+	if !ok || peerB != bundle.IKPub {
+		t.Fatalf("initiator peer identity = %x, %v; want %x", peerB, ok, bundle.IKPub)
+	}
+	identityAPub, err := crypto.KeyPairFromPriv(ikA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerA, ok := bob.PeerIdentity()
+	if !ok || !bytes.Equal(peerA[:], identityAPub.Pub) {
+		t.Fatalf("responder peer identity = %x, %v; want %x", peerA, ok, identityAPub.Pub)
+	}
+	exported, err := alice.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := ImportState(exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := restored.PeerIdentity(); !ok || got != peerB {
+		t.Fatalf("restored peer identity = %x, %v; want %x", got, ok, peerB)
+	}
 	return pair{alice: alice, bob: bob, bundle: bundle}
 }
 

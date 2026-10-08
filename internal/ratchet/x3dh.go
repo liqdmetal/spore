@@ -283,6 +283,8 @@ func EstablishInitiatorDet(identityPriv []byte, bundle *SPKBundle, pinnedSig []b
 	// DR init, initiator side: our ratchet key IS the X3DH ephemeral (§5):
 	// opening chain = KDF_RK(SK, DH3).
 	s := newInitiatorSession(sk, sid, ek.Priv, bundle.SPKPub[:], dhPrivs)
+	s.peerIdentity = bundle.IKPub
+	s.hasPeerIdentity = true
 	return s, hs, nil
 }
 
@@ -339,5 +341,7 @@ func EstablishResponderDet(identityPriv, spkPriv []byte, opkPriv *[32]byte, hs *
 		return nil, errors.New("ratchet: initiator claims degraded mode but we hold an OPK for this id")
 	}
 	s := newResponderSession(sk, sid, spkPriv, hs.EKPub[:], dhPrivs)
+	s.peerIdentity = hs.IKPub
+	s.hasPeerIdentity = true
 	return s, nil
 }

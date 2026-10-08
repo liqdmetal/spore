@@ -75,6 +75,15 @@ func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Dura
 	return e, nil
 }
 
+// StateDir returns the endpoint's protected state directory for adjacent
+// endpoint-local metadata such as the send-collision ledger.
+func (e *DurableEndpoint) StateDir() string {
+	if e == nil || e.states == nil {
+		return ""
+	}
+	return e.states.StateDir()
+}
+
 func (e *DurableEndpoint) save(id [8]byte) error {
 	state, err := e.Sessions.Export(id)
 	if err != nil {

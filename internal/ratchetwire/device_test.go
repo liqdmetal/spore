@@ -43,6 +43,32 @@ func seedSession(t *testing.T, dir string, id [8]byte, st []byte, k []byte) {
 	}
 }
 
+func TestRecordSendOnceIsIdempotentAcrossRetries(t *testing.T) {
+	dir := devDir(t)
+	device, err := LoadOrCreateDevice(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sid(0xa1)
+	if err := RecordSendOnce(dir, id, device, "event-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSendOnce(dir, id, device, "event-a"); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := LedgerEntry(dir, id)
+	if !ok || entry.MySends != 1 {
+		t.Fatalf("send count after retry = %+v, %v; want exactly one", entry, ok)
+	}
+	if err := RecordSendOnce(dir, id, device, "event-b"); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok = LedgerEntry(dir, id)
+	if !ok || entry.MySends != 2 {
+		t.Fatalf("send count after distinct event = %+v, %v; want two", entry, ok)
+	}
+}
+
 func TestDeviceIDIsStableAndDistinct(t *testing.T) {
 	d1 := devDir(t)
 	a, err := LoadOrCreateDevice(d1)

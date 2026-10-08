@@ -86,6 +86,8 @@ func main() {
 		whispercmd(os.Args[2:])
 	case "donate":
 		donatecmd(os.Args[2:])
+	case "incident":
+		incidentCmd(os.Args[2:])
 	case "msg":
 		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "escrow" || os.Args[2] == "dex" || os.Args[2] == "approve" || os.Args[2] == "inspect-approval" || os.Args[2] == "list-approvals" || os.Args[2] == "approval-metrics" || os.Args[2] == "receipts") {
 			msgE2(os.Args[2:])
@@ -167,6 +169,7 @@ func usage() {
   spore whisper recv -rpc URL -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; omit E2 flags only to read old native mail)
   spore whisper keygen [-key KFILE]
   spore donate [chain] | --all                          (per-chain donation rail)
+  spore incident create|invite|reply|list|show|resolve|flush ...  (private E2 incident pager; see docs/INCIDENT_PAGER.md)
   spore msg send -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-msg-file F|-] ...   (DERO alias for canonical forward-private E2; default ring 16)
   spore msg send -chain evm|xmr|solana ...                         (REFUSED — use msg send-e2 explicitly)
   spore msg recv -chain dero -identity F -spk F -store URL -state-dir D -state-key F ...  (DERO E2 receiver; bare form reads old native mail)

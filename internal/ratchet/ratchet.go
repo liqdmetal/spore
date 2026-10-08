@@ -203,6 +203,8 @@ type ExportedState struct {
 	DHPub             [32]byte              `json:"dh_pub"`
 	DHRemote          [32]byte              `json:"dh_remote"`
 	HasRemote         bool                  `json:"has_remote"`
+	PeerIdentity      [32]byte              `json:"peer_identity"`
+	HasPeerIdentity   bool                  `json:"has_peer_identity"`
 	CKs               []byte                `json:"cks,omitempty"`
 	CKr               []byte                `json:"ckr,omitempty"`
 	Ns                uint32                `json:"ns"`
@@ -224,7 +226,8 @@ func (s *Session) state() ExportedState {
 	e := ExportedState{
 		Created: s.created, LastActivity: s.lastActivity,
 		RK: s.rk, DHPriv: s.dhPriv, DHPub: s.dhPub, DHRemote: s.dhRemote,
-		HasRemote: s.hasRemote, Ns: s.ns, Cr: s.cr, PN: s.pn, SID: s.sid,
+		HasRemote: s.hasRemote, PeerIdentity: s.peerIdentity, HasPeerIdentity: s.hasPeerIdentity,
+		Ns: s.ns, Cr: s.cr, PN: s.pn, SID: s.sid,
 		Skipped: s.skipped, PerChain: s.skippedPerChain,
 		MaxSkipPerChain: s.MaxSkipPerChain, MaxSkipPerSession: s.MaxSkipPerSession,
 	}
@@ -254,6 +257,7 @@ func ImportState(b []byte) (*Session, error) {
 	}
 	s.dhPriv, s.dhPub, s.dhRemote = e.DHPriv, e.DHPub, e.DHRemote
 	s.hasRemote = e.HasRemote
+	s.peerIdentity, s.hasPeerIdentity = e.PeerIdentity, e.HasPeerIdentity
 	s.cks, s.ckr = e.CKs, e.CKr
 	s.ns, s.cr, s.pn = e.Ns, e.Cr, e.PN
 	s.sid = e.SID
@@ -281,19 +285,21 @@ var ErrDecrypt = errors.New("ratchet: cannot decrypt message")
 // Session is one double-ratchet session (one per device-pair, §8). It is NOT
 // thread-safe: the caller serializes (one conversation, one owner).
 type Session struct {
-	created      time.Time
-	lastActivity time.Time
-	rk           [32]byte
-	dhPriv       [32]byte // our current ratchet scalar (zero until we have one)
-	dhPub        [32]byte
-	dhRemote     [32]byte
-	hasRemote    bool
-	cks          []byte // our sending chain key (nil until established)
-	ckr          []byte // our receiving chain key (nil until established)
-	ns           uint32 // next send index in current chain
-	cr           uint32 // next expected receive index in current chain
-	pn           uint32 // length of the chain before the current receiving chain
-	sid          [8]byte
+	created         time.Time
+	lastActivity    time.Time
+	rk              [32]byte
+	dhPriv          [32]byte // our current ratchet scalar (zero until we have one)
+	dhPub           [32]byte
+	dhRemote        [32]byte
+	hasRemote       bool
+	peerIdentity    [32]byte // authenticated X3DH static identity of the remote endpoint
+	hasPeerIdentity bool
+	cks             []byte // our sending chain key (nil until established)
+	ckr             []byte // our receiving chain key (nil until established)
+	ns              uint32 // next send index in current chain
+	cr              uint32 // next expected receive index in current chain
+	pn              uint32 // length of the chain before the current receiving chain
+	sid             [8]byte
 
 	skipped         map[string]skippedKey // "dhpubhex:n" → key
 	skippedPerChain map[string]int
@@ -350,6 +356,11 @@ func (s *Session) InactiveBefore(cutoff time.Time) bool {
 // ID returns the 8-byte session id (SHA256 of the X3DH transcript) — bound
 // into every KDF label and every AEAD AAD (docs/RATCHET.md §10).
 func (s *Session) ID() [8]byte { return s.sid }
+
+// PeerIdentity returns the remote static X25519 identity public key carried
+// by the authenticated X3DH transcript. Applications must still bind this key
+// to their own pinned contact record before authorizing application actions.
+func (s *Session) PeerIdentity() ([32]byte, bool) { return s.peerIdentity, s.hasPeerIdentity }
 
 // ensureDHKey lazily creates our ratchet keypair (responder's first send or
 // a receiver-side DH step before having sent).
@@ -627,6 +638,8 @@ func (s *Session) Erase() {
 	crypto.Zero(s.dhPriv[:])
 	crypto.Zero(s.dhPub[:])
 	crypto.Zero(s.dhRemote[:])
+	crypto.Zero(s.peerIdentity[:])
+	s.hasPeerIdentity = false
 	if s.cks != nil {
 		crypto.Zero(s.cks)
 		s.cks = nil
