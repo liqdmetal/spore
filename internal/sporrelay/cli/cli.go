@@ -18,8 +18,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/liqdmetal/spore/internal/crypto"
+	"github.com/liqdmetal/spore/internal/handoff"
 	"github.com/liqdmetal/spore/internal/sporrelay"
 )
 
@@ -30,7 +32,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("usage: spore work-order identity|prepare|register; see `spore work-order --help` for details")
 	}
 	if len(args) == 0 {
-		return errors.New("usage: spore work-order register -command FILE [-relay-url URL]")
+		return errors.New("usage: spore work-order register -command FILE [-relay-url URL] [-out NEW_FILE]")
 	}
 	switch args[0] {
 	case "prepare":
@@ -267,12 +269,13 @@ func writeNewPrivateFile(path string, data []byte) error {
 
 func register(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		return errors.New("usage: spore work-order register -command FILE [-relay-url URL]")
+		return errors.New("usage: spore work-order register -command FILE [-relay-url URL] [-out NEW_FILE]")
 	}
 	fs := flag.NewFlagSet("work-order register", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	commandFile := fs.String("command", "", "JSON file containing an already-signed RelayOS objectives.register command")
 	relayURL := fs.String("relay-url", os.Getenv("SPORE_RELAY_URL"), "RelayOS base URL (default SPORE_RELAY_URL)")
+	output := fs.String("out", "", "optional new private file for the local registration observation (not a server-signed receipt)")
 	apiToken := os.Getenv("SPORE_RELAY_API_TOKEN") // optional reverse-proxy gate, never RelayOS command authority
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -288,6 +291,29 @@ func register(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	observation := handoff.Registration{Version: 1, RelayURL: strings.TrimSpace(*relayURL), ActorID: command.Actor.ActorID, Objective: command.Command.Payload, ObservedAt: time.Now().Unix()}
+	var out *os.File
+	observationSaved := false
+	if *output != "" {
+		if *output == "-" {
+			return errors.New("work-order register: -out must be a new private file, not stdout")
+		}
+		if err := observation.Validate(); err != nil {
+			return err
+		}
+		out, err = os.OpenFile(*output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return fmt.Errorf("work-order register: reserve observation file before submission: %w", err)
+		}
+		defer func() {
+			_ = out.Close()
+			if !observationSaved {
+				_ = os.Remove(*output)
+			}
+		}()
+		// Reserve exclusively before the persistent remote mutation. A failed
+		// export after success is reported as registered, not safe to resubmit.
+	}
 	client := sporrelay.NewClient(&sporrelay.Config{RelayerURL: strings.TrimSpace(*relayURL), APIToken: apiToken})
 	registered, err := client.RegisterWorkOrder(ctx, command)
 	if err != nil {
@@ -295,6 +321,23 @@ func register(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	if stdout == nil {
 		stdout = io.Discard
+	}
+	if out != nil {
+		observation.ObservedAt = time.Now().Unix()
+		data, encodeErr := json.MarshalIndent(observation, "", "  ")
+		if encodeErr != nil {
+			return fmt.Errorf("work-order: registration succeeded, observation export failed; do not resubmit: %w", encodeErr)
+		}
+		if _, err := out.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("work-order: registration succeeded, observation write failed; do not resubmit: %w", err)
+		}
+		if err := out.Sync(); err != nil {
+			return fmt.Errorf("work-order: registration succeeded, observation sync failed; do not resubmit: %w", err)
+		}
+		if err := out.Close(); err != nil {
+			return fmt.Errorf("work-order: registration succeeded, observation close failed; do not resubmit: %w", err)
+		}
+		observationSaved = true
 	}
 	_, err = fmt.Fprintf(stdout,
 		"work order registered: %s\nexecution: unsupported by the inspected RelayOS HTTP service\nsettlement: not performed\n",

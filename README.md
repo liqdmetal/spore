@@ -108,6 +108,34 @@ transaction — so Spore never pretends to. What it guarantees:
 Full carrier matrix, invariants, and deployment order:
 [`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md).
 
+## Private work coordination with RelayOS
+
+Register an objective commitment with RelayOS, then exchange the private brief,
+acceptance policy, and one deliverable through an established Spore E2 session.
+The buyer explicitly accepts or rejects the exact result; signed, hash-linked
+events and pending pointers live in an encrypted, expiry-pruned local store.
+Crash-safe receive journaling and signed application-persistence receipts keep
+carrier success distinct from peer persistence and human approval. `handoff status`
+shows queued, blocked, posted-but-unconfirmed, and peer-persisted items plus the
+next operator action; `handoff recover` repairs an unfinished local receive.
+`spore work-order handoff --help` lists the workflow. See
+[`docs/PRIVATE_HANDOFF.md`](docs/PRIVATE_HANDOFF.md) for a complete example.
+
+This is private coordination, **not** automatic execution, independent outcome
+verification, or payment. The registration export is a local observation, not a
+server-signed receipt. The RelayOS adapter still implements registration only.
+
+## Private DAO gatekeeper review
+
+`spore dao-review` sends private proposal evidence to an explicit pinned reviewer
+roster, freezes proposal/policy commitments and membership in a signed manifest,
+and collects final signed approve/reject decisions. A strict-majority approval
+certificate can be verified offline against an independently authenticated review
+hash, without exporting private evidence or policy. This proves scoped reviewer
+approval, **not** on-chain membership, automatic voting, execution, or spending
+authority. See [`docs/DAO_REVIEW.md`](docs/DAO_REVIEW.md) for the workflow,
+privacy boundaries, and recovery limits.
+
 ## Payments (settlement-native)
 
 Money rides the **same transaction** as the pointer on DERO and EVM-calldata —

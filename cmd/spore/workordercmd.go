@@ -1,7 +1,8 @@
-// work-order — narrow RelayOS objective registration boundary.
+// work-order — RelayOS objective registration and private Spore handoffs.
 //
-// It prepares a local envelope or submits a caller-authorized registration. It
-// does not discover providers, execute tasks, verify outcomes, or settle funds.
+// It prepares/submits registrations or coordinates signed E2 work artifacts and
+// human decisions. It does not discover providers, execute tasks, independently
+// verify outcomes, or settle funds.
 package main
 
 import (
@@ -27,6 +28,9 @@ func workordercmd(args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	}
+	if args[0] == "handoff" {
+		return handoffCommand(context.Background(), args[1:], stdout, stderr)
+	}
 	return cli.Run(context.Background(), args, stdout)
 }
 
@@ -40,8 +44,11 @@ func workOrderUsage(w io.Writer) {
 		"      -policy-hash HASH -out NEW_FILE",
 		"      create and actor-sign an objectives.register command locally",
 		"      (no network submission; only register sends the prepared command)",
-		"  spore work-order register -command FILE [-relay-url URL]",
+		"  spore work-order register -command FILE [-relay-url URL] [-out NEW_FILE]",
 		"      submit an already-authorized RelayOS objectives.register command",
+		"      -out exports a local observation, not a server-signed receipt",
+		"  spore work-order handoff --help",
+		"      private E2 work, signed persistence receipts, recovery, and actionable status",
 		"",
 		"environment:",
 		"  SPORE_RELAY_URL  RelayOS base URL when -relay-url is omitted",

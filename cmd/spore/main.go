@@ -110,6 +110,11 @@ func main() {
 		creditcmd(os.Args[2:])
 	case "sub":
 		subcmd(os.Args[2:])
+	case "dao-review":
+		if err := daoReviewCmd(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "dao-review:", err)
+			os.Exit(1)
+		}
 	case "work-order":
 		if err := workordercmd(os.Args[2:], os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintln(os.Stderr, "work-order:", err)
@@ -232,13 +237,17 @@ func usage() {
              (deploy contracts/MyceliumMailbox.sol from a funded local key; prints the address for -mailbox)
   spore evm-proxy -rpc URL [-private-key HEX] [-listen 127.0.0.1:8555]
              (loopback signing proxy: local EIP-155 signing for eth_sendTransaction in front of a read-only public RPC)
+  spore dao-review create|decide|status|certificate|verify|show|export|flush|recover|prune
+             (private pinned-reviewer quorum evidence; immutable manifest; no execution/spending)
   spore work-order identity -actor-key FILE
              (print only the public Relay actor identity derived from a local key)
   spore work-order prepare -actor-key FILE -issuer FILE -grant FILE -objective-id ID
              -owner-pseudonym ID -description-commitment HASH -policy-hash HASH -out FILE
              (locally actor-sign with a RelayOS-issued grant; does not submit)
-  spore work-order register -command FILE [-relay-url URL]
-             (submit the prepared RelayOS objectives.register command; registration only)
+  spore work-order register -command FILE [-relay-url URL] [-out NEW_FILE]
+             (register with RelayOS; optionally export a local observation, not a signed receipt)
+  spore work-order handoff commitments|brief|deliver|decide|export|list|show|status|flush|prune|recover
+             (private E2 work handoff and human accept/reject decisions; no execution/settlement)
   spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD + configured EVM mailbox)
   spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)

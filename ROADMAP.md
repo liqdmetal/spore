@@ -115,6 +115,20 @@ remaining; it does not re-state live status.*
   CLI ingest uses and the inbox renders them as styled cards — never raw
   envelope JSON; a client-side sniff backstops servers predating the field.
 
+### Private work handoff
+- Registration-linked `work-order handoff`: signed private brief/policy, one
+  provider deliverable, and explicit buyer accept/reject over existing E2 sessions.
+- Commitment and exact-result binding, encrypted bounded/expiry-pruned state,
+  exact-pointer retry, and explicit plaintext export for human review.
+- Crash-safe encrypted receive journal, idempotent application recovery, and
+  domain-separated signed persistence receipts bound to exact event/terms/session.
+  `handoff status` highlights delivery uncertainty and required human actions;
+  receipts never imply reading, acceptance, independent verification, or payment.
+- `work-order register -out` exports a local observation, **not** a server-signed
+  receipt or proof of actor ownership. No new RelayOS handlers, automatic
+  execution, independent verification, or work-order settlement. See
+  [`docs/PRIVATE_HANDOFF.md`](docs/PRIVATE_HANDOFF.md) for operational limits.
+
 ### Onboarding + ops
 - `spore init` one-shot identity kit + `config.json` defaults (every E2 command
   picks them up; explicit flags always win).

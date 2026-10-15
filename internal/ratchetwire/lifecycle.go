@@ -16,6 +16,9 @@ type DurableEndpoint struct {
 	*Endpoint
 	states        *FileStateStore
 	SessionExpiry time.Duration
+	// Serialize the clone/journal/head/application transition with sends on
+	// this endpoint. Independent processes still require exclusive ownership.
+	transitionMu sync.Mutex
 
 	// lossMu guards the confirmed-loss ledger. It is a leaf lock: taken only
 	// after Sessions' own lock has been released, never held across it.
@@ -41,6 +44,13 @@ func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Dura
 	if states == nil {
 		return nil, errors.New("ratchetwire: nil file state store")
 	}
+	if err := states.recoverReceiveState(); err != nil {
+		return nil, fmt.Errorf("ratchetwire: recover receive state: %w", err)
+	}
+	pending, err := states.readReceive()
+	if err != nil {
+		return nil, err
+	}
 	ep := NewEndpoint(body)
 	e := &DurableEndpoint{Endpoint: ep, states: states, SessionExpiry: expiry}
 	ids, err := states.IDs()
@@ -59,7 +69,7 @@ func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Dura
 		if err != nil {
 			return nil, fmt.Errorf("ratchetwire: restore session %x: %w", id, err)
 		}
-		if expiry > 0 && s.InactiveBefore(now.Add(-expiry)) {
+		if expiry > 0 && (pending == nil || pending.Session != id) && s.InactiveBefore(now.Add(-expiry)) {
 			if err := states.Delete(id); err != nil {
 				return nil, fmt.Errorf("ratchetwire: delete expired session %x: %w", id, err)
 			}
@@ -112,6 +122,11 @@ func (e *DurableEndpoint) SendFirst(identity []byte, bundle *ratchet.SPKBundle, 
 // "unknown session" while the send looked successful. Any caller that needs the
 // id must come through here.
 func (e *DurableEndpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKBundle, pinnedSig []byte, plaintext []byte, deadline time.Time) (Pointer, []byte, [8]byte, error) {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if err := e.requireNoPendingReceive(); err != nil {
+		return Pointer{}, nil, [8]byte{}, err
+	}
 	// The session id comes back from the handshake directly. It used to be
 	// recovered by re-fetching the just-stored frame with a synthesised "now"
 	// of deadline-1ns, which silently failed for any deadline carrying
@@ -132,6 +147,11 @@ func (e *DurableEndpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKB
 
 // SendNext saves state after the body store accepts the continuation.
 func (e *DurableEndpoint) SendNext(id [8]byte, plaintext []byte, deadline time.Time) (Pointer, []byte, error) {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if err := e.requireNoPendingReceive(); err != nil {
+		return Pointer{}, nil, err
+	}
 	p, raw, err := e.Endpoint.SendNext(id, plaintext, deadline)
 	if err != nil {
 		return Pointer{}, nil, err
@@ -144,6 +164,11 @@ func (e *DurableEndpoint) SendNext(id [8]byte, plaintext []byte, deadline time.T
 
 // ReceiveFirst saves state after successful decryption.
 func (e *DurableEndpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, frame Frame, rawFrame []byte) ([]byte, error) {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if err := e.requireNoPendingReceive(); err != nil {
+		return nil, err
+	}
 	plaintext, err := e.Endpoint.ReceiveFirst(identity, spk, opk, frame, rawFrame)
 	if err != nil {
 		if errors.Is(err, ErrExpired) {
@@ -159,6 +184,11 @@ func (e *DurableEndpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, fram
 
 // ReceiveFirstFromOPKPool consumes the referenced OPK durably before accepting the session.
 func (e *DurableEndpoint) ReceiveFirstFromOPKPool(identity, spk []byte, pool *OPKPool, frame Frame, rawFrame []byte) ([]byte, error) {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if err := e.requireNoPendingReceive(); err != nil {
+		return nil, err
+	}
 	if pool == nil {
 		return nil, errors.New("ratchetwire: nil OPK pool")
 	}
@@ -188,6 +218,11 @@ func (e *DurableEndpoint) ReceiveFirstFromOPKPool(identity, spk []byte, pool *OP
 }
 
 func (e *DurableEndpoint) ReceiveNext(p Pointer, now time.Time) ([]byte, error) {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if err := e.requireNoPendingReceive(); err != nil {
+		return nil, err
+	}
 	// Fetch exactly once. Body stores may implement one-shot/off-chain reads
 	// that reap the body after returning it; fetching again after decryption
 	// would turn a successful receive into a false failure.
@@ -219,6 +254,11 @@ func (e *DurableEndpoint) ReceiveNext(p Pointer, now time.Time) ([]byte, error) 
 // never arrived and whose key is now gone — and is recorded in the endpoint's
 // loss ledger (see Gaps).
 func (e *DurableEndpoint) Expire(now time.Time) int {
+	e.transitionMu.Lock()
+	defer e.transitionMu.Unlock()
+	if e.requireNoPendingReceive() != nil {
+		return 0
+	}
 	if now.IsZero() {
 		now = time.Now()
 	}

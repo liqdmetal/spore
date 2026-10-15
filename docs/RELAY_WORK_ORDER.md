@@ -182,7 +182,11 @@ The normal test suite does not enable the smoke test or need RelayOS credentials
   unsupported; `verify`, `assurance`, and `complete` fail as unverified. The
   process wrapper injects stdout/stderr rather than mutating global process
   streams. Rendering never upgrades a registration into completion.
-- `cmd/spore/workordercmd.go` is the thin process/usage boundary. Data flows
+- `cmd/spore/workordercmd.go` is the process/usage boundary and routes the
+  separate local `handoff` surface to `cmd/spore/handoffcmd.go`.
+  `internal/handoff` owns signed handoff transitions, encrypted local state,
+  and durable E2 pointer retry; none of its events mutate RelayOS.
+  For identity/prepare/register, data flows
   local actor key + supplied grant → local envelope preparation → (after a
   separate explicit `register`) command file → shape checks → RelayOS's
   `/v1/commands` route → exact registration record check → registration-only
@@ -192,6 +196,23 @@ The old `spore settle discover|execute|assurance` surface used
 `/api/v1/objectives/...`, which does not match the inspected RelayOS service;
 it is retired. In particular, Spore must not treat a discover candidate as a
 completed or assured objective.
+
+## Private coordination above registration
+
+Spore also supports a **local private handoff** linked to the registered objective:
+`work-order register -out NEW_FILE` exports a local registration observation;
+`work-order handoff` commits and sends a private brief/policy, receives one
+provider deliverable, and carries an explicit buyer accept/reject decision over
+an established authenticated E2 session. Encrypted receive journaling closes the
+decrypt-to-application crash window; signed persistence receipts and `handoff status`
+distinguish carrier posting, peer persistence, and the next human/operator action. See
+[`PRIVATE_HANDOFF.md`](PRIVATE_HANDOFF.md) for commands, protocol, bounds,
+retention, and recovery limits.
+
+This does not add a RelayOS server action. The observation is not server-signed
+or independently verifiable, messaging identities are not Relay actors/wallets,
+and human acceptance is not independent verification or settlement. The full
+paid-work protocol below remains unimplemented.
 
 ## Not implemented: full paid job loop
 
@@ -207,9 +228,9 @@ demo uses an internal deterministic rail; it is not a real on-chain payment.
 Relay's `/v1/commands` mutation grant also does not itself express a work-order
 budget or a provider spend capability.
 
-So this slice **does not** select a provider, dispatch a task, bind a Spore
-contact to a Relay actor and wallet, issue a per-order spend cap, carry a result
-through an E2 session, independently validate that result, create escrow,
+The RelayOS registration adapter **does not** select a provider, dispatch a task,
+bind a Spore contact to a Relay actor and wallet, issue a per-order spend cap,
+independently validate a result, create escrow,
 release/refund funds, or verify chain finality. It makes no escrow, atomic
 settlement, or on-chain-payment claim. The full paid-loop blocker is a
 versioned, signed RelayOS work-order/offer/accept/execute/result contract with

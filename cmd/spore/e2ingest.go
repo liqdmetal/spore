@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/liqdmetal/spore/internal/chain"
+	"github.com/liqdmetal/spore/internal/handoff"
 	"github.com/liqdmetal/spore/internal/incident"
 	"github.com/liqdmetal/spore/internal/maildb"
 	"github.com/liqdmetal/spore/internal/notify"
@@ -43,6 +44,8 @@ type e2Ingestor struct {
 	op            *[32]byte
 	pool          *ratchetwire.OPKPool
 	incidentStore *incident.Store
+	handoffStore  *handoff.Store
+	handoffLocal  handoff.Peer
 	stateDir      string
 	creator       string
 	creatorPinned string
@@ -251,6 +254,10 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 		fmt.Fprintf(os.Stderr, "e2 fabric: init frame refused on fabric path (bootstrap rides the chain) cid %x\n", p.CID)
 		return
 	}
+	if err := g.recoverHandoffReceive(); err != nil {
+		fmt.Fprintln(os.Stderr, "handoff: receive recovery pending:", err)
+		return
+	}
 	var plain []byte
 	var decErr error
 	switch frame.Kind {
@@ -268,12 +275,20 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 	case ratchetwire.FrameMessage:
 		// Continuations must use the installed ratchet session. Never
 		// reinterpret them as a fresh handshake (downgrade resistance).
-		plain, decErr = g.ep.ReceiveNext(p, time.Now())
+		plain, decErr = g.ep.ReceiveNextJournaled(p, time.Now(), func(raw []byte) bool { return handoff.IsEnvelope(raw) || handoff.IsReceipt(raw) }, func(pending *ratchetwire.ReceivePending) error {
+			return g.persistHandoff(pending.Session, pending.Payload)
+		})
 	default:
 		decErr = ratchetwire.ErrLegacyDowngrade
 	}
 	if decErr != nil {
 		fmt.Fprintln(os.Stderr, "e2 decrypt:", decErr)
+		return
+	}
+	if frame.Kind == ratchetwire.FrameMessage && (handoff.IsEnvelope(plain) || handoff.IsReceipt(plain)) {
+		// The journal callback already committed the event/receipt atomically.
+		// Do not run application persistence a second time after deleting it.
+		fmt.Println("handoff: application persisted; outgoing receipts require explicit handoff flush")
 		return
 	}
 	// Fabric-delivered frames resolve to a known session by construction
@@ -285,6 +300,13 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 			fmt.Fprintf(os.Stderr, "e2: dropped fabric message from blocked sender %s\n", shortTx(inc.Sender))
 			return
 		}
+	}
+	if frame.Kind == ratchetwire.FrameInit && (handoff.IsEnvelope(plain) || handoff.IsReceipt(plain)) {
+		fmt.Fprintln(os.Stderr, "handoff: initial-session application messages refused; establish a normal E2 conversation first")
+		return
+	}
+	if g.handleHandoff(frame.SessionID, plain) {
+		return
 	}
 	if g.handleIncident(inc, frame.SessionID, plain) {
 		return
@@ -478,6 +500,10 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 	if err != nil {
 		return nil, nil, err
 	}
+	handoffDB, err := handoff.Open(filepath.Join(stateDir, "handoffs.enc"), stateKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	var dispatcher *notify.Dispatcher
 	webhookURL := fs.Lookup("ntfy").Value.String()
 	if webhookURL != "" || fs.Lookup("notify-email").Value.String() != "" || fs.Lookup("notify-sms").Value.String() != "" {
@@ -508,13 +534,19 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 		creator = flagValueOr(fs, "address", "")
 	}
 	creatorPinned := hex.EncodeToString(creatorSig)
-	return &e2Ingestor{
+	ing := &e2Ingestor{
 		st: st, ep: ep, ik: ik, sk: sk, op: op, pool: pool, incidentStore: incidentDB, stateDir: stateDir, creator: creator, creatorPinned: creatorPinned,
+		handoffStore: handoffDB, handoffLocal: handoff.Peer{Address: handoffAddress(fs), Pinned: creatorPinned},
 		carrier: ratchetwire.ChainCarrier{}, // fabric path never auto-acks on-chain
 		ackCtx:  context.Background(),
 		outDir:  outDir, receipts: fs.Lookup("receipts").Value.String(),
 		mdb: mdb, dispatcher: dispatcher,
 		autoAck: fs.Lookup("auto-ack").Value.String() == "true",
 		ackTTL:  ackTTL,
-	}, func() {}, nil
+	}
+	if err := ing.recoverHandoffReceive(); err != nil {
+		closeBodyStore(st)
+		return nil, nil, fmt.Errorf("handoff: receive recovery pending: %w", err)
+	}
+	return ing, func() {}, nil
 }
