@@ -172,6 +172,10 @@ type Sim struct {
 	HTLCSCID  string
 	DEXSCID   string
 	WDEROSCID string
+
+	// statePath, when set, is where the full state is saved after each change
+	// (see OpenState). Empty means purely in-memory.
+	statePath string
 }
 
 type wallet struct {
@@ -283,6 +287,14 @@ func (s *Sim) Handler() http.Handler {
 		if rpcErr != nil {
 			writeRPCError(w, rpcErr.code, rpcErr.message)
 			return
+		}
+		// Only state-changing calls need a save. Reads (polls) would otherwise
+		// rewrite the file every few seconds for nothing.
+		if req.Method == "transfer" || req.Method == "sc_invoke" {
+			if err := s.saveLocked(); err != nil {
+				writeRPCError(w, -32000, "state not persisted: "+err.Error())
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{

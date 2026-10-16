@@ -58,6 +58,7 @@ func derosimUsage() {
 func derosimServe(args []string) {
 	fs := flag.NewFlagSet("derosim serve", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:20219", "HTTP listen address for the simulator")
+	statePath := fs.String("state", "", "optional state file: restore balances/history on start and save after each change (empty = in-memory only)")
 	_ = fs.Parse(args)
 
 	// Fixed contract IDs: the sim is the chain, so it defines the SCIDs the
@@ -66,9 +67,25 @@ func derosimServe(args []string) {
 	htlcSCID := "sim-htlc-00000000000000000000000000000000000000000000000000000000000001"
 	dexSCID := "sim-dex-000000000000000000000000000000000000000000000000000000000000002"
 	wderoSCID := "sim-wdero-0000000000000000000000000000000000000000000000000000000003"
-	s := derosim.New(htlcSCID, dexSCID, wderoSCID)
+	var s *derosim.Sim
+	if *statePath != "" {
+		var err error
+		s, err = derosim.OpenState(*statePath, htlcSCID, dexSCID, wderoSCID)
+		if err != nil {
+			log.Fatalf("derosim: %v", err)
+		}
+	} else {
+		s = derosim.New(htlcSCID, dexSCID, wderoSCID)
+	}
+	// AddWallet is idempotent, so restored balances are kept.
 	s.AddWallet("alice")
 	s.AddWallet("bob")
+	if *statePath != "" {
+		if err := s.Save(); err != nil {
+			log.Fatalf("derosim: %v", err)
+		}
+		fmt.Printf("  state:       %s (restored on start, saved on change)\n", *statePath)
+	}
 
 	srv := &http.Server{Addr: *listen, Handler: derosim.ServeHandler(s)}
 	ln, err := net.Listen("tcp", *listen)

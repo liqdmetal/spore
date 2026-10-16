@@ -31,6 +31,10 @@ func ServeHandler(s *Sim) http.Handler {
 			return
 		}
 		s.Bump(p.Blocks)
+		if err := s.Save(); err != nil {
+			http.Error(w, "state not persisted: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]uint64{"height": func() uint64 { st := s.State(); return st.Height }()})
 	}))
