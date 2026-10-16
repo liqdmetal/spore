@@ -51,7 +51,7 @@ spore prekeybatch push -in "$MBROOT/$user/batch.json" \
   -mailbox https://$HOST/u/$user
 ```
 
-Manage the single shared host as one systemd unit so it survives reboot. Caddy terminates public TLS and proxies to loopback; `-privacy` omits sender identity from the hosted log. The user's phone runs `msg recv-e2` and decrypts locally.
+Manage the single shared host as one systemd unit so it survives reboot; the shipped unit is [`deploy/spore-mailbox.service`](../deploy/spore-mailbox.service), and the relay hop is [`deploy/spore-relay.service`](../deploy/spore-relay.service). `python scripts/verify-deploy-units.py` checks both against the built CLI's real flags and confirms that no secret-bearing flag (`-token`, `-rpc-login`, `-store-token`, `-api-key`, `-totp`) appears in `ExecStart`, since argv is visible to other local users via `ps`. `mailbox host` reads the wallet RPC login from `SPORE_RPC_LOGIN` in the unit's EnvironmentFile instead. It does not scan for secrets under other flag names. Caddy terminates public TLS and proxies to loopback; `-privacy` omits sender identity from the hosted log. The user's phone runs `msg recv-e2` and decrypts locally.
 
 ## 2. Expose the DERO/node RPC to the phone SECURELY
 

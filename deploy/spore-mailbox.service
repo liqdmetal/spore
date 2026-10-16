@@ -1,0 +1,48 @@
+# Spore hosted mailbox (Model B) — one shared process for every user.
+#
+# Install:
+#   sudo install -m 0755 spore /usr/local/bin/spore
+#   sudo useradd --system --home /var/lib/spore --shell /usr/sbin/nologin spore
+#   sudo install -d -o spore -g spore -m 0700 /var/lib/spore /var/lib/spore/users
+#   sudo install -m 0600 -o root -g root /dev/null /etc/spore/mailbox.env
+#   sudo cp deploy/spore-mailbox.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now spore-mailbox
+#
+# /etc/spore/mailbox.env (mode 0600) holds the wallet RPC login. The login is
+# read from the environment and never appears in ExecStart, which other local
+# users can see via ps:
+#   SPORE_RPC_LOGIN=user:password
+#
+# The mailbox listens on loopback only. Put TLS in front of it (Caddy/nginx);
+# see docs/MODEL_B_RUNBOOK.md §3. Do NOT expose the wallet RPC port publicly.
+#
+# Operator-specific paths: edit the values below to match your host before
+# enabling. -tokens and -notify-file are JSON files; keep them mode 0600.
+
+[Unit]
+Description=Spore hosted mailbox (Model B)
+Documentation=https://github.com/liqdmetal/spore/blob/main/docs/MODEL_B_RUNBOOK.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=spore
+Group=spore
+EnvironmentFile=/etc/spore/mailbox.env
+ExecStart=/usr/local/bin/spore mailbox host -users /var/lib/spore/users -listen 127.0.0.1:18443 -tokens /etc/spore/tokens.json -notify-file /etc/spore/notify.json -chain dero -rpc http://127.0.0.1:20209/json_rpc -interval 5s -privacy
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/spore
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -81,6 +81,7 @@ func mailboxHost(args []string) {
 	autoBurn := fs.Bool("auto-burn", false, "erase each user's on-chain mailbox slot after that user accepts a delivery (per-user, never hub-level)")
 	addChainFlags(fs)
 	_ = fs.Parse(args)
+	check(applyMailboxRPCLogin(fs, os.Stderr))
 
 	if *usersDir == "" {
 		fmt.Fprintln(os.Stderr, "mailbox host: -users DIR is required (each subdirectory is one mailbox)")

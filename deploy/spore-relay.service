@@ -1,0 +1,45 @@
+# Spore relay hop (Model B §2b) — one shared unit for every user.
+#
+# The relay forwards ONLY to destinations named in -allow-dest (deny-by-default
+# SSRF hardening). Forward tokens live in a 0600 JSON file, keyed per user URL,
+# e.g. {"https://mail.example.com/u/alice": "secret"} — never on the command line.
+#
+# Install:
+#   sudo install -m 0755 spore /usr/local/bin/spore
+#   sudo useradd --system --home /var/lib/spore-relay --shell /usr/sbin/nologin spore-relay
+#   sudo install -d -o spore-relay -g spore-relay -m 0700 /var/lib/spore-relay/bodies /var/lib/spore-relay/index
+#   sudo install -m 0600 -o spore-relay -g spore-relay /dev/null /etc/spore/relay-fwd-tokens.json
+#   sudo cp deploy/spore-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now spore-relay
+#
+# EDIT -allow-dest before enabling: replace the example destinations with the
+# exact mailbox user URLs this relay is allowed to forward to.
+#
+# The relay listens on loopback; front it with TLS (see docs/MODEL_B_RUNBOOK.md).
+
+[Unit]
+Description=Spore relay hop (Model B)
+Documentation=https://github.com/liqdmetal/spore/blob/main/docs/MODEL_B_RUNBOOK.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=spore-relay
+Group=spore-relay
+ExecStart=/usr/local/bin/spore relay run -listen 127.0.0.1:19300 -dir /var/lib/spore-relay/bodies -index-dir /var/lib/spore-relay/index -allow-dest https://mail.example.com/u/alice,https://mail.example.com/u/bob -fwd-tokens /etc/spore/relay-fwd-tokens.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/spore-relay
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
