@@ -16,6 +16,8 @@
 //     (identity/spk/state/store keys, opk pool, config, maildb) — the P0-4
 //     "defaults do not leak" gate for data at rest.
 //  7. chain (optional): RPC/wallet reachable, address + height fetched.
+//  8. prekey rejections (with -opk-pool or config opk_pool): persisted counts.
+//     A non-zero count is a warning that says what to check; it does not fail.
 //
 // Exit 0 only if nothing is broken. It is the first thing you run after
 // installing spore and the first thing you run when something "just stopped
@@ -277,15 +279,42 @@ func doctorcmd(args []string) {
 	priv := fs.String("priv", "", "our medium-term privkey (hex) to verify")
 	dir := fs.String("dir", "", "data dir to check")
 	listen := fs.String("listen", "127.0.0.1:19191", "bind address to evaluate")
-	config := fs.String("config", "", "config.json to validate (default: -config flag/SPORE_CONFIG/~/.spore/config.json)")
+	config := fs.String("config", "", "config.json to validate (default: $SPORE_CONFIG or ~/.spore/config.json)")
 	home := fs.String("home", "", "spore home dir to scan for key files and permissions (default ~/.spore or $SPORE_HOME)")
+	opkPool := fs.String("opk-pool", "", "endpoint-local OPK pool JSON; its persisted prekey rejection counts are reported (default: config opk_pool)")
 	timeout := fs.Duration("timeout", 5*time.Second, "chain probe timeout")
 	live := fs.Bool("live", false, "also run known-answer self-tests on the wire paths (address, payload-0, ring byte, E2 pointer, ratchet, wallet receive-readiness)")
 	storeURL := fs.String("store", "", "with -live: mailbox base URL (https://host/u/<name>) for a real store round-trip")
 	storeTok := fs.String("store-token", "", "with -live: bearer token for -store")
 	relayHop := fs.String("relay", "", "with -live: anonymous relay hop base URL (e.g. https://relay.example.org) — probes body writes through the relay instead of straight to -store")
+	jsonOutput := fs.Bool("json", false, "emit a machine-readable, read-only local diagnostic report (no network probes)")
 	addChainFlags(fs) // optional -chain/-rpc probe (same flags as `spore status`)
 	_ = fs.Parse(args)
+
+	if *jsonOutput {
+		selectedChain := ""
+		listenExplicit := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "chain" {
+				selectedChain = f.Value.String()
+			}
+			if f.Name == "listen" {
+				listenExplicit = true
+			}
+		})
+		report := buildDoctorJSONReport(doctorJSONOptions{
+			Doctor: doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen, Config: *config, Home: *home},
+			RPC:    fs.Lookup("rpc").Value.String(), Store: *storeURL, Chain: selectedChain, ListenExplicit: listenExplicit, Live: *live, OpkPool: *opkPool,
+		})
+		if err := writeDoctorJSON(os.Stdout, report); err != nil {
+			fmt.Fprintln(os.Stderr, "doctor: encode JSON report:", err)
+			os.Exit(2)
+		}
+		if report.Summary.Errors > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 
 	fmt.Println("spore doctor")
 	fmt.Println("---------------")
@@ -303,6 +332,32 @@ func doctorcmd(args []string) {
 	}
 
 	report(runDoctorChecks(doctorOpts{Priv: *priv, Dir: *dir, Listen: *listen, Config: *config, Home: *home}))
+
+	// Prekey rejections are a warning, not a broken check: they describe past
+	// handshakes, so they are printed with a "next:" hint but do not fail doctor.
+	cfgPath := *config
+	if cfgPath == "" {
+		cfgPath = configPath("")
+	}
+	cfg, _ := LoadConfig(cfgPath)
+	poolPath := *opkPool
+	if poolPath == "" && cfg != nil {
+		poolPath = cfg.OpkPool
+	}
+	addPrekeyRejections(func(id, status, detail, action string) {
+		mark := "✅"
+		switch status {
+		case "warning":
+			mark = "⚠"
+		case "error":
+			mark = "❌"
+			failed++
+		}
+		fmt.Printf("  %s %-13s %s\n", mark, id, detail)
+		if action != "" && status != "ok" {
+			fmt.Printf("      next: %s\n", action)
+		}
+	}, poolPath)
 
 	// Self-tests: prove this build still decodes what the network sends.
 	if *live {

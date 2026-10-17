@@ -22,10 +22,12 @@ type DurableEndpoint struct {
 
 	// lossMu guards the confirmed-loss ledger. It is a leaf lock: taken only
 	// after Sessions' own lock has been released, never held across it.
-	lossMu    sync.Mutex
-	lostTotal uint64
-	lostTrunc bool
-	lostGaps  []MessageGap
+	lossMu              sync.Mutex
+	lostTotal           uint64
+	lostTrunc           bool
+	lostGaps            []MessageGap
+	lossPersistenceErr  string
+	lossSessionsPending map[[8]byte]bool
 }
 
 // NewDurableEndpoint opens the endpoint-local state directory and restores all
@@ -52,13 +54,16 @@ func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Dura
 		return nil, err
 	}
 	ep := NewEndpoint(body)
-	e := &DurableEndpoint{Endpoint: ep, states: states, SessionExpiry: expiry}
+	e := &DurableEndpoint{Endpoint: ep, states: states, SessionExpiry: expiry, lossSessionsPending: make(map[[8]byte]bool)}
 	ids, err := states.IDs()
 	if err != nil {
 		return nil, err
 	}
 	if now.IsZero() {
 		now = time.Now()
+	}
+	if err := e.loadGapLedger(); err != nil {
+		return nil, err
 	}
 	for _, id := range ids {
 		state, err := states.Load(id)
@@ -80,7 +85,9 @@ func newDurableEndpoint(body BodyStore, states *FileStateStore, expiry time.Dura
 		}
 	}
 	if e.SessionExpiry > 0 {
-		e.Expire(now)
+		if _, err := e.ExpireChecked(now); err != nil {
+			return nil, fmt.Errorf("ratchetwire: expire restored endpoint state: %w", err)
+		}
 	}
 	return e, nil
 }
@@ -199,17 +206,33 @@ func (e *DurableEndpoint) ReceiveFirstFromOPKPool(identity, spk []byte, pool *OP
 	if err != nil {
 		return nil, err
 	}
-	s, err := pool.EstablishResponder(identity, spk, hs)
+	// Validate against a peeked key. The prekey is consumed only after the first
+	// message authenticates, so a frame that fails validation leaves it usable.
+	var opk *[32]byte
+	if !hs.Degraded {
+		priv, err := pool.Peek(hs.OPKID)
+		if err != nil {
+			return nil, pool.fail(StageLookup, hs.OPKID, err)
+		}
+		opk = &priv
+	}
+	s, err := ratchet.EstablishResponder(identity, spk, opk, hs)
 	if err != nil {
-		return nil, err
+		return nil, pool.fail(StageValidate, hs.OPKID, err)
 	}
 	if err := e.Sessions.AcceptInit(hs, s, rawFrame); err != nil {
-		return nil, err
+		return nil, pool.fail(StageValidate, hs.OPKID, err)
 	}
 	plaintext, err := s.DecryptWithDeadline(frame.Message, frame.DeadlineTime())
 	if err != nil {
 		e.Sessions.Erase(hs.SessionID)
-		return nil, err
+		return nil, pool.fail(StageAuthenticate, hs.OPKID, err)
+	}
+	if opk != nil {
+		if err := pool.TakeMatching(hs.OPKID, *opk); err != nil {
+			e.Sessions.Erase(hs.SessionID)
+			return nil, pool.fail(StageCommit, hs.OPKID, err)
+		}
 	}
 	if err := e.save(frame.SessionID); err != nil {
 		return nil, fmt.Errorf("ratchetwire: persist receive transition: %w", err)
@@ -254,10 +277,22 @@ func (e *DurableEndpoint) ReceiveNext(p Pointer, now time.Time) ([]byte, error) 
 // never arrived and whose key is now gone — and is recorded in the endpoint's
 // loss ledger (see Gaps).
 func (e *DurableEndpoint) Expire(now time.Time) int {
+	removed, err := e.ExpireChecked(now)
+	if err != nil {
+		e.setLossPersistenceError(err)
+	}
+	return removed
+}
+
+// ExpireChecked sweeps expired message keys, durably records confirmed loss,
+// and persists each affected session with the swept keys removed. Loss metadata
+// is committed first so a crash before the ratchet save can be deduplicated on
+// restart; failure leaves the old encrypted session available for retry.
+func (e *DurableEndpoint) ExpireChecked(now time.Time) (int, error) {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
-	if e.requireNoPendingReceive() != nil {
-		return 0
+	if err := e.requireNoPendingReceive(); err != nil {
+		return 0, err
 	}
 	if now.IsZero() {
 		now = time.Now()
@@ -265,10 +300,28 @@ func (e *DurableEndpoint) Expire(now time.Time) int {
 	lost := e.Sessions.SweepGaps(now)
 	if len(lost) > 0 {
 		e.noteLost(lost)
+		for _, gap := range lost {
+			e.lossSessionsPending[gap.SessionID] = true
+		}
 	}
+	if len(lost) > 0 || e.hasLossPersistenceError() {
+		if err := e.persistGapLedgerIfNeeded(); err != nil {
+			e.setLossPersistenceError(err)
+			return len(lost), err
+		}
+	}
+	for id := range e.lossSessionsPending {
+		if err := e.save(id); err != nil {
+			err = fmt.Errorf("ratchetwire: persist swept gap state for session %x: %w", id, err)
+			e.setLossPersistenceError(err)
+			return len(lost), err
+		}
+		delete(e.lossSessionsPending, id)
+	}
+	e.setLossPersistenceError(nil)
 	removed := len(lost)
 	if e.SessionExpiry <= 0 {
-		return removed
+		return removed, nil
 	}
 	cutoff := now.Add(-e.SessionExpiry)
 	for _, id := range e.Sessions.IDs() {
@@ -278,5 +331,5 @@ func (e *DurableEndpoint) Expire(now time.Time) int {
 			removed++
 		}
 	}
-	return removed
+	return removed, nil
 }

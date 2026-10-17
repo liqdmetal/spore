@@ -487,10 +487,10 @@ func msgPrekeygen(args []string) {
 			check(err)
 		}
 	}
-	write(*identity, []byte(hex.EncodeToString(ik)+"\\n"), 0600)
-	write(*spk, []byte(hex.EncodeToString(sk)+"\\n"), 0600)
+	write(*identity, []byte(hex.EncodeToString(ik)+"\n"), 0600)
+	write(*spk, []byte(hex.EncodeToString(sk)+"\n"), 0600)
 	if *opk != "" {
-		write(*opk, []byte(hex.EncodeToString(op[:])+"\\n"), 0600)
+		write(*opk, []byte(hex.EncodeToString(op[:])+"\n"), 0600)
 	}
 	data, err := json.MarshalIndent(b, "", "  ")
 	check(err)

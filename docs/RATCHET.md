@@ -214,6 +214,88 @@ becomes genuinely blind, which was always the README's claim.
    store must contain zero skipped keys. The current test matrix covers this
    at the ratchet/wire boundary; real-carrier repetition remains open.
 
+## 11.1 Operator status: pending and confirmed message gaps
+
+`spore status` inspects local E2 session state and reports message gaps under
+`message-gaps`. For automation, use:
+
+```sh
+spore status -json
+# Validate a built CLI's output against the published schema (Python + jsonschema):
+python scripts/verify-status-schema.py
+# Custom paths, when not set in config:
+spore status -config ~/.spore/config.json -state-dir ~/.spore/state \
+  -state-key ~/.spore/state.key -json
+```
+
+With no explicit flags, status uses `~/.spore/config.json` (or
+`$SPORE_CONFIG`) and its configured state paths; `-state-dir` and `-state-key`
+override those values. The output is a JSON object with the versioned schema `spore/status/v1`,
+published at [`docs/status-v1.schema.json`](status-v1.schema.json). The
+verification script builds the current CLI and validates its live JSON output
+against that schema; install the Python `jsonschema` package if it is not
+already available:
+
+- `schema` identifies the report contract; `read_only` is `true`.
+- `generated_at` is the UTC generation time in RFC 3339 format.
+- `summary` contains the overall `status`, total `checks`, and counts of
+  `errors`, `warnings`, and `skipped` checks.
+- `checks` is an array of `{id, status, detail, next_action?}` entries.
+  `next_action` is omitted when there is no suggested operator action. Check
+  IDs are the stable way to select a report item; `detail` and `next_action`
+  are human-readable guidance.
+
+The message-gap check distinguishes three states:
+
+| Report | Meaning | Operator action |
+|---|---|---|
+| `message-gaps: ok` | No recoverable or confirmed gaps are recorded. | No gap recovery is needed. |
+| `message-gaps: warning` with recoverable gaps | A skipped message key is still retained and its message deadline has not passed. The ciphertext may still arrive and decrypt. | Keep `spore msg recv-e2` running and allow delivery until the deadline. |
+| `message-gaps: warning` with expired, unclassified gaps | The deadline passed while the receiver was stopped. The saved ratchet state still has the skipped key, but it has not yet been swept; status does not call it confirmed loss. | Start `spore msg recv-e2`; its expiry sweep classifies and records the loss. |
+| `message-gaps: warning` with confirmed losses | The receiver swept the skipped key after its deadline. Forward secrecy means that message can no longer be decrypted. | Treat those messages as permanently unavailable; do not retry them as recoverable. |
+| `message-gaps: error` | The configured state directory/key could not be read or authenticated. | Check the configured paths/key and preserve a backup before recovery. |
+| `message-gaps: skipped` | No key path was available to the report, so encrypted gap state could not be inspected. | Configure `-state-key` (or its config default) and rerun status. |
+
+A gap check may include `next_action`. If the bounded loss identity list has
+reached its cap, an additional `message-gaps-detail` warning reports that the
+loss count is truncated. The persistent ledger is `<state-dir>/message-gaps.enc`;
+it is authenticated and encrypted with the E2 state key and records at most
+256 loss identities. When truncated, `LostTotal` is a lower bound (capped at
+256), not an exact lifetime total.
+
+Status is diagnostic, not a recovery command: inspecting gap state reads and
+authenticates the encrypted session snapshots and loss ledger without creating
+state files, taking a state lock, sweeping skipped keys, or rewriting state.
+It classifies expired-but-unswept keys as unclassified so an operator can tell
+that a receiver sweep is still needed. When expired-but-unswept gaps coexist
+with recoverable or already-confirmed gaps, the current report prioritizes the
+expired-but-unswept warning; run the receiver's expiry sweep, then check status
+again to see the remaining pending/lost summary. The report does not fetch
+ciphertext or prove that a carrier/body store is reachable; `body-store` is
+explicitly reported as `skipped` unless a separate controlled end-to-end test
+is run.
+
+Example of one check entry from a JSON report:
+
+```json
+{
+  "id": "message-gaps",
+  "status": "warning",
+  "detail": "2 recoverable gap(s), 1 confirmed lost message(s).",
+  "next_action": "Keep the receiver running until pending gaps arrive or expire; confirmed losses cannot be decrypted again."
+}
+```
+
+The overall summary is `error` if any check is an error, `warning` if there
+are warnings and no errors, `incomplete` when the report has skipped checks
+but no warnings/errors, and `ok` when all checks complete cleanly. The process
+returns exit code 1 when a check reports an error; warnings and skipped checks
+remain visible in the report but do not by themselves cause a failing exit.
+A missing key file with an existing state directory, a wrong key, or malformed
+state is reported as an error; investigate and restore the protected key/state
+rather than reinitializing over existing encrypted data. If the state directory
+itself does not exist, status reports that no E2 session state is present.
+
 ## 12. Open questions
 
 - Q1: Should SPK rotation be chain-anchored (KEYROTATE anchor carries

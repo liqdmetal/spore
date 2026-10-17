@@ -1,6 +1,8 @@
 package ratchetwire
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -131,8 +133,8 @@ func TestEndpointRecordsConfirmedLossAfterExpiry(t *testing.T) {
 	}
 
 	// Past the deadline the gap is a confirmed, counted loss.
-	if n := bob.Expire(deadline.Add(time.Second)); n != 1 {
-		t.Fatalf("Expire after the deadline removed %d, want 1", n)
+	if n, err := bob.ExpireChecked(deadline.Add(time.Second)); err != nil || n != 1 {
+		t.Fatalf("Expire after the deadline removed %d, err=%v; want 1", n, err)
 	}
 	r := bob.Gaps()
 	if r.LostTotal != 1 {
@@ -160,11 +162,41 @@ func TestEndpointRecordsConfirmedLossAfterExpiry(t *testing.T) {
 	if r := bob.Gaps(); r.LostTotal != 1 {
 		t.Fatalf("LostTotal drifted to %d after a second Expire", r.LostTotal)
 	}
+	if len(r.Lost) != 1 {
+		t.Fatalf("lost identities = %d after expiry, want 1", len(r.Lost))
+	}
+	stateDir := bob.StateDir()
+	key := filled(9)
+	restartedStates, err := NewFileStateStore(stateDir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewDurableEndpoint(bob.Store, restartedStates, deadline.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := restarted.Gaps()
+	if persisted.LostTotal != 1 || len(persisted.Lost) != 1 || persisted.Lost[0].N != 1 || len(persisted.Pending) != 0 {
+		t.Fatalf("confirmed loss did not survive restart: %+v", persisted)
+	}
+	if _, err := ReadOnlyGaps(stateDir, key, deadline.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestSessionTableSweepGapsMatchesCountOnlySweep confirms the reporting form
 // and the count-only form agree, so existing callers that only need a number
 // cannot silently diverge from the ledger.
+func TestReadOnlyGapsDoesNotCreateDirectoryOrMutateSession(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "not-created", "state")
+	if _, err := ReadOnlyGaps(absent, filled(9), time.Now()); !os.IsNotExist(err) {
+		t.Fatalf("read-only missing directory error = %v, want not-exist", err)
+	}
+	if _, err := os.Stat(absent); !os.IsNotExist(err) {
+		t.Fatalf("read-only gap scan created directory: %v", err)
+	}
+}
+
 func TestSessionTableSweepGapsMatchesCountOnlySweep(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	_, bob, ptrs, bobID, bobSPK := lossFixture(t, deadline)
@@ -226,8 +258,25 @@ func TestLossLedgerIsBoundedButCounterExact(t *testing.T) {
 	bob.noteLost(batch)
 
 	total := bob.LostCount()
-	if total != uint64(over) {
-		t.Fatalf("LostCount = %d, want %d (the counter must stay exact)", total, over)
+	if total != uint64(maxRecordedLosses) {
+		t.Fatalf("LostCount = %d, want capped persisted count %d", total, maxRecordedLosses)
+	}
+	if report := bob.Gaps(); !report.LostTruncated || len(report.Lost) != maxRecordedLosses {
+		t.Fatalf("capped loss details not marked truncated: len=%d truncated=%v", len(report.Lost), report.LostTruncated)
+	}
+	if err := bob.persistGapLedgerIfNeeded(); err != nil {
+		t.Fatal(err)
+	}
+	reloadedStates, err := NewFileStateStore(bob.StateDir(), filled(9))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewDurableEndpoint(bob.Store, reloadedStates, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report := reloaded.Gaps(); report.LostTotal != uint64(maxRecordedLosses) || !report.LostTruncated || len(report.Lost) != maxRecordedLosses {
+		t.Fatalf("bounded ledger did not survive reload: len=%d total=%d truncated=%v", len(report.Lost), report.LostTotal, report.LostTruncated)
 	}
 	r := bob.Gaps()
 	if len(r.Lost) != maxRecordedLosses {
@@ -235,6 +284,9 @@ func TestLossLedgerIsBoundedButCounterExact(t *testing.T) {
 	}
 	if !r.LostTruncated {
 		t.Fatal("truncation was not reported — the view claims to be complete")
+	}
+	if r.LostTotal != uint64(maxRecordedLosses) {
+		t.Fatalf("capped exact count = %d, want %d", r.LostTotal, maxRecordedLosses)
 	}
 }
 

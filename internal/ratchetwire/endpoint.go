@@ -99,6 +99,13 @@ func (e *Endpoint) SendFirstSession(identity []byte, bundle *ratchet.SPKBundle, 
 // ReceiveFirst validates an off-chain init frame before installing endpoint
 // state. The caller has already decoded the signed handshake and fetched the body.
 func (e *Endpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, frame Frame, rawFrame []byte) ([]byte, error) {
+	return e.receiveFirst(identity, spk, opk, frame, rawFrame, nil, nil)
+}
+
+// receiveFirst runs the init path. pool, when non-nil, classifies each failure
+// by stage (see PrekeyRejectedError). commit, when non-nil, runs only after the
+// first message authenticates; if it fails, the candidate session is erased.
+func (e *Endpoint) receiveFirst(identity, spk []byte, opk *[32]byte, frame Frame, rawFrame []byte, pool *OPKPool, commit func() error) ([]byte, error) {
 	if e == nil || e.Sessions == nil {
 		return nil, errors.New("ratchetwire: incomplete endpoint")
 	}
@@ -111,10 +118,10 @@ func (e *Endpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, frame Frame
 	}
 	s, err := ratchet.EstablishResponder(identity, spk, opk, hs)
 	if err != nil {
-		return nil, err
+		return nil, pool.fail(StageValidate, hs.OPKID, err)
 	}
 	if err := e.Sessions.AcceptInit(hs, s, rawFrame); err != nil {
-		return nil, err
+		return nil, pool.fail(StageValidate, hs.OPKID, err)
 	}
 	// Decrypt after publishing so the session transition is serialized with
 	// installation. If authentication fails, remove this just-installed
@@ -122,7 +129,13 @@ func (e *Endpoint) ReceiveFirst(identity, spk []byte, opk *[32]byte, frame Frame
 	plaintext, err := s.DecryptWithDeadline(frame.Message, time.Unix(int64(frame.Deadline), 0))
 	if err != nil {
 		e.Sessions.Erase(hs.SessionID)
-		return nil, err
+		return nil, pool.fail(StageAuthenticate, hs.OPKID, err)
+	}
+	if commit != nil {
+		if err := commit(); err != nil {
+			e.Sessions.Erase(hs.SessionID)
+			return nil, pool.fail(StageCommit, hs.OPKID, err)
+		}
 	}
 
 	return plaintext, nil
@@ -138,13 +151,15 @@ func (e *Endpoint) ReceiveFirstFromOPKPool(identity, spk []byte, pool *OPKPool, 
 		return nil, err
 	}
 	if hs.Degraded {
-		return e.ReceiveFirst(identity, spk, nil, frame, rawFrame)
+		return e.receiveFirst(identity, spk, nil, frame, rawFrame, pool, nil)
 	}
-	opk, err := pool.Take(hs.OPKID)
+	opk, err := pool.Peek(hs.OPKID)
 	if err != nil {
-		return nil, err
+		return nil, pool.fail(StageLookup, hs.OPKID, err)
 	}
-	return e.ReceiveFirst(identity, spk, &opk, frame, rawFrame)
+	return e.receiveFirst(identity, spk, &opk, frame, rawFrame, pool, func() error {
+		return pool.TakeMatching(hs.OPKID, opk)
+	})
 }
 
 // SendNext encrypts a continuation, stores it under a fresh CID, and returns

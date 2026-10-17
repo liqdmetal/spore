@@ -395,9 +395,17 @@ report, and the ledger's last column tells a reproducer in the corpus apart from
 a failing test in the package, instead of recording both as the same `n/a`.
 It takes a lock so two passes cannot overlap, keeps any entry that fails on its
 own (a reproducer is never redundant), and exits non-zero when a target crashed
-so a scheduler's mail carries the failure. `--print-schedule` prints the cron or
-Task Scheduler incantation for the host; nothing installs it for you. Like
-`--deep`, it is minutes long and no gate runs it.
+so a scheduler's mail carries the failure. The report also counts entries absent
+from `HEAD`, gives the oldest age known from a machine-local
+`.fuzz-soak/pending-first-seen.tsv` manifest, and counts entries whose age is
+unknown. `scripts/fuzz-soak-pending.sh` owns the cache snapshots, manifest
+lifecycle, `HEAD` filtering, and summary formatting; `fuzz-soak.sh` invokes it at
+pass boundaries and inserts its summary into the report. Existing pending entries
+without a trustworthy first observation stay unknown; cache mtimes are not used.
+`HEAD` alone determines whether an entry has merged, and merged entries are
+removed from the manifest. `--print-schedule`
+prints the cron or Task Scheduler incantation for the host; nothing installs it
+for you. Like `--deep`, it is minutes long and no gate runs it.
 
 A scheduler hands a task a minimal environment, not the one you are sitting in,
 so the printed launcher sets `PATH` itself — without that, a box whose only Go is

@@ -120,6 +120,10 @@ func TestFuzzSoakPassHandsItsFindingsOverAndTidiesUp(t *testing.T) {
 		"restored to HEAD here",
 		"## Per target",
 		"| FuzzFabricRPC2Frame |",
+		"## Pending corpus",
+		"- unmerged entries: 0",
+		"- oldest known age: none",
+		"- age unknown: 0",
 		"- coverage: not measured — other: go test failed",
 	} {
 		if !strings.Contains(string(report), want) {

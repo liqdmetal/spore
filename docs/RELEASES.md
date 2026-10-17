@@ -3,6 +3,29 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.9.0 — fabric refusals counted, prekey health in status and doctor, and the mailbox ships (2026-10-16)
+
+Operator-visible health for the encrypted E2 path, plus the work that
+landed since v0.8.6.
+
+- Fabric refusals are counted and persisted per state directory, and
+  `status` reports the count. A refused fabric is now visible instead of
+  silently dropped.
+- `status` and `doctor` warn on prekey pool health, and `doctor -json`
+  emits the `spore/doctor/v1` read-only report (no network, no store
+  writes, no key material). `docs/status-v1.schema.json` pins the status
+  shape, checked by `scripts/verify-status-schema.py`.
+- The prekey pool gains validation, persistence, throttling, and
+  count-failure handling, each covered by tests.
+- `ONBOARDING.md` gains a section for the new health checks.
+- Also in this release: the encrypted incident pager, private DAO review
+  and work-order handoff protocols, persisted derosim wallet state across
+  restarts, mailbox deploy units with the wallet RPC login kept out of
+  argv, and a scheduled fuzz soak that keeps and reports what it finds.
+
+The v0.9.0 tag message is not yet finalized; this entry is the in-repo
+record until it is.
+
 ## v0.8.6 — the station pages you: watch mode, Prometheus, and a daily drill (2026-10-05)
 
 Ten commits that turn the always-on approver station into a fully

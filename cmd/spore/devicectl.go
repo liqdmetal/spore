@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -16,6 +17,10 @@ import (
 //	spore e2-device status                   show the sync ledger (per-session writer + conflicts)
 //	spore e2-device export -out FILE         package all session state into an encrypted bundle
 //	spore e2-device import -in FILE          adopt another device's state
+//	spore e2-device backup -out FILE -identity KEY -passphrase-file P
+//	                                         seal the identity key and session state under a passphrase
+//	spore e2-device restore -in FILE -identity KEY -passphrase-file P
+//	                                         restore a backup; refuses an older generation or a rolled-back session
 //
 // State and key come from the E2 flags every other msg subcommand already uses
 // (-state-dir / -state-key), or from config.json.
@@ -26,7 +31,7 @@ import (
 // last agreed, and the send path refuses to continue on a conflicting session.
 func e2DeviceCmd(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: spore e2-device id|status|export|import [flags]")
+		fmt.Fprintln(os.Stderr, "usage: spore e2-device id|status|export|import|backup|restore [flags]")
 		os.Exit(2)
 	}
 	sub, rest := args[0], args[1:]
@@ -35,6 +40,10 @@ func e2DeviceCmd(args []string) {
 	e2Common(fs)
 	out := fs.String("out", "", "export: file to write the bundle to")
 	in := fs.String("in", "", "import: bundle file to read")
+	identityFile := fs.String("identity", "", "backup: identity key file to include; restore: where to write the restored identity key")
+	passphraseFile := fs.String("passphrase-file", "", "backup/restore: file holding the passphrase (at least 12 characters); never pass it on the command line")
+	anchorFile := fs.String("anchor", "", "backup/restore: external anchor file, kept outside the state dir; blocks rollback onto empty storage")
+	anchorInit := fs.Bool("anchor-init", false, "restore: allow a missing -anchor file on this device's first restore")
 	_ = fs.Parse(rest)
 	check(loadConfigForFlags(fs))
 
@@ -43,8 +52,14 @@ func e2DeviceCmd(args []string) {
 	if stateDir == "" {
 		check(errors.New("e2-device requires -state-dir (or state_dir in config.json)"))
 	}
-	dev, err := ratchetwire.LoadOrCreateDevice(stateDir)
-	check(err)
+	// restore must not mint a device id first: the backup's own id decides
+	// whether this state dir can take it.
+	var dev *ratchetwire.DeviceState
+	if sub != "restore" {
+		d, err := ratchetwire.LoadOrCreateDevice(stateDir)
+		check(err)
+		dev = d
+	}
 
 	switch sub {
 	case "id":
@@ -104,8 +119,66 @@ func e2DeviceCmd(args []string) {
 		}
 		fmt.Println("sessions are now current on this device.")
 
+	case "backup":
+		if *out == "" {
+			check(errors.New("e2-device backup requires -out FILE"))
+		}
+		if stateKeyFile == "" {
+			check(errors.New("e2-device backup requires -state-key (the state encryption key)"))
+		}
+		if *identityFile == "" {
+			check(errors.New("e2-device backup requires -identity (the identity key file to include)"))
+		}
+		pass := readPassphraseFile(*passphraseFile)
+		stateKey, err := readHexFile(stateKeyFile, 32)
+		check(err)
+		identity, err := readHexFile(*identityFile, 32)
+		check(err)
+		raw, gen, err := ratchetwire.CreateBackup(stateDir, stateKey, pass, identity, dev)
+		check(err)
+		if *anchorFile != "" {
+			check(ratchetwire.WriteBackupAnchor(*anchorFile, stateKey, dev.ID, gen))
+		}
+		check(os.WriteFile(*out, raw, 0o600))
+		fmt.Printf("backed up device %s at generation %d -> %s\n", dev.ID, gen, *out)
+		fmt.Println("the backup is sealed under your passphrase but holds the identity key:")
+		fmt.Println("keep it private. A restore refuses any copy older than this device's last backup.")
+
+	case "restore":
+		if *in == "" {
+			check(errors.New("e2-device restore requires -in FILE"))
+		}
+		if stateKeyFile == "" {
+			check(errors.New("e2-device restore requires -state-key (the state encryption key)"))
+		}
+		if *identityFile == "" {
+			check(errors.New("e2-device restore requires -identity (where to write the restored identity key)"))
+		}
+		pass := readPassphraseFile(*passphraseFile)
+		stateKey, err := readHexFile(stateKeyFile, 32)
+		check(err)
+		raw, err := os.ReadFile(*in)
+		check(err)
+		opened, err := ratchetwire.OpenBackup(pass, raw)
+		check(err)
+		// Check the identity target before any write, so a conflict cannot
+		// leave sessions restored and the identity missing.
+		present, err := identityTargetState(*identityFile, opened.Identity)
+		check(err)
+		res, err := opened.Restore(stateDir, stateKey, ratchetwire.AnchorCheck{Path: *anchorFile, Init: *anchorInit})
+		check(err)
+		if !present {
+			if err := os.WriteFile(*identityFile, []byte(hex.EncodeToString(opened.Identity)+"\n"), 0o600); err != nil {
+				check(fmt.Errorf("sessions were restored but the identity key was not written: %w", err))
+			}
+		}
+		fmt.Printf("restored device %s at generation %d: %d session(s)\n", shortID(res.Device), res.Generation, res.Sessions)
+		if present {
+			fmt.Printf("identity key already present at %s and matches the backup\n", *identityFile)
+		}
+
 	default:
-		fmt.Fprintf(os.Stderr, "e2-device: unknown subcommand %q (want id|status|export|import)\n", sub)
+		fmt.Fprintf(os.Stderr, "e2-device: unknown subcommand %q (want id|status|export|import|backup|restore)\n", sub)
 		os.Exit(2)
 	}
 }
@@ -147,6 +220,34 @@ func printDeviceStatus(stateDir string, dev *ratchetwire.DeviceState) error {
 		return fmt.Errorf("%d session(s) have colliding send chains", conflicts)
 	}
 	return nil
+}
+
+// readPassphraseFile reads a backup passphrase from a file. The passphrase is
+// never taken from argv, where other local users can read it through ps.
+func readPassphraseFile(path string) []byte {
+	if path == "" {
+		check(errors.New("requires -passphrase-file FILE (the passphrase is never read from the command line)"))
+	}
+	raw, err := os.ReadFile(path)
+	check(err)
+	return bytes.TrimRight(raw, "\r\n")
+}
+
+// identityTargetState reports whether path already holds this identity key. It
+// returns an error when path holds a different key, so a restore never
+// overwrites an identity it did not write.
+func identityTargetState(path string, identity []byte) (bool, error) {
+	existing, err := readHexFile(path, 32)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(existing, identity) {
+		return false, fmt.Errorf("%s already holds a different identity key; refusing to overwrite it", path)
+	}
+	return true, nil
 }
 
 func shortID(s string) string {

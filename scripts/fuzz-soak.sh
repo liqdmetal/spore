@@ -53,7 +53,9 @@
 #   last-coverage.log  the replay behind the coverage count, kept because it is
 #                      the evidence a pass that could not measure points at
 #   corpus-names.txt   the corpus the last pass left behind
-#   last-haul.state    the haul already proposed (fingerprint, branch, url)
+#   pending-first-seen.tsv  first-seen epochs for unmerged corpus entries
+#   last-haul.state         the haul already proposed (fingerprint, branch, url)
+# Pending snapshots and report formatting belong to scripts/fuzz-soak-pending.sh.
 #
 # The ledger is also what scripts/fuzz-soak-trends.sh reads: it flags the things
 # a single pass cannot see (coverage that has stopped setting new bests, passes
@@ -1056,6 +1058,7 @@ PREV_NAMES="$SOAK_DIR/corpus-names.prev.txt"
 if [ -f "$NAMES" ]; then cp "$NAMES" "$PREV_NAMES"; else : > "$PREV_NAMES"; fi
 NAMES_BEFORE="$SOAK_DIR/corpus-names.before.txt"
 corpus_known_before "$PREV_NAMES" > "$NAMES_BEFORE"
+bash "$REPO_ROOT/scripts/fuzz-soak-pending.sh" begin
 COUNT_BEFORE="$(wc -l < "$NAMES_BEFORE")"
 TARGETS_N="$(count_targets)"
 
@@ -1085,6 +1088,7 @@ fi
 
 corpus_names > "$NAMES"
 COUNT_AFTER="$(count_files)"
+PENDING_SUMMARY="$(bash "$REPO_ROOT/scripts/fuzz-soak-pending.sh" finish "$(date +%s)")"
 
 # --- 3. what changed ---------------------------------------------------------
 ADDED="$(comm -13 "$NAMES_BEFORE" "$NAMES" | wc -l)"
@@ -1212,6 +1216,8 @@ fi
     fi
   fi
   printf -- '- crashes: %s\n' "${CRASHES:-none}"
+
+  printf '\n## Pending corpus\n\n%s\n' "$PENDING_SUMMARY"
 
   printf '\n## Per target\n\n| target | corpus | found | minimized |\n|---|---|---|---|\n'
   for t in $(corpus_targets); do

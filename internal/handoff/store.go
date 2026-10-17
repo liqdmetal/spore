@@ -382,6 +382,31 @@ func (s *Store) List(now time.Time) ([]Record, error) {
 	return rows, err
 }
 
+// ReadOnlyListIncludingExpired reads and validates existing handoff state
+// without creating directories, pruning expired records, taking a lock file,
+// or rewriting data. It is intended for diagnostics whose read-only contract
+// includes expired state that normal List retention would prune.
+func ReadOnlyListIncludingExpired(path string, key []byte) ([]Record, error) {
+	if path == "" {
+		return nil, errors.New("handoff: empty store path")
+	}
+	protector, err := ratchetwire.NewStateProtector(key)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{path: path, protector: protector}
+	d, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]Record, 0, len(d.Records))
+	for _, r := range d.Records {
+		rows = append(rows, clone(r))
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Latest().Terms.ID < rows[j].Latest().Terms.ID })
+	return rows, nil
+}
+
 func (s *Store) Get(id string, now time.Time) (Record, error) {
 	rows, err := s.List(now)
 	if err != nil {

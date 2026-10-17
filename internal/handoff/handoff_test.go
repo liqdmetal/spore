@@ -68,6 +68,41 @@ func openTestStore(t *testing.T) (*Store, string) {
 	return s, p
 }
 
+func TestReadOnlyListIncludingExpiredDoesNotMutateStoreOrCreateDirectory(t *testing.T) {
+	brief, _, _ := fixtures(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "handoffs.enc")
+	key := bytes.Repeat([]byte{9}, 32)
+	store, err := Open(path, key)
+	must(t, err)
+	must(t, store.Apply(brief, brief.Message.Sender(), "0011223344556677", true, time.Now()))
+	before, err := os.ReadFile(path)
+	must(t, err)
+	beforeInfo, err := os.Stat(path)
+	must(t, err)
+	rows, err := ReadOnlyListIncludingExpired(path, key)
+	must(t, err)
+	if len(rows) != 1 || rows[0].Latest().Terms.ID != brief.Message.Terms.ID {
+		t.Fatalf("read-only listing lost record: %#v", rows)
+	}
+	after, err := os.ReadFile(path)
+	must(t, err)
+	afterInfo, err := os.Stat(path)
+	must(t, err)
+	if !bytes.Equal(before, after) || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("read-only listing rewrote encrypted handoff state")
+	}
+	missingPath := filepath.Join(t.TempDir(), "missing", "handoffs.enc")
+	missingRows, err := ReadOnlyListIncludingExpired(missingPath, key)
+	must(t, err)
+	if len(missingRows) != 0 {
+		t.Fatalf("missing store returned %d records, want empty", len(missingRows))
+	}
+	if _, err := os.Stat(filepath.Dir(missingPath)); !os.IsNotExist(err) {
+		t.Fatalf("read-only listing created parent directory: %v", err)
+	}
+}
+
 func TestHandoffAtomicBatchRejectsPartialQueue(t *testing.T) {
 	e, a, _ := fixtures(t)
 	s, _ := openTestStore(t)

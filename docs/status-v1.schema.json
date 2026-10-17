@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/liqdmetal/spore/blob/main/docs/status-v1.schema.json",
+  "title": "Spore unified status report v1",
+  "description": "Machine-readable output from spore status -json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "read_only",
+    "generated_at",
+    "summary",
+    "checks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "spore/status/v1"
+    },
+    "read_only": {
+      "const": true
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checks",
+        "errors",
+        "warnings",
+        "skipped"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["ok", "incomplete", "warning", "error"]
+        },
+        "checks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "detail"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["ok", "warning", "error", "skipped"]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "next_action": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

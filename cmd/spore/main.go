@@ -211,7 +211,7 @@ func usage() {
   spore msg dex swap|wrap|unwrap [-ta T -tb T -min-out N | -amount Ndero] -to ADDR -session HEX ...  (relay-dex settlement; announces in-thread; SPORE_SAP_* env)
   spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
   spore continuity create|check-in|status|release|verify|observe|quorum|anchor ... (encrypted continuity vault; signed N-of-M release; explicit optional chain commitment)
-  spore e2-device id|status|export|import [-state-dir D] [-state-key F]   (multi-device ratchet state sync)
+  spore e2-device id|status|export|import|backup|restore [-state-dir D] [-state-key F]   (multi-device ratchet state sync; backup/restore seal identity+state under a passphrase file)
   spore sign doc -identity FILE -file DOC -statement "I agree" [-out SIG]   (detached, third-party-verifiable document signature)
   spore sign verify -file DOC -sig SIG [-pinned-sig HEX]                    (verify; -pinned-sig binds it to a known signer)
   spore sign sheet -file DOC -sigs A.sig,B.sig [-required HEX,HEX]          (multi-party contract: who signed, who has not)
@@ -248,8 +248,8 @@ func usage() {
              (register with RelayOS; optionally export a local observation, not a signed receipt)
   spore work-order handoff commitments|brief|deliver|decide|export|list|show|status|flush|prune|recover
              (private E2 work handoff and human accept/reject decisions; no execution/settlement)
-  spore status [-chain dero|evm|xmr|solana ...] [-mailbox-http URL] [-timeout 5s]   (connection health HUD + configured EVM mailbox)
-  spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...]                   (pre-flight sanity check)
+  spore status [-json] [-config FILE] [-state-dir DIR] [-state-key FILE] [-timeout 5s]  (actionable local and carrier status)
+  spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...] [-json]         (pre-flight; -json emits a read-only local JSON report)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)
   spore msg keygen [-out FILE]           (identity keypair for E2E encryption)
   spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)
@@ -604,12 +604,34 @@ func webchat(args []string) {
 		api.ServeHTTP(w, r)
 	}))
 	srv := &http.Server{Addr: *listen, Handler: mux}
+	// Ctrl-C and SIGTERM shut the server down gracefully, so the E2 prekey
+	// pool's pending rejection counts are written before the process exits.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-sigCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("web: shutdown: %v", err)
+		}
+	}()
+	var serveErr error
 	if *cert != "" && *key != "" {
 		log.Printf("spore web chat on https://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
-		log.Fatal(srv.ListenAndServeTLS(*cert, *key))
+		serveErr = srv.ListenAndServeTLS(*cert, *key)
+	} else {
+		log.Printf("spore web chat on http://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
+		serveErr = srv.ListenAndServe()
 	}
-	log.Printf("spore web chat on http://%s  (public+private rooms, presence; lines rot after %s)", *listen, *linettl)
-	log.Fatal(srv.ListenAndServe())
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		log.Fatal(serveErr)
+	}
+	if e2 != nil {
+		if err := e2.pool.Flush(); err != nil {
+			log.Printf("web: e2: prekey rejection counts not persisted at exit: %v", err)
+		}
+	}
 }
 
 // webE2Send delivers one forward-private message on behalf of the browser.

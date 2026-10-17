@@ -282,7 +282,12 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 		decErr = ratchetwire.ErrLegacyDowngrade
 	}
 	if decErr != nil {
-		fmt.Fprintln(os.Stderr, "e2 decrypt:", decErr)
+		var pre *ratchetwire.PrekeyRejectedError
+		if errors.As(decErr, &pre) {
+			fmt.Fprintf(os.Stderr, "e2 prekey rejected: stage=%s opk=%d txid=%s: %v\n", pre.Stage, pre.OPKID, shortTx(inc.TxID), pre.Err)
+		} else {
+			fmt.Fprintln(os.Stderr, "e2 decrypt:", decErr)
+		}
 		return
 	}
 	if frame.Kind == ratchetwire.FrameMessage && (handoff.IsEnvelope(plain) || handoff.IsReceipt(plain)) {
@@ -409,6 +414,17 @@ func (g *e2Ingestor) ingestPointer(raw []byte, now time.Time) (retry ratchetwire
 	frame, err := ratchetwire.FetchFrame(g.st, p, now)
 	if err != nil {
 		return p, false
+	}
+	if frame.Kind == ratchetwire.FrameInit {
+		// Bootstrap fence: an init never ingests over fabric. This is a refusal,
+		// not an ingest, so report it as one. Return not-ok with no retry: the
+		// caller un-marks the CID, so a later copy from another relay or tick
+		// stays eligible, and a retry could only be refused again.
+		fmt.Fprintf(os.Stderr, "e2 fabric: init pointer refused, not ingested (bootstrap rides the chain) cid %x\n", p.CID)
+		if err := noteFabricRefusal(g.stateDir); err != nil {
+			fmt.Fprintln(os.Stderr, "e2 fabric: refusal count not persisted:", err)
+		}
+		return ratchetwire.Pointer{}, false
 	}
 	cidHex := hex.EncodeToString(p.CID[:])
 	inc := chain.Incoming{TxID: "fabric-" + cidHex[:16], Payload: raw}
@@ -548,5 +564,13 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 		closeBodyStore(st)
 		return nil, nil, fmt.Errorf("handoff: receive recovery pending: %w", err)
 	}
-	return ing, func() {}, nil
+	// Rejection counts are throttled, so a count can still be pending when the
+	// command returns. The caller defers this cleanup, which covers normal exit
+	// and the signal-driven return from Ctrl-C.
+	cleanup := func() {
+		if err := pool.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "e2: prekey rejection counts not persisted at exit: %v\n", err)
+		}
+	}
+	return ing, cleanup, nil
 }

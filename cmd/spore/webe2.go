@@ -286,6 +286,10 @@ func (e *webE2) recvOnce(ctx context.Context, wrc, wlogin string) ([]webMsg, err
 			decErr = ratchetwire.ErrLegacyDowngrade
 		}
 		if decErr != nil {
+			var pre *ratchetwire.PrekeyRejectedError
+			if errors.As(decErr, &pre) {
+				fmt.Fprintf(os.Stderr, "web e2 prekey rejected: stage=%s opk=%d txid=%s: %v\n", pre.Stage, pre.OPKID, shortTx(entry.TXID), pre.Err)
+			}
 			continue
 		}
 		e.seen[entryID] = true

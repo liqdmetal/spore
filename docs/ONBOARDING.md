@@ -270,6 +270,19 @@ spore msg recv-e2
 
 `recv-e2` watches the chain for pointers addressed to you, fetches the off-chain body, ratchets it open, and prints it. Blocked contacts (see `msg mail block`) are dropped before decryption.
 
+### Prekey rejections: what the warning means
+
+`spore status` and `spore doctor` count handshakes that your one-time prekey pool refused, per stage. Point them at the pool with `-opk-pool ~/.spore/opk-pool.json`; `doctor` also reads `opk_pool` from `config.json`. The counts are saved in the pool file, so they survive restarts.
+
+| Stage | Meaning | What to check |
+|---|---|---|
+| `lookup` | The one-time prekey id is unknown or was already spent. | Usually a replayed or forged init. A count that keeps rising on a live pool means something is replaying. Check the `e2` log lines for txids. |
+| `validate` | The handshake did not verify against the prekey. | A wrong identity or an old bundle. Confirm your `pinned-sig` matches what contacts pinned, and that they are not using a bundle from before a `spore init`. |
+| `authenticate` | The first message failed authentication. | A tampered or forged init, or a key mismatch. Check the txids in the `e2` log lines. |
+| `commit` | The prekey was consumed by a concurrent handshake, or its removal could not be saved. | A concurrent duplicate is harmless. A save failure is serious: check disk space and the state-directory permissions before you restart `recv-e2`. |
+
+A rejection is a warning, not a failure. `status` still exits 0, and `doctor` still passes. A pool file that cannot be read is a failure in both: fix its path or permissions first.
+
 ## 4. Send
 
 You need the recipient's chain address, their pinned-sig, and a way to get their bundle (a local file, or their mailbox's `/prekey` URL).

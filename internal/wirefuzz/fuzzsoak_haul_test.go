@@ -75,6 +75,13 @@ func newSandbox(t *testing.T) sandbox {
 	if err := os.WriteFile(filepath.Join(sb.repo, "scripts", "fuzz-soak.sh"), script, 0o644); err != nil {
 		t.Fatalf("writing the soak into the sandbox: %v", err)
 	}
+	pending, err := os.ReadFile(filepath.Join(root, "scripts", "fuzz-soak-pending.sh"))
+	if err != nil {
+		t.Fatalf("reading pending-age helper: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sb.repo, "scripts", "fuzz-soak-pending.sh"), pending, 0o755); err != nil {
+		t.Fatalf("writing pending-age helper into sandbox: %v", err)
+	}
 
 	// A second, non-corpus edit: the stand-in for whatever else a real tree is
 	// holding, which a haul must never sweep up. It is made explicitly rather
