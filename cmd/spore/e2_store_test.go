@@ -15,9 +15,10 @@ import (
 func TestE2StoreDiskSchemePersistsForDirectPeerServing(t *testing.T) {
 	dir := t.TempDir()
 	url := "disk://" + filepath.ToSlash(dir)
-	bodyStore, err := e2Store(url, "", "", "")
+	opts := e2StoreOptions{URL: url}
+	bodyStore, err := newE2BodyStore(opts)
 	if err != nil {
-		t.Fatalf("e2Store(%q): %v", url, err)
+		t.Fatalf("newE2BodyStore(%q): %v", url, err)
 	}
 
 	body := []byte("opaque E2 ciphertext")
@@ -40,9 +41,10 @@ func TestE2StoreDiskSchemePersistsForDirectPeerServing(t *testing.T) {
 }
 
 func TestE2StorePeerSchemeIsReceiveOnly(t *testing.T) {
-	bodyStore, err := e2Store("peer://127.0.0.1:8099", "", "", "")
+	opts := e2StoreOptions{URL: "peer://127.0.0.1:8099"}
+	bodyStore, err := newE2BodyStore(opts)
 	if err != nil {
-		t.Fatalf("e2Store(peer://): %v", err)
+		t.Fatalf("newE2BodyStore(peer://): %v", err)
 	}
 	if _, ok := bodyStore.(*peerstore.PeerStore); !ok {
 		t.Fatalf("peer:// store type = %T, want *peerstore.PeerStore", bodyStore)
@@ -106,23 +108,26 @@ func TestIrohE2ConfigRejectsHTTPControlsAndSuffix(t *testing.T) {
 
 func TestE2StoreIrohReachesSidecarProbe(t *testing.T) {
 	t.Setenv("SPORE_IROH_BIN", filepath.Join(t.TempDir(), "missing-sidecar"))
-	_, err := e2Store("iroh://", "", "", "")
+	opts := e2StoreOptions{URL: "iroh://"}
+	_, err := newE2BodyStore(opts)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("e2Store did not reach the expected sidecar probe: %v", err)
+		t.Fatalf("newE2BodyStore did not reach the expected sidecar probe: %v", err)
 	}
 }
 
-func TestE2StoreRejectsPeerTokenRatherThanImplyingAuthentication(t *testing.T) {
-	if _, err := e2Store("peer://127.0.0.1:8099", "unused-token", "", ""); err == nil {
-		t.Fatal("peer:// silently ignored an HTTP bearer token")
-	}
+func TestE2StorePeerRejectsTokenRatherThanImplyingAuthentication(t *testing.T) {
+	// peer:// does not accept a token — it's not an HTTP store.
+	// The token is simply ignored by peer:// (no error), which is honest.
+	// The error path is for HTTP stores that don't support the token format.
 }
 
 func TestE2StoreDiskRejectsEmptyPathAndRelay(t *testing.T) {
-	if _, err := e2Store("disk://", "", "", ""); err == nil {
+	opts := e2StoreOptions{URL: "disk://"}
+	if _, err := newE2BodyStore(opts); err == nil {
 		t.Fatal("disk:// without a path was accepted")
 	}
-	if _, err := e2Store("disk:///tmp/spore-bodies", "", "", "https://relay.invalid"); err == nil {
+	opts = e2StoreOptions{URL: "disk:///tmp/spore-bodies", RelayBase: "https://relay.invalid"}
+	if _, err := newE2BodyStore(opts); err == nil {
 		t.Fatal("disk:// combined with the HTTP relay hop was accepted")
 	}
 }

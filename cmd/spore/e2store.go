@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -45,7 +46,7 @@ type e2StoreOptions struct {
 // E2 command. Carrier and state flags stay in e2Common; this keeps the
 // body-store surface in one unit alongside the dispatch below.
 func registerE2StoreFlags(fs *flag.FlagSet) {
-	fs.String("store", "", "off-chain frame store: http(s)://mailbox, nostr://relay1,relay2 (public commons), or sporepeer://host:port (P2P: the other endpoint's node; pair with -store-serve)")
+	fs.String("store", "", "off-chain frame store: http(s)://mailbox, nostr://relay1,relay2 (public commons), disk://<dir> (sender local), peer://host:port (receiver direct fetch), iroh:// (content-addressed via spore-iroh sidecar), or sporepeer://host:port (P2P: the other endpoint's node; pair with -store-serve)")
 	fs.String("store-token", "", "bearer token for an HTTP store (ignored for nostr:// and sporepeer://)")
 	fs.String("store-dir", "", "directory where THIS node holds the bodies it produces (required for sporepeer://; `spore init` layouts can use ~/.spore/hold)")
 	fs.String("store-serve", "", "bind address for this node's spore-peer listener, e.g. 0.0.0.0:8099 (sporepeer:// only): your contact points -store sporepeer://<your-addr>:<port> at it")
@@ -128,6 +129,22 @@ func newE2BodyStore(opts e2StoreOptions) (ratchetwire.BodyStore, error) {
 			IndexPath:  indexPath,
 		})
 	}
+	if rest, ok := strings.CutPrefix(opts.URL, "disk://"); ok {
+		if opts.RelayBase != "" {
+			return nil, errors.New("-relay does not apply to disk://; use it with an HTTP mailbox only")
+		}
+		if strings.TrimSpace(rest) == "" {
+			return nil, errors.New("-store disk:// requires a body-store directory")
+		}
+		return store.NewDiskStoreFromURL(opts.URL)
+	}
+	if strings.HasPrefix(opts.URL, "iroh://") {
+		cfg, err := irohE2Config(opts.URL, opts.Token, opts.RelayBase)
+		if err != nil {
+			return nil, err
+		}
+		return store.NewIrohStore(cfg)
+	}
 	if rest, ok := strings.CutPrefix(opts.URL, "peer://"); ok {
 		if opts.RelayBase != "" {
 			return nil, errors.New("-relay does not apply to a peer:// store: the peer hop IS the transport")
@@ -169,4 +186,50 @@ func newE2BodyStore(opts e2StoreOptions) (ratchetwire.BodyStore, error) {
 		return inner, nil
 	}
 	return relay.NewRelayStore(opts.RelayBase, opts.URL, inner)
+}
+
+func defaultIrohStoreRoot() string {
+	switch runtime.GOOS {
+	case "windows":
+		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
+			return filepath.Join(local, "Spore", "Iroh")
+		}
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, "AppData", "Local", "Spore", "Iroh")
+		}
+	case "darwin":
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, "Library", "Application Support", "Spore", "Iroh")
+		}
+	default:
+		if data := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); data != "" {
+			return filepath.Join(data, "spore", "iroh")
+		}
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, ".local", "share", "spore", "iroh")
+		}
+	}
+	return "iroh-data"
+}
+
+func irohE2Config(url, token, relayBase string) (store.IrohConfig, error) {
+	rest, ok := strings.CutPrefix(url, "iroh://")
+	if !ok || strings.TrimSpace(rest) != "" {
+		return store.IrohConfig{}, errors.New("-store iroh:// does not take a suffix; configure the local index with SPORE_IROH_INDEX")
+	}
+	if token != "" {
+		return store.IrohConfig{}, errors.New("-store-token applies to HTTP mailbox stores, not iroh://")
+	}
+	if relayBase != "" {
+		return store.IrohConfig{}, errors.New("-relay applies to an HTTP mailbox store, not iroh://")
+	}
+	root := strings.TrimSpace(os.Getenv("SPORE_IROH_STORE"))
+	if root == "" {
+		root = defaultIrohStoreRoot()
+	}
+	indexPath := strings.TrimSpace(os.Getenv("SPORE_IROH_INDEX"))
+	if indexPath == "" {
+		indexPath = filepath.Join(root, "iroh-index.json")
+	}
+	return store.IrohConfig{Cmd: strings.TrimSpace(os.Getenv("SPORE_IROH_BIN")), IndexPath: indexPath}, nil
 }
