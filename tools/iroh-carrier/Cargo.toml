@@ -15,7 +15,7 @@ path = "src/main.rs"
 anyhow = "1.0.100"
 bytes = "1.11"
 iroh = "=1.2.0"
-iroh-blobs = "=0.103.0"
+iroh-blobs = "=0.103.1"
 # The `rt-multi-thread` feature is required by iroh-blobs 0.103. The sidecar
 # also uses bounded async file/process I/O and timeout support.
 tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
