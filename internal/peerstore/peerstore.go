@@ -76,6 +76,39 @@ func Fetch(ctx context.Context, addr string, cid [32]byte) ([]byte, error) {
 	return classifyWithLegacyFallback(payload, cid)
 }
 
+// Put sends the body for cid to the peer at addr. The peer stores the body
+// and confirms receipt with a response frame. Errors map the reference status
+// codes to store sentinels where they exist.
+func Put(ctx context.Context, addr string, cid [32]byte, body []byte) error {
+	encoded := make([]byte, hex.EncodedLen(len(body)))
+	hex.Encode(encoded, body)
+	req := []byte(`{"put":{"cid":"` + hex.EncodeToString(cid[:]) + `","body":"` + string(encoded) + `"}`)
+	d := net.Dialer{Timeout: dialTO}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("peerstore: dial %s: %w", addr, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(ioTO))
+
+	if _, err := conn.Write(frameBytes(req)); err != nil {
+		return fmt.Errorf("peerstore: write request: %w", err)
+	}
+	payload, err := readFrame(conn)
+	if err != nil {
+		return err
+	}
+	// classifyWithLegacyFallback adds the WIRE_SPEC §5 old-server tolerance:
+	// a raw-body response (no status byte) is accepted when the whole payload
+	// hashes to the requested CID. New-style status-byte servers behave
+	// exactly as before.
+	_, err = classifyWithLegacyFallback(payload, cid)
+	if err != nil {
+		return fmt.Errorf("peerstore: put failed: %w", err)
+	}
+	return nil
+}
+
 // classify is the pure response-dispatch: status byte, then integrity.
 // Extracted so fuzzing can drive it without sockets (audit H4 — a ciphertext
 // body may legitimately start with ASCII '4' or '5'; only the status byte

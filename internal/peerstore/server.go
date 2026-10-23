@@ -149,6 +149,31 @@ func servePeerConn(conn net.Conn, bodyStore store.Store) {
 		_ = writeResponseFrame(conn, 0x01, []byte("400 bad request"))
 		return
 	}
+
+	// Check if this is a PUT request
+	if isPutRequest(raw) {
+		cid, body, err := decodePutRequest(raw)
+		if err != nil {
+			message := "400 bad request"
+			if errors.Is(err, errBadPeerCID) {
+				message = "400 bad cid"
+			}
+			_ = writeResponseFrame(conn, 0x01, []byte(message))
+			return
+		}
+		if len(body) > maxPeerBodyBytes {
+			_ = writeResponseFrame(conn, 0x01, []byte("413 body too large"))
+			return
+		}
+		if err := bodyStore.Put(cid, body, time.Now().Add(24*time.Hour)); err != nil {
+			_ = writeResponseFrame(conn, 0x01, []byte("500 store error"))
+			return
+		}
+		_ = writeResponseFrame(conn, 0x00, []byte("ok"))
+		return
+	}
+
+	// Fetch request
 	cid, err := decodePeerRequest(raw)
 	if err != nil {
 		message := "400 bad request"
@@ -272,4 +297,68 @@ func writeAll(w io.Writer, b []byte) error {
 		b = b[n:]
 	}
 	return nil
+}
+
+func isPutRequest(raw []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return false
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		key, ok := keyToken.(string)
+		if ok && key == "put" {
+			return true
+		}
+	}
+	return false
+}
+
+func decodePutRequest(raw []byte) ([32]byte, []byte, error) {
+	var cid [32]byte
+	var body []byte
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return cid, nil, errBadPeerRequest
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return cid, nil, errBadPeerRequest
+		}
+		key, ok := keyToken.(string)
+		if !ok || key != "put" {
+			return cid, nil, errBadPeerRequest
+		}
+		// Decode the put object
+		var putObj struct {
+			CID  string `json:"cid"`
+			Body string `json:"body"`
+		}
+		if err := decoder.Decode(&putObj); err != nil {
+			return cid, nil, errBadPeerRequest
+		}
+		if len(putObj.CID) != hex.EncodedLen(len(cid)) {
+			return cid, nil, errBadPeerCID
+		}
+		decoded, err := hex.DecodeString(putObj.CID)
+		if err != nil || len(decoded) != len(cid) {
+			return cid, nil, errBadPeerCID
+		}
+		copy(cid[:], decoded)
+		body, err = hex.DecodeString(putObj.Body)
+		if err != nil {
+			return cid, nil, errBadPeerRequest
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return cid, nil, errBadPeerRequest
+	}
+	return cid, body, nil
 }

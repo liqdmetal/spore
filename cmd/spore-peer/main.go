@@ -27,7 +27,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: spore-peer <version|serve|fetch> [flags]")
+		return errors.New("usage: spore-peer <version|serve|fetch|put> [flags]")
 	}
 	switch args[0] {
 	case "version":
@@ -37,8 +37,10 @@ func run(args []string) error {
 		return serve(args[1:])
 	case "fetch":
 		return fetch(args[1:])
+	case "put":
+		return put(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (use version, serve, or fetch)", args[0])
+		return fmt.Errorf("unknown command %q (use version, serve, fetch, or put)", args[0])
 	}
 }
 
@@ -147,5 +149,44 @@ func fetch(args []string) error {
 		return fmt.Errorf("fetch: close output: %w", err)
 	}
 	complete = true
+	return nil
+}
+
+func put(args []string) error {
+	fs := flag.NewFlagSet("put", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	addr := fs.String("addr", "", "peer host:port")
+	cidText := fs.String("cid", "", "64-hex SHA-256 body CID")
+	body := fs.String("body", "", "body file path")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("put: unexpected positional arguments")
+	}
+	if *addr == "" || *cidText == "" || *body == "" {
+		return errors.New("put requires --addr, --cid, and --body")
+	}
+	cidBytes, err := hex.DecodeString(*cidText)
+	if err != nil || len(cidBytes) != 32 {
+		return errors.New("put: cid must be exactly 64 hexadecimal characters")
+	}
+	var cid [32]byte
+	copy(cid[:], cidBytes)
+
+	bodyBytes, err := os.ReadFile(*body)
+	if err != nil {
+		return fmt.Errorf("put: read body: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if err := peerstore.Put(ctx, *addr, cid, bodyBytes); err != nil {
+		return err
+	}
 	return nil
 }
