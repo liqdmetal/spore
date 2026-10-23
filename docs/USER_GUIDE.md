@@ -52,9 +52,9 @@ For any messaging mode you need:
      convenience-vs-privacy tradeoff: a public daemon is fine for name
      resolution and confirming that a transaction was mined, but you are
      trusting that node operator more than if you ran your own.
-3. **An E2 body store** — your mailbox or another supported store. It holds
-   only encrypted, TTL-bound bodies; new sends do not use the historical
-   `spore-peer` one-shot transport.
+3. **An E2 body store** — your mailbox, Nostr, or the optional direct-peer
+   path. All new bodies remain X3DH/Double-Ratchet ciphertext; the older Rust
+   `spore-peer` one-shot format is receive-only compatibility.
 
    Sending to *someone else's* hosted mailbox needs none of their credentials:
    add `-relay https://relay.<their-host>` and the body travels through that
@@ -153,8 +153,8 @@ printf 'hello\n' | spore whisper send \
 
 Use `-file /path/to/doc` to send a long body. The body is encrypted by the
 Double Ratchet and written to the configured off-chain store; the DERO
-transaction carries only the E2 pointer. No `spore-peer` process or legacy
-long-term body key is involved for new messages.
+transaction carries only the E2 pointer. Direct-peer mode uses `spore-peer`
+only as a ciphertext fetch server; it does not replace or weaken E2.
 
 ### Step 2 — recipient fetches and decrypts
 
@@ -174,10 +174,15 @@ spore whisper recv \
 When the E2 pointer arrives, the receiver fetches the ciphertext by CID,
 verifies the deadline and content address, advances the ratchet, erases the
 consumed message key, and prints the plaintext locally. The old `-key`,
-`-peer-addr`, and `-peer-bin` flags are for receiving pre-upgrade records only.
+`-peer-addr`, and `-peer-bin` flags are for pre-upgrade records; new direct peer
+fetch uses `-store peer://<reachable-host:port>`.
 
-**Both peers need access to the configured body store.** The DERO chain carries
-only the pointer; it never carries the body.
+**Body-store pairing:** for HTTP/Nostr, both peers use the selected store. For
+direct peer, the sender uses `-store disk://<body-dir>` and runs
+`spore-peer serve --dir <body-dir> --listen <VPN-IP>:8099`; the receiver uses
+`-store peer://<sender-VPN-IP>:8099`. The server defaults to loopback, has no
+TLS/authentication, and exposes endpoint/fetch timing. Use only loopback or a
+trusted LAN/VPN. DERO carries only the E2 pointer, never the body.
 
 > Bare `spore whisper recv` remains available for old native DERO whispers.
 > It does not decode new E2 pointers.

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -65,13 +66,12 @@ func Fetch(ctx context.Context, binary, addr string, cid [32]byte) ([]byte, erro
 		binary = "spore-peer"
 	}
 	cidHex := hex.EncodeToString(cid[:])
-	tmp, err := os.CreateTemp("", "compost-body-*")
+	tmpDir, err := os.MkdirTemp("", "spore-peer-fetch-*")
 	if err != nil {
 		return nil, err
 	}
-	out := tmp.Name()
-	tmp.Close()
-	defer os.Remove(out)
+	defer os.RemoveAll(tmpDir)
+	out := filepath.Join(tmpDir, "body.bin")
 
 	cctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()

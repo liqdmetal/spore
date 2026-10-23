@@ -31,6 +31,16 @@ type DiskStore struct {
 	dir string
 }
 
+// NewDiskStoreFromURL opens a local body store from a disk:// URL. It accepts
+// disk:///absolute/path on Unix and disk://C:/absolute/path on Windows.
+func NewDiskStoreFromURL(uri string) (*DiskStore, error) {
+	dir, ok := strings.CutPrefix(uri, "disk://")
+	if !ok || strings.TrimSpace(dir) == "" {
+		return nil, errors.New("store: disk URL must be disk:// followed by a directory")
+	}
+	return NewDiskStore(filepath.FromSlash(dir))
+}
+
 // NewDiskStore opens (creating if needed) a body store rooted at dir.
 func NewDiskStore(dir string) (*DiskStore, error) {
 	if dir == "" {
@@ -147,10 +157,9 @@ func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 }
 
 func (s *DiskStore) Get(cid [32]byte) ([]byte, error) {
-	// Body can be arbitrarily large (whisper longmsg payloads); bound reads to prevent
-	// allocation DoS via a crafted store file. Max 4 MiB — enough for any real message
-	// while rejecting pathological inputs.
-	const maxBodyBytes = 4 << 20
+	// E2 frames may be up to 16 MiB plus framing; keep a hard bound on reads
+	// to prevent allocation DoS via a crafted store file.
+	const maxBodyBytes = 20 << 20
 	f, err := os.Open(s.bodyPath(cid))
 	if err != nil {
 		if os.IsNotExist(err) {

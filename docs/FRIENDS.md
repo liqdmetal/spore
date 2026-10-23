@@ -9,13 +9,19 @@ RPC server, and the `spore` binary. Everything else is a command.
 - Linux/macOS/Windows binaries: https://github.com/liqdmetal/spore/releases/latest
 - pick your OS, download `spore-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
 
+**Optional direct-peer server:**
+- Download the matching `spore-peer-<os>-<arch>` release asset if you will serve E2 bodies from your own machine. `spore-peer` defaults to loopback; remote use requires a trusted reachable LAN/VPN endpoint.
+
 **E2 kit and body store** (required for new messages):
 - Run `spore init -dir ~/.spore` and keep the identity/state files private.
 - Configure the recipient's mailbox or another supported body store.
 - New DERO messages use X3DH + Double Ratchet; old native records remain receive-only.
 
-The optional Rust `spore-peer` compatibility transport is only for historical
-long-body records and is not used for new E2 sends.
+New E2 bodies can use the Go `spore-peer serve` direct-fetch service: the sender
+writes ciphertext to `disk://<body-dir>`, and the receiver fetches from
+`peer://<reachable-host:port>`. The older Rust compatibility transport remains
+for historical long-body records. Direct TCP is unauthenticated and exposes
+endpoint/fetch timing; use loopback or a trusted VPN/LAN.
 
 
 ## 2. Start your wallet RPC
@@ -79,8 +85,9 @@ spore whisper send-long \
   -state-dir ~/.spore/state -state-key ~/.spore/state.key \
   -ringsize 16
 ```
-The body is ratcheted and stored off-chain; no `spore-peer` process is used for
-new E2 sends. Historical native/one-shot records remain receive-only.
+The body is ratcheted and stored off-chain. New E2 can use HTTP/Nostr or the
+optional `disk://` + `spore-peer serve` direct path; the old Rust one-shot body
+format remains receive-only.
 
 ## Notes
 - Your wallet must stay running while you chat (it signs + delivers).

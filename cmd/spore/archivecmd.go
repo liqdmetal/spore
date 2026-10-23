@@ -126,7 +126,7 @@ func buildArchive(dir, ipfsAPI, irohCmd, indexDir string) (*store.MultiStore, er
 func archiveFlags(fs *flag.FlagSet) (dir, ipfsAPI, iroh, index *string) {
 	dir = fs.String("dir", "", "local disk mirror directory")
 	ipfsAPI = fs.String("ipfs", "", "Kubo HTTP API URL (e.g. http://127.0.0.1:5001)")
-	iroh = fs.String("iroh", "", "iroh CLI binary to use as a substrate (must be on PATH or an absolute path)")
+	iroh = fs.String("iroh", "", "Spore Iroh sidecar to use as a substrate (must be on PATH or an absolute path)")
 	index = fs.String("index-dir", "", "where to keep the substrate indexes (default: current dir)")
 	return
 }

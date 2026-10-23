@@ -294,12 +294,14 @@ forever-free.
 See [`ROADMAP.md`](ROADMAP.md). Shipped recently: E2 (0xE2) forward-private
 transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
 (contacts/threads/search), offline compose queue, single-use prekey batches,
-one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, and
-serverless bodies over `spore-peer` (`sporepeer://` store backend, `spore
-serve` daemon, cross-binary Go↔Rust interop tests). Next: tokenized search,
-in-chat settlement (escrow/swap), and real-chain EVM deployment.
+one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, serverless bodies over `spore-peer`
+(`sporepeer://` store backend, `spore serve` daemon, cross-binary Go↔Rust
+interop tests), and direct E2 body fetch via `disk://` + `spore-peer serve`.
+Next: tokenized search, in-chat settlement (escrow/swap), and real-chain EVM
+deployment.
 
 ## License
 
 BSD 3-Clause. Spore is clean-room Go; it imports no derohe source. derohe-rs
-(the Rust port used for L1) and spore-peer are separately BSD-3-Clause.
+(the Rust port used for L1) and the historical Rust `spore-peer` remain separate
+BSD-3-Clause projects; the E2 direct-body server is `cmd/spore-peer` in this repo.

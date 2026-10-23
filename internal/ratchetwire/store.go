@@ -21,17 +21,34 @@ func PutBody(st BodyStore, body []byte, deadline time.Time) (Pointer, error) {
 		return Pointer{}, ErrBadFrame
 	}
 	cid := BodyCID(body)
-	if err := st.Put(cid, body, deadline); err != nil {
+	ptr := Pointer{CID: cid, BurnDeadline: uint64(deadline.Unix())}
+	if locatorStore, ok := st.(store.LocatorStore); ok {
+		locator, err := locatorStore.PutWithLocator(cid, body, deadline)
+		if err != nil {
+			return Pointer{}, err
+		}
+		ptr.IrohHash, ptr.HasIrohHash = locator, true
+	} else if err := st.Put(cid, body, deadline); err != nil {
 		return Pointer{}, err
 	}
-	return Pointer{CID: cid, BurnDeadline: uint64(deadline.Unix())}, nil
+	return ptr, nil
 }
 
 func GetBody(st BodyStore, p Pointer, now time.Time) ([]byte, error) {
 	if p.BurnDeadline == 0 || now.Unix() >= int64(p.BurnDeadline) {
 		return nil, ErrExpired
 	}
-	body, err := st.Get(p.CID)
+	var body []byte
+	var err error
+	if p.HasIrohHash {
+		locatorStore, ok := st.(store.LocatorStore)
+		if !ok {
+			return nil, ErrPortableLocatorUnsupported
+		}
+		body, err = locatorStore.GetWithLocator(p.CID, p.IrohHash)
+	} else {
+		body, err = st.Get(p.CID)
+	}
 	if err != nil {
 		return nil, err
 	}

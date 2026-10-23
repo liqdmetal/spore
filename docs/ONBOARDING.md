@@ -131,13 +131,16 @@ spore prekeybatch push -in ~/.spore/batch2.json \
 
 ### Choose where your off-chain bodies live (`-store`)
 
-The mailbox above is one option. `-store` picks the off-chain body store, and there are three postures:
+The mailbox above is one option. `-store` picks the off-chain body store, and there are four postures:
 
 | Posture | `-store` | You run | Prekey discovery |
 |---|---|---|---|
 | Home node (default, encouraged) | `http://127.0.0.1:8080` | your mailbox (step 2 above) | your mailbox serves `GET /prekey` |
-| Serverless | `nostr://relay.damus.io,nos.lol` | nothing | manual bundle exchange only |
+| Serverless commons | `nostr://relay.damus.io,nos.lol` | no body server | manual bundle exchange only |
 | Hosted (Model B) | `https://mailbox.example.net` | nothing — you pay | the operator's mailbox |
+| Direct peer (CLI only) | sender: `disk://<body-dir>`; receiver: `peer://<reachable-host:port>` | sender runs `spore-peer serve` on a trusted LAN/VPN | manual bundle and endpoint exchange |
+
+Direct peer is not a NAT-traversing or anonymous service: the receiver sees the serving endpoint, and the sender must stay reachable until fetch. It serves ciphertext only; the transport itself is unauthenticated TCP, so keep it on loopback or a trusted VPN/LAN.
 
 Hosted is the cleanest first-message path for a beta user who does not want to run a node: the operator runs a blind courier for you. See the hosted-beta flow below and MODEL_B_SERVICE.md.
 

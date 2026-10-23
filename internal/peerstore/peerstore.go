@@ -31,7 +31,7 @@ import (
 const (
 	maxFrame = 64 << 20 // 64 MiB, same cap as the reference serve
 	dialTO   = 10 * time.Second
-	ioTO     = 30 * time.Second
+	ioTO     = 2 * time.Minute
 )
 
 var (

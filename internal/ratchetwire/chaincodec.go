@@ -41,10 +41,15 @@ func (XMRChainCodec) DecodePointer(chain.Payload) (PointerPayload, bool) {
 type CanonicalChainCodec struct{}
 
 func (CanonicalChainCodec) EncodePointer(p PointerPayload) (chain.Payload, error) {
-	if p.Version != PointerV1 || p.BurnDeadline == 0 {
+	if (p.Version != PointerV1 && p.Version != PointerV2) || p.BurnDeadline == 0 || p.RouteOmitted ||
+		(p.Version == PointerV1 && p.IrohHash != ([32]byte{})) {
 		return nil, fmt.Errorf("ratchetwire: invalid pointer")
 	}
-	return p.MarshalBinary(), nil
+	wire := p.MarshalBinary()
+	if wire == nil {
+		return nil, fmt.Errorf("ratchetwire: invalid pointer")
+	}
+	return wire, nil
 }
 
 func (CanonicalChainCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
@@ -54,17 +59,35 @@ func (CanonicalChainCodec) DecodePointer(p chain.Payload) (PointerPayload, bool)
 
 type DeroChainCodec struct{}
 
-// DERO's native transaction payload is permanently retained, so this codec
-// carries only the opaque E2 route/CID/deadline pointer and never plaintext.
+// DERO permanently retains payloads. V1 carries R/C/D. V2 uses the distinct
+// W=0xE221 marker and substitutes I for R, so V1 readers fail closed and the
+// portable BLAKE3 locator fits the same 111-byte budget. The receiver recomputes
+// the omitted route from the fetched frame after SHA-256 CID verification.
 func (DeroChainCodec) EncodePointer(p PointerPayload) (chain.Payload, error) {
-	if p.Version != PointerV1 || p.BurnDeadline == 0 {
+	if (p.Version != PointerV1 && p.Version != PointerV2) || p.BurnDeadline == 0 ||
+		(p.Version == PointerV1 && (p.IrohHash != ([32]byte{}) || p.RouteOmitted)) ||
+		(p.Version == PointerV2 && p.RouteOmitted && p.Route != ([32]byte{})) {
 		return nil, fmt.Errorf("ratchetwire: invalid pointer")
 	}
-	args := anchor.Arguments{
-		{Name: "W", DataType: anchor.DataUint64, Value: uint64(0xE220)},
-		{Name: "R", DataType: anchor.DataHash, Value: hex.EncodeToString(p.Route[:])},
-		{Name: "C", DataType: anchor.DataHash, Value: hex.EncodeToString(p.CID[:])},
-		{Name: "D", DataType: anchor.DataUint64, Value: p.BurnDeadline},
+	kind := uint64(0xE220)
+	args := anchor.Arguments{{Name: "W", DataType: anchor.DataUint64, Value: kind}}
+	if p.Version == PointerV1 {
+		args = append(args, anchor.Argument{Name: "R", DataType: anchor.DataHash, Value: hex.EncodeToString(p.Route[:])})
+	} else {
+		kind = 0xE221
+		args[0].Value = kind
+		args = append(args, anchor.Argument{Name: "I", DataType: anchor.DataHash, Value: hex.EncodeToString(p.IrohHash[:])})
+	}
+	args = append(args,
+		anchor.Argument{Name: "C", DataType: anchor.DataHash, Value: hex.EncodeToString(p.CID[:])},
+		anchor.Argument{Name: "D", DataType: anchor.DataUint64, Value: p.BurnDeadline},
+	)
+	packed, err := dero.PackArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	if len(packed) > dero.Payload0Limit {
+		return nil, fmt.Errorf("ratchetwire: DERO pointer is %d bytes, payload-0 limit is %d", len(packed), dero.Payload0Limit)
 	}
 	return dero.ArgsToPayload(args)
 }
@@ -76,7 +99,7 @@ func (DeroChainCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
 	}
 	var out PointerPayload
 	var kind, deadline uint64
-	var haveW, haveR, haveC, haveD bool
+	var haveW, haveR, haveC, haveD, seenI, haveI bool
 	for _, a := range args {
 		switch a.Name + a.DataType {
 		case "W" + anchor.DataUint64:
@@ -91,11 +114,32 @@ func (DeroChainCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
 		case "D" + anchor.DataUint64:
 			deadline, err = asUint(a.Value)
 			haveD = err == nil
+		case "I" + anchor.DataHash:
+			seenI = true
+			out.IrohHash, err = asHash(a.Value)
+			haveI = err == nil
 		}
 	}
-	out.Version = PointerV1
+	if !haveW || !haveC || !haveD || deadline == 0 {
+		return PointerPayload{}, false
+	}
 	out.BurnDeadline = deadline
-	return out, haveW && kind == 0xE220 && haveR && haveC && haveD && deadline != 0
+	switch kind {
+	case 0xE220:
+		if !haveR || seenI {
+			return PointerPayload{}, false
+		}
+		out.Version = PointerV1
+	case 0xE221:
+		if haveR || !seenI || !haveI {
+			return PointerPayload{}, false
+		}
+		out.Version = PointerV2
+		out.RouteOmitted = true
+	default:
+		return PointerPayload{}, false
+	}
+	return out, true
 }
 
 func asUint(v interface{}) (uint64, error) {
@@ -147,15 +191,21 @@ func asHash(v interface{}) ([32]byte, error) {
 type JSONCodec struct{}
 
 func (JSONCodec) EncodePointer(p PointerPayload) (chain.Payload, error) {
-	if p.Version != PointerV1 || p.BurnDeadline == 0 {
+	if (p.Version != PointerV1 && p.Version != PointerV2) || p.BurnDeadline == 0 || p.RouteOmitted ||
+		(p.Version == PointerV1 && p.IrohHash != ([32]byte{})) {
 		return nil, fmt.Errorf("ratchetwire: invalid pointer")
+	}
+	irohHash := ""
+	if p.Version == PointerV2 {
+		irohHash = hex.EncodeToString(p.IrohHash[:])
 	}
 	return json.Marshal(struct {
 		V byte   `json:"v"`
 		R string `json:"r"`
 		C string `json:"c"`
 		D uint64 `json:"d"`
-	}{p.Version, hex.EncodeToString(p.Route[:]), hex.EncodeToString(p.CID[:]), p.BurnDeadline})
+		I string `json:"i,omitempty"`
+	}{p.Version, hex.EncodeToString(p.Route[:]), hex.EncodeToString(p.CID[:]), p.BurnDeadline, irohHash})
 }
 
 func (JSONCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
@@ -164,8 +214,9 @@ func (JSONCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
 		R string `json:"r"`
 		C string `json:"c"`
 		D uint64 `json:"d"`
+		I string `json:"i"`
 	}
-	if json.Unmarshal(p, &x) != nil || x.V != PointerV1 || x.D == 0 {
+	if json.Unmarshal(p, &x) != nil || x.D == 0 {
 		return PointerPayload{}, false
 	}
 	var out PointerPayload
@@ -176,7 +227,21 @@ func (JSONCodec) DecodePointer(p chain.Payload) (PointerPayload, bool) {
 	}
 	copy(out.Route[:], r)
 	copy(out.CID[:], c)
-	out.Version = x.V
 	out.BurnDeadline = x.D
+	switch x.V {
+	case PointerV1:
+		if x.I != "" {
+			return PointerPayload{}, false
+		}
+	case PointerV2:
+		irohHash, err := hex.DecodeString(x.I)
+		if err != nil || len(irohHash) != 32 {
+			return PointerPayload{}, false
+		}
+		copy(out.IrohHash[:], irohHash)
+	default:
+		return PointerPayload{}, false
+	}
+	out.Version = x.V
 	return out, true
 }

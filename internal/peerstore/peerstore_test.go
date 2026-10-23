@@ -1,6 +1,7 @@
 package peerstore
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,11 +115,10 @@ func TestPeerStoreWritesUnsupported(t *testing.T) {
 	}
 }
 
-// TestFetchAgainstRealRustPeer is the interop proof: it runs the shipped
-// `spore-peer serve` binary, plants a body file, and fetches it through the
-// Go client. Skipped when the Rust binary is not present (e.g. CI without a
-// Rust toolchain build).
-func TestFetchAgainstRealRustPeer(t *testing.T) {
+// TestFetchAgainstSporePeerServeCommand exercises the built CLI over loopback.
+// It is skipped when the command binary is not available; set SPORE_PEER_BIN to
+// the binary built from ./cmd/spore-peer to run it.
+func TestFetchAgainstSporePeerServeCommand(t *testing.T) {
 	exe := os.Getenv("SPORE_PEER_BIN")
 	if exe == "" {
 		exe = "spore-peer"
@@ -127,36 +127,57 @@ func TestFetchAgainstRealRustPeer(t *testing.T) {
 		t.Skip("spore-peer binary not found — set SPORE_PEER_BIN to the built binary")
 	}
 	dir := t.TempDir()
-	body := []byte("real-ciphertext-from-sender-node-39a1")
+	body := []byte("synthetic E2 ciphertext for peer CLI test")
 	cid := sha256.Sum256(body)
 	if err := os.WriteFile(filepath.Join(dir, hex.EncodeToString(cid[:])+".body"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+
+	cmd := exec.Command(exe, "serve", "--listen", "127.0.0.1:0", "--dir", dir)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-	cmd := exec.Command(exe, "serve", "--listen", "127.0.0.1:"+strconv.Itoa(port), "--dir", dir)
+	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
-		t.Skipf("cannot start spore-peer: %v", err)
+		t.Fatalf("start spore-peer: %v", err)
 	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	deadline := time.Now().Add(15 * time.Second)
-	var got []byte
-	var lastErr error
-	for time.Now().Before(deadline) {
-		got, lastErr = Fetch(context.Background(), "127.0.0.1:"+strconv.Itoa(port), cid)
-		if lastErr == nil {
-			break
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
 		}
-		time.Sleep(100 * time.Millisecond)
+		_ = cmd.Wait()
+	})
+
+	ready := make(chan string, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err != nil {
+			readErr <- err
+			return
+		}
+		ready <- strings.TrimSpace(line)
+	}()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	var line string
+	select {
+	case line = <-ready:
+	case err := <-readErr:
+		t.Fatalf("spore-peer exited before announcing listener: %v", err)
+	case <-timer.C:
+		t.Fatal("spore-peer did not announce listener")
 	}
-	if lastErr != nil {
-		t.Fatalf("fetch from real peer: %v", lastErr)
+	if !strings.HasPrefix(line, "LISTEN ") {
+		t.Fatalf("unexpected readiness line %q", line)
+	}
+	addr := strings.TrimPrefix(line, "LISTEN ")
+	got, err := Fetch(context.Background(), addr, cid)
+	if err != nil {
+		t.Fatalf("fetch from spore-peer: %v", err)
 	}
 	if string(got) != string(body) {
-		t.Fatalf("body mismatch: got %q want %q", got, body)
+		t.Fatalf("body mismatch: got %q want byte-exact body", got)
 	}
 }

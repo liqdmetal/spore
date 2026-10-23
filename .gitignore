@@ -50,6 +50,13 @@ relay-data/
 solana-program/*-keypair.json
 solana-program/target/
 
+# Local test credentials and generated carrier state; never commit these.
+/test_account.json
+/spike-payload.bin
+/internal/store/iroh-data/
+/tools/iroh-carrier/sp_a.log
+/tools/iroh-carrier/spike-payload.bin
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

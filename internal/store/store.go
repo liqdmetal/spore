@@ -34,3 +34,12 @@ type Store interface {
 	// Len reports the number of stored bodies.
 	Len() int
 }
+
+// LocatorStore is implemented by carriers whose native content address differs
+// from Spore's SHA-256 CID. PutWithLocator returns the portable native locator;
+// callers must carry it alongside the SHA-256 CID. GetWithLocator retrieves by
+// that locator, while the caller still verifies the returned bytes against cid.
+type LocatorStore interface {
+	PutWithLocator(cid [32]byte, body []byte, deadline time.Time) ([32]byte, error)
+	GetWithLocator(cid [32]byte, locator [32]byte) ([]byte, error)
+}

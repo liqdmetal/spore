@@ -1,0 +1,21 @@
+[package]
+name = "spore-iroh"
+version = "0.1.0"
+edition = "2024"
+description = "iroh sidecar for spore: self-hosted content-addressed P2P body store (blob CLI + serve node)"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+rust-version = "1.91"
+
+[[bin]]
+name = "spore-iroh"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+bytes = "1.11"
+iroh = "=1.2.0"
+iroh-blobs = "=0.103.0"
+# The `rt-multi-thread` feature is required by iroh-blobs 0.103. The sidecar
+# also uses bounded async file/process I/O and timeout support.
+tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }

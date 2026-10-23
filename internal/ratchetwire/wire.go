@@ -26,14 +26,18 @@ const (
 )
 
 var (
-	ErrBadFrame = errors.New("ratchetwire: bad frame")
-	ErrExpired  = errors.New("ratchetwire: frame expired")
+	ErrBadFrame                   = errors.New("ratchetwire: bad frame")
+	ErrExpired                    = errors.New("ratchetwire: frame expired")
+	ErrPortableLocatorUnsupported = errors.New("ratchetwire: body store cannot resolve the pointer's portable locator")
 )
 
 type Pointer struct {
 	Route        [32]byte
-	CID          [32]byte
+	CID          [32]byte // Spore SHA-256 integrity commitment
 	BurnDeadline uint64
+	IrohHash     [32]byte // optional portable Iroh BLAKE3 fetch locator
+	HasIrohHash  bool
+	RouteOmitted bool // DERO V2 omits the redundant route hash to fit payload-0
 }
 
 func (p Pointer) Deadline() time.Time {
@@ -171,30 +175,31 @@ func PutFrame(st store.Store, f Frame) (Pointer, error) {
 	}
 	cid := BodyCID(b)
 	deadline := time.Unix(int64(f.Deadline), 0)
-	if err := st.Put(cid, b, deadline); err != nil {
+	ptr := Pointer{Route: RouteKey(f.SessionID), CID: cid, BurnDeadline: f.Deadline}
+	if locatorStore, ok := st.(store.LocatorStore); ok {
+		locator, err := locatorStore.PutWithLocator(cid, b, deadline)
+		if err != nil {
+			return Pointer{}, err
+		}
+		ptr.IrohHash, ptr.HasIrohHash = locator, true
+	} else if err := st.Put(cid, b, deadline); err != nil {
 		return Pointer{}, err
 	}
-	return Pointer{Route: RouteKey(f.SessionID), CID: cid, BurnDeadline: f.Deadline}, nil
+	return ptr, nil
 }
 
 // FetchFrame retrieves and verifies an off-chain frame; expired ciphertext is
 // refused before any session state is touched.
 func FetchFrame(st store.Store, p Pointer, now time.Time) (Frame, error) {
-	if p.BurnDeadline == 0 || now.Unix() >= int64(p.BurnDeadline) {
-		return Frame{}, ErrExpired
-	}
-	body, err := st.Get(p.CID)
+	body, err := GetBody(st, p, now)
 	if err != nil {
 		return Frame{}, err
-	}
-	if BodyCID(body) != p.CID {
-		return Frame{}, fmt.Errorf("%w: cid mismatch", ErrBadFrame)
 	}
 	f, err := Parse(body)
 	if err != nil {
 		return Frame{}, err
 	}
-	if f.Deadline != p.BurnDeadline || RouteKey(f.SessionID) != p.Route {
+	if f.Deadline != p.BurnDeadline || (!p.RouteOmitted && RouteKey(f.SessionID) != p.Route) {
 		return Frame{}, fmt.Errorf("%w: pointer binding", ErrBadFrame)
 	}
 	if f.Deadline > 0 && now.Unix() >= int64(f.Deadline) {

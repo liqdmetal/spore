@@ -51,19 +51,34 @@ These are mutually exclusive; the CLI refuses both or neither. Discovery is a tr
 
 `PUT /prekey-batch` accepts N **pre-signed public bundles** (generated offline by `spore prekeybatch gen` — the identity/SPK private keys never reach the mailbox). `GET /prekey` **pops one bundle per request** (durable before the response), so two senders can never receive the same one-time prekey. On exhaustion the mailbox falls back to the static `/prekey` bundle when one was published (degraded 3-DH mode, documented in `docs/RATCHET.md` §10), else 404. Restart never resurrects a popped bundle.
 
-## Off-chain body stores: mailbox vs. the serverless commons
+## Off-chain body stores and direct E2 peer
 
-The body store is `-store`. Three schemes, one `store.Store` seam:
+`-store` selects where the ratchet-encrypted frame lives. Six schemes, one `store.Store` seam:
 
-| `-store` | Who runs it | Best for |
+| `-store` | Who runs it | Best for / limits |
 |---|---|---|
-| `http://host:port` | your mailbox, or a paid Model-B operator | large attachments, guaranteed TTL reaping, a server you control |
-| `nostr://relay1,relay2` | **nobody — a public relay commons** | zero infrastructure; any subset of relays serves a body by CID |
-| `sporepeer://host:port` | **nobody — only the two endpoints** | the no-SERVERS endgame proper: the sender's node holds and serves; the receiver fetches P2P |
+| `http(s)://host` | your mailbox or a paid Model-B operator | hosted delivery, larger attachments, managed TTL reaping |
+| `nostr://relay1,relay2` | public relay commons | no operator-owned mailbox; relay retention/deletion remains best-effort |
+| `disk://<directory>` | the sender | local durable E2 body; pair with `spore-peer serve` |
+| `peer://<host:port>` | receiver connects directly to sender | receiver-only direct TCP fetch; no DHT, NAT traversal, TLS, or authentication |
+| `iroh://` | sender writes to local Iroh store; receiver fetches through paired provider(s) | E2 Pointer V2 carries both SHA-256 CID and Iroh BLAKE3 locator; Go adapter and Windows release-binary loopback verified; public-network behavior unverified |
+| `sporepeer://host:port` | nobody — only the two endpoints | the no-SERVERS endgame proper: the sender's node holds and serves; the receiver fetches P2P |
 
 `sporepeer://` rides the spore-peer JSON subset (WIRE_SPEC §5): pair it with `-store-dir ~/.spore/hold` (where YOUR bodies live) and `-store-serve 0.0.0.0:8099` (bind the listener your contact points at). The `spore` binary then serves bodies itself — a drop-in Go replacement for `spore-peer serve --dir` — and fetches from the peer's node by CID, with sha256 verified on every hop and TTL composting on the holder's own disk (on access, or on a background cadence with `-store-reap-every`). Interoperates with the Rust `spore-peer serve/fetch` in both directions, including the old raw-body server fallback.
 
 Honest limits of `sporepeer://`: **both endpoints must be online** for a fetch (the sender's node is the store — that is the privacy property, and the cost); the JSON subset has **no transport auth**, so anyone who can reach the port can fetch whatever ciphertext is still held (inert without the ratchet key; bind to loopback/firewall if that is unacceptable); a fetch fails with `ErrNotFound` when the sender's copy has composted — a retry cannot resurrect a reaped body.
+
+### Direct peer flow (CLI)
+
+The sender writes E2 frames to `disk://<directory>` and runs `spore-peer serve --dir <directory>`. The receiver uses `-store peer://<reachable-host:port>`. The Go server fetches only by CID, verifies `SHA-256(body)`, rejects expired/missing bodies, and reaps local expired files at startup and once per minute. It receives ciphertext only; it never receives ratchet keys.
+
+The server binds to loopback by default. For two devices, use a reachable trusted LAN/VPN address and share it out of band. This is direct host-to-host TCP, not a public relay: the peer sees the serving endpoint and fetch timing, and the sender must remain reachable until retrieval. The browser UI does not expose a direct TCP listener; use HTTP/Nostr there.
+
+### Iroh E2 carrier status
+
+`tools/iroh-carrier/` remains experimental and is not production-certified. Pointer V2 carries both the SHA-256 ciphertext CID and the Iroh BLAKE3 locator, so receivers do not depend on the sender's local index. DERO uses compact `W=0xE221` + `I/C/D` (omitting the redundant route) to stay within the 111-byte payload-0 budget; the receiver still checks the SHA-256 CID before parsing or decrypting. Other pointer codecs carry the route and locator separately.
+
+Local verification now covers Rust unit/process loopback tests, a Windows release-binary transfer with four concurrent writers and four parallel readers, Go Iroh-store round trips, independent indexes, codec round-trips, tampering, and the DERO size limit. CI is configured for Ubuntu/Windows/macOS format, lint, test, and release builds; no hosted run is implied. `iroh-blobs 0.103.0` is pre-1.0, and no public-network test has been run. The Minimal preset omits default relay/address lookup and does not provide NAT traversal. Provider tickets must be exchanged out of band; they are addresses, not access-control tokens. See `tools/iroh-carrier/README.md` for CLI use, limits, build/test commands, and the security boundary.
 
 `nostr://` publishes bodies as signed NIP-01 events (`kind 1977`, tags `cid` + `exp`, content = base64 ciphertext) and fetches by content address. It requires `-store-key`: a **dedicated** signing key, because publishing to a commons is linkable by pubkey — reusing the ratchet identity or a chain key would let a relay tie storage activity to messaging identity. `spore init` generates it at `store.key`, and `panic -home` wipes it.
 

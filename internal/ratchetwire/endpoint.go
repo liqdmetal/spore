@@ -36,7 +36,7 @@ func exportSession(s *ratchet.Session) ([]byte, error) {
 }
 
 func pointerFor(p Pointer) []byte {
-	return PointerPayload{Version: PointerV1, Route: p.Route, CID: p.CID, BurnDeadline: p.BurnDeadline}.MarshalBinary()
+	return PayloadForPointer(p).MarshalBinary()
 }
 
 // SendFirst creates an X3DH init frame, stores it off-chain, and returns the

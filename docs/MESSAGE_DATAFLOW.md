@@ -183,7 +183,7 @@ confidential transaction transport.
 
 1. Scan the recipient wallet and accept only valid E2 pointers for the ratchet
    receiver; the bare legacy receiver handles old native payloads separately.
-2. Fetch the encrypted body by CID, verify its content address and deadline.
+2. Fetch the encrypted body by CID from the selected store and verify its content address and deadline. With direct peer, `peer://` reads from the sender's `disk://` store over the E2 peer TCP protocol; no message key or plaintext reaches the peer server.
 3. X3DH consumes the recipient prekey for a first message; later messages use
    the durable Double Ratchet session.
 4. Open with the one-time message key, advance the receive chain, erase the

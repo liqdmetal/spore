@@ -38,6 +38,32 @@ func TestDiskStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDiskStoreFromURLRoundTrip(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "body store")
+	uri := "disk://" + filepath.ToSlash(dir)
+	s, err := NewDiskStoreFromURL(uri)
+	if err != nil {
+		t.Fatalf("NewDiskStoreFromURL(%q): %v", uri, err)
+	}
+	cid := [32]byte{9}
+	body := []byte("peer ciphertext")
+	if err := s.Put(cid, body, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(cid)
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("Get() = %q, %v", got, err)
+	}
+}
+
+func TestDiskStoreFromURLRejectsInvalidSchemeAndEmptyPath(t *testing.T) {
+	for _, uri := range []string{"", "http://localhost", "disk://"} {
+		if _, err := NewDiskStoreFromURL(uri); err == nil {
+			t.Fatalf("NewDiskStoreFromURL(%q) accepted invalid URL", uri)
+		}
+	}
+}
+
 func TestDiskStoreDeleteAndNotFound(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	var cid [32]byte
@@ -117,8 +143,42 @@ func TestDiskStoreCrashBetweenExpAndBodyLeavesNoOrphanBody(t *testing.T) {
 
 	// Reap must clean up the dangling .exp so it doesn't accumulate forever.
 	s.Reap(time.Unix(1<<62, 0)) // far future: any real deadline is "expired"
-	if _, err := os.Stat(s.expPath(cid)); !os.IsNotExist(err) {
-		t.Fatalf("dangling .exp was not reaped: stat err=%v", err)
+	if _, statErr := os.Stat(s.expPath(cid)); !os.IsNotExist(statErr) {
+		t.Fatalf("dangling .exp was not reaped: stat err=%v", statErr)
+	}
+}
+
+func TestDiskStoreExpiresAtExactDeadline(t *testing.T) {
+	s, err := NewDiskStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid := [32]byte{7}
+	deadline := time.Unix(time.Now().Unix(), 0)
+	if err := s.Put(cid, []byte("expired ciphertext"), deadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(cid); err != ErrExpired {
+		t.Fatalf("Get at the exact deadline = %v, want ErrExpired", err)
+	}
+}
+
+func TestDiskStoreReadsMaximumE2Frame(t *testing.T) {
+	s, err := NewDiskStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, (16<<20)+4096+30) // max E2 message + handshake + frame header
+	cid := [32]byte{8}
+	if err := s.Put(cid, body, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(cid)
+	if err != nil {
+		t.Fatalf("Get(max E2 frame): %v", err)
+	}
+	if len(got) != len(body) {
+		t.Fatalf("body length = %d, want %d", len(got), len(body))
 	}
 }
 

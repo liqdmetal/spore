@@ -66,19 +66,25 @@ decryptable for migration only; strict receivers refuse it.
 Double duty: off-chain retrieval key (mailbox `/put/{cid}`, spore-peer serve)
 and on-chain pointer commitment. Verified on push, pull, relay, and pre-decrypt.
 
-## 5. spore-peer transport frame (Rust)
+## 5. spore-peer direct-body transport frame (TCP v1)
 
-    frame = uint32 LE length || payload        (length capped at 64 MiB)
-    request payload  = JSON {"cid": "<64 hex chars>"}
-    ok    payload    = 0x00 || body            (sha256(body) MUST == cid)
-    error payload    = 0x01 || ASCII error     ("404 not found", "400 bad cid",
-                                                "500 cid mismatch", "400 bad frame",
-                                                "410 gone")
+The Go `spore-peer serve` command reads one request per TCP connection and
+returns one response frame. Length prefixes are unsigned 32-bit little-endian.
 
-Clients decide by the STATUS BYTE only — never by content sniffing (audit H4:
-the old client treated bodies starting with ASCII '4'/'5' as errors, rejecting
-~1.6% of random ciphertexts). Old servers (raw body, no status byte) are
-accepted only if `SHA-256(whole frame) == cid`.
+    request frame  = uint32 LE length || JSON payload (request capped at 4 KiB)
+    request JSON   = exactly {"cid": "<64 hex chars>"}
+    response frame = uint32 LE length || payload (transport cap 64 MiB)
+    success        = 0x00 || ciphertext body (SHA-256(body) MUST equal cid)
+    error          = 0x01 || ASCII error
+
+The E2 peer server caps bodies at 20 MiB (large enough for the 16 MiB E2 frame
+plus handshake/header) and verifies the SHA-256 CID before sending. It maps
+missing and expired bodies to `404 not found` and `410 gone`; malformed requests,
+store failures, CID mismatches, and overload fail closed.
+
+Clients dispatch by the STATUS BYTE only — never by content sniffing (audit H4:
+a ciphertext body may start with ASCII '4' or '5'). Raw-body legacy responses
+without a status byte are not accepted by the E2 peer client.
 
 Vectors under `spore_peer_frame`:
 `070000000034343434abcd` (ok, body `34343434abcd` — deliberately starts with

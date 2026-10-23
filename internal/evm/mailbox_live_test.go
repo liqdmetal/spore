@@ -2,6 +2,8 @@ package evm
 
 import (
 	"context"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,12 +20,14 @@ import (
 // deploy MyceliumMailbox, PostPayload via deliver(), then ListIncoming via
 // eth_getLogs + read(), then AUTO-BURN it and prove the on-chain storage is
 // actually erased (read() returns empty) — the compostable half of "private
-// af, nothing saved but scrap". Skips if no anvil/forge is reachable.
+// af, nothing saved but scrap". Runs only with an explicit loopback RPC URL;
+// the test uses Anvil's public dev key and broadcasts contract transactions.
 func TestMailboxLiveAnvil(t *testing.T) {
 	rpc := os.Getenv("MYCELIUM_TEST_ANVIL")
 	if rpc == "" {
-		rpc = "http://127.0.0.1:8545"
+		t.Skip("MYCELIUM_TEST_ANVIL not set; skipping live Anvil test")
 	}
+	assertLoopbackAnvilRPC(t, rpc)
 	// Skip cleanly if anvil isn't up or the contract isn't deployed.
 	mailbox := os.Getenv("MYCELIUM_TEST_MAILBOX")
 	if mailbox == "" {
@@ -100,6 +104,22 @@ func TestMailboxLiveAnvil(t *testing.T) {
 		}
 	}
 	t.Log("COMPOST VERIFIED: on-chain mailbox slot is empty after auto-burn")
+}
+
+func assertLoopbackAnvilRPC(t *testing.T, raw string) {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		t.Fatal("MYCELIUM_TEST_ANVIL must be a valid HTTP(S) URL")
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		t.Fatal("refusing non-loopback MYCELIUM_TEST_ANVIL: test broadcasts using Anvil's well-known dev key")
+	}
 }
 
 // probeMailbox deploys MyceliumMailbox via forge create if needed and returns
