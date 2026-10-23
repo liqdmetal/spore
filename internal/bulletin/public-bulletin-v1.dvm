@@ -1,0 +1,74 @@
+Function Initialize(publisher String) Uint64
+5 version("9.0.0")
+10 dim i as Uint64
+20 dim c as String
+30 IF exists("publisher")!=0 THEN GOTO 900
+40 IF STRLEN(publisher)!=64 THEN GOTO 900
+50 LET i=0
+60 IF i>=64 THEN GOTO 120
+70 LET c=SUBSTR(publisher,i,1)
+80 IF c=="0" || c=="1" || c=="2" || c=="3" || c=="4" || c=="5" || c=="6" || c=="7" || c=="8" || c=="9" THEN GOTO 110
+90 IF c=="a" || c=="b" || c=="c" || c=="d" || c=="e" || c=="f" THEN GOTO 110
+100 GOTO 900
+110 LET i=i+1
+115 GOTO 60
+120 STORE("publisher",publisher)
+130 RETURN 0
+900 RETURN 1
+End Function
+Function Publish(channel String,seq Uint64,cid String,deadline Uint64,sig String) Uint64
+5 version("9.0.0")
+10 dim expected,i,channel_len as Uint64
+20 dim c,msg,record,next_key,record_key as String
+30 IF exists("publisher")==0 THEN GOTO 900
+40 IF STRLEN(channel)==0 THEN GOTO 900
+50 IF STRLEN(channel)>64 THEN GOTO 900
+55 LET channel_len=STRLEN(channel)
+60 LET i=0
+70 IF i>=channel_len THEN GOTO 170
+80 LET c=SUBSTR(channel,i,1)
+90 IF c=="0" || c=="1" || c=="2" || c=="3" || c=="4" || c=="5" || c=="6" || c=="7" || c=="8" || c=="9" THEN GOTO 150
+100 IF c=="a" || c=="b" || c=="c" || c=="d" || c=="e" || c=="f" THEN GOTO 150
+101 IF c=="g" || c=="h" || c=="i" || c=="j" || c=="k" || c=="l" THEN GOTO 150
+102 IF c=="m" || c=="n" || c=="o" || c=="p" || c=="q" || c=="r" THEN GOTO 150
+103 IF c=="s" || c=="t" || c=="u" || c=="v" || c=="w" || c=="x" THEN GOTO 150
+104 IF c=="y" || c=="z" THEN GOTO 150
+110 IF c=="A" || c=="B" || c=="C" || c=="D" || c=="E" || c=="F" THEN GOTO 150
+111 IF c=="G" || c=="H" || c=="I" || c=="J" || c=="K" || c=="L" THEN GOTO 150
+112 IF c=="M" || c=="N" || c=="O" || c=="P" || c=="Q" || c=="R" THEN GOTO 150
+113 IF c=="S" || c=="T" || c=="U" || c=="V" || c=="W" || c=="X" THEN GOTO 150
+114 IF c=="Y" || c=="Z" THEN GOTO 150
+120 IF c=="." || c=="_" || c=="-" THEN GOTO 150
+130 GOTO 900
+150 LET i=i+1
+160 GOTO 70
+170 IF seq==0 THEN GOTO 900
+180 IF seq>1099511627775 THEN GOTO 900
+190 IF STRLEN(cid)!=64 THEN GOTO 900
+200 LET i=0
+210 IF i>=64 THEN GOTO 270
+220 LET c=SUBSTR(cid,i,1)
+230 IF c=="0" || c=="1" || c=="2" || c=="3" || c=="4" || c=="5" || c=="6" || c=="7" || c=="8" || c=="9" THEN GOTO 260
+240 IF c=="a" || c=="b" || c=="c" || c=="d" || c=="e" || c=="f" THEN GOTO 260
+250 GOTO 900
+260 LET i=i+1
+265 GOTO 210
+270 IF STRLEN(sig)!=128 THEN GOTO 900
+350 IF deadline>9223372036854775807 THEN GOTO 900
+360 IF deadline<=BLOCK_TIMESTAMP() THEN GOTO 900
+370 LET next_key="next_"+channel
+380 IF exists(next_key)!=0 THEN GOTO 400
+390 LET expected=1
+395 GOTO 410
+400 LET expected=LOAD(next_key)
+410 IF seq!=expected THEN GOTO 900
+420 LET record_key="record_"+channel+"_"+ITOA(seq)
+430 IF exists(record_key)!=0 THEN GOTO 900
+440 LET msg="spore/public-bulletin/dero/v1"+":"+channel+":"+ITOA(seq)+":"+cid+":"+ITOA(deadline)
+450 IF verify_sig(LOAD("publisher"),msg,sig)!=1 THEN GOTO 900
+460 LET record=cid+":"+ITOA(deadline)+":"+sig
+470 STORE(record_key,record)
+480 STORE(next_key,seq+1)
+490 RETURN 0
+900 RETURN 1
+End Function

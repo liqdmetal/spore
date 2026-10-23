@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ func (p *fakePool) Publish(_ context.Context, ev nostr.Event) error {
 	return nil
 }
 
-func (p *fakePool) Query(_ context.Context, f nostr.Filter) ([]*nostr.Event, error) {
+func (p *fakePool) Query(ctx context.Context, f nostr.Filter) ([]*nostr.Event, error) {
 	if p.failQuery {
 		return nil, ErrNoRelay
 	}
@@ -61,6 +62,9 @@ func (p *fakePool) Query(_ context.Context, f nostr.Filter) ([]*nostr.Event, err
 		}
 		cp := served
 		out = append(out, &cp)
+		if f.Limit > 0 && len(out) >= f.Limit {
+			break
+		}
 	}
 	return out, nil
 }
@@ -276,6 +280,54 @@ func TestNostrStoreGetRejectsHostileRelay(t *testing.T) {
 	}
 }
 
+func TestNostrStoreGetRejectsDuplicateCIDTag(t *testing.T) {
+	body := []byte("genuine ciphertext")
+	cid := cidOf(body)
+	pool := &fakePool{}
+	s := newTestStore(t, pool, "")
+	if err := s.Put(cid, body, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	pool.mu.Lock()
+	ev := pool.events[0]
+	ev.Tags = append(ev.Tags, nostr.Tag{"cid", hex.EncodeToString(cid[:])})
+	if err := ev.Sign(testKey); err != nil {
+		pool.mu.Unlock()
+		t.Fatal(err)
+	}
+	pool.events = []nostr.Event{ev}
+	pool.mu.Unlock()
+
+	if _, err := s.Get(cid); err != store.ErrNotFound {
+		t.Fatalf("duplicate cid tag error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestNostrStoreGetRejectsDuplicateExpiryTag(t *testing.T) {
+	body := []byte("genuine ciphertext")
+	cid := cidOf(body)
+	pool := &fakePool{}
+	s := newTestStore(t, pool, "")
+	if err := s.Put(cid, body, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	pool.mu.Lock()
+	ev := pool.events[0]
+	ev.Tags = append(ev.Tags, nostr.Tag{"exp", strconv.FormatInt(time.Now().Add(2*time.Hour).Unix(), 10)})
+	if err := ev.Sign(testKey); err != nil {
+		pool.mu.Unlock()
+		t.Fatal(err)
+	}
+	pool.events = []nostr.Event{ev}
+	pool.mu.Unlock()
+
+	if _, err := s.Get(cid); err != store.ErrNotFound {
+		t.Fatalf("duplicate exp tag error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestNostrStoreGetRejectsUnsignedOrForeignEvent(t *testing.T) {
 	body := []byte("genuine ciphertext")
 	cid := cidOf(body)
@@ -475,9 +527,10 @@ func TestNostrStoreIndexSurvivesCorruptEntry(t *testing.T) {
 	indexPath := filepath.Join(dir, "index.json")
 	// One valid entry + one with a non-hex key: the load must skip the bad
 	// entry rather than failing the whole store.
+	validEventID := strings.Repeat("cd", 32)
 	valid := map[string]indexEntry{
-		strings.Repeat("ab", 32): {EventID: "ev1", Deadline: 123},
-		"not-hex!!":              {EventID: "ev2"},
+		strings.Repeat("ab", 32): {EventID: validEventID, Deadline: 123},
+		"not-hex!!":              {EventID: validEventID, Deadline: 123},
 	}
 	raw, err := json.Marshal(valid)
 	if err != nil {
@@ -489,6 +542,81 @@ func TestNostrStoreIndexSurvivesCorruptEntry(t *testing.T) {
 	s := newTestStore(t, &fakePool{}, indexPath)
 	if s.Len() != 1 {
 		t.Fatalf("len = %d, want 1 (corrupt entry skipped)", s.Len())
+	}
+}
+
+func TestNostrStoreIndexEnforcesByteAndEntryLimits(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "index.json")
+	pool := &fakePool{}
+	body := []byte("one body")
+	cid := cidOf(body)
+	cfg := NostrStoreConfig{
+		PrivateKey: testKey, Pool: pool, IndexPath: indexPath,
+		MaxIndexBytes: 512, MaxIndexItems: 1,
+	}
+	s, err := NewNostrStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(cid, body, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("first indexed put: %v", err)
+	}
+	if s.Len() != 1 {
+		t.Fatalf("Len()=%d, want 1", s.Len())
+	}
+	if err := s.Put(cidOf([]byte("two body")), []byte("two body"), time.Now().Add(time.Hour)); err == nil {
+		t.Fatal("put beyond MaxIndexItems succeeded")
+	}
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(raw)) > cfg.MaxIndexBytes {
+		t.Fatalf("index size=%d exceeds cap %d", len(raw), cfg.MaxIndexBytes)
+	}
+
+	oversizePath := filepath.Join(dir, "oversize.json")
+	if err := os.WriteFile(oversizePath, []byte(strings.Repeat("x", 151)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oversizeCfg := cfg
+	oversizeCfg.IndexPath = oversizePath
+	if _, err := NewNostrStore(oversizeCfg); err == nil {
+		t.Fatal("index above MaxIndexBytes loaded")
+	}
+
+	tooManyPath := filepath.Join(dir, "too-many.json")
+	entries := map[string]indexEntry{
+		strings.Repeat("11", 32): {EventID: strings.Repeat("aa", 32), Deadline: 1},
+		strings.Repeat("22", 32): {EventID: strings.Repeat("bb", 32), Deadline: 2},
+	}
+	tooManyRaw, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tooManyPath, tooManyRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tooManyCfg := cfg
+	tooManyCfg.IndexPath = tooManyPath
+	if _, err := NewNostrStore(tooManyCfg); err == nil {
+		t.Fatal("index above MaxIndexItems loaded")
+	}
+}
+
+func TestNostrStoreIndexEntriesRequireCanonicalNostrIDs(t *testing.T) {
+	valid := map[string]indexEntry{
+		strings.Repeat("ab", 32): {EventID: strings.Repeat("cd", 32), Deadline: 1},
+	}
+	if err := writeIndexBounded(filepath.Join(t.TempDir(), "index.json"), valid, 1<<20, 10); err != nil {
+		t.Fatalf("valid index refused: %v", err)
+	}
+	invalid := map[string]indexEntry{
+		strings.Repeat("ab", 32): {EventID: "not-event-id", Deadline: 1},
+	}
+	if err := writeIndexBounded(filepath.Join(t.TempDir(), "index.json"), invalid, 1<<20, 10); err == nil {
+		t.Fatal("malformed event id persisted")
 	}
 }
 

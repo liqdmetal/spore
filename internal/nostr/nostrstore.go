@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,6 +103,10 @@ type NostrStoreConfig struct {
 	IndexPath string
 	// MaxBody caps stored body bytes (0 = DefaultMaxBody).
 	MaxBody int
+	// MaxIndexBytes caps bytes read from the durable local index (0 = 1 MiB).
+	MaxIndexBytes int64
+	// MaxIndexItems caps entries loaded from and written to the local index (0 = 4096).
+	MaxIndexItems int
 	// Timeout bounds each relay round trip (0 = 20s).
 	Timeout time.Duration
 	// Pool overrides relay dialling (tests). When nil, a pool is built from
@@ -111,10 +116,12 @@ type NostrStoreConfig struct {
 
 // NostrStore implements store.Store over Nostr relays.
 type NostrStore struct {
-	cfg     NostrStoreConfig
-	pool    Pool
-	maxBody int
-	timeout time.Duration
+	cfg           NostrStoreConfig
+	pool          Pool
+	maxBody       int
+	maxIndexBytes int64
+	maxIndexItems int
+	timeout       time.Duration
 
 	mu    sync.Mutex
 	index map[[32]byte]indexEntry
@@ -151,11 +158,27 @@ func NewNostrStore(cfg NostrStoreConfig) (*NostrStore, error) {
 	if maxBody <= 0 {
 		maxBody = DefaultMaxBody
 	}
+	maxIndexBytes := cfg.MaxIndexBytes
+	if maxIndexBytes <= 0 {
+		maxIndexBytes = 1 << 20
+	}
+	maxIndexItems := cfg.MaxIndexItems
+	if maxIndexItems <= 0 {
+		maxIndexItems = 4096
+	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
-	s := &NostrStore{cfg: cfg, pool: cfg.Pool, maxBody: maxBody, timeout: timeout, index: map[[32]byte]indexEntry{}}
+	s := &NostrStore{
+		cfg:           cfg,
+		pool:          cfg.Pool,
+		maxBody:       maxBody,
+		maxIndexBytes: maxIndexBytes,
+		maxIndexItems: maxIndexItems,
+		timeout:       timeout,
+		index:         map[[32]byte]indexEntry{},
+	}
 	if cfg.IndexPath != "" {
 		if err := s.loadIndex(); err != nil {
 			return nil, err
@@ -166,6 +189,15 @@ func NewNostrStore(cfg NostrStoreConfig) (*NostrStore, error) {
 
 // Put publishes body under cid, retained until deadline.
 func (s *NostrStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
+	if s.cfg.IndexPath != "" {
+		s.mu.Lock()
+		_, exists := s.index[cid]
+		tooMany := !exists && len(s.index) >= s.maxIndexItems
+		s.mu.Unlock()
+		if tooMany {
+			return fmt.Errorf("nostrstore: local index at %d entries; delete or reap old bodies before publishing", s.maxIndexItems)
+		}
+	}
 	if len(body) == 0 {
 		return errors.New("nostrstore: empty body")
 	}
@@ -200,7 +232,9 @@ func (s *NostrStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
 	if err := s.pool.Publish(ctx, ev); err != nil {
 		return err
 	}
-	s.recordIndex(cid, indexEntry{EventID: ev.ID, Deadline: deadline.Unix()})
+	if err := s.recordIndex(cid, indexEntry{EventID: ev.ID, Deadline: deadline.Unix()}); err != nil {
+		return fmt.Errorf("nostrstore: publish succeeded but local index update failed (body retained until deadline): %w", err)
+	}
 	return nil
 }
 
@@ -223,8 +257,9 @@ func (s *NostrStore) Get(cid [32]byte) ([]byte, error) {
 		if ev == nil || ev.Kind != BodyKind {
 			continue
 		}
-		if got := tagValue(ev.Tags, "cid"); got != cidHex {
-			continue // a relay returned an unrelated event
+		eventCID, ok := uniqueTagValue(ev.Tags, "cid")
+		if !ok || eventCID != cidHex {
+			continue // a relay returned an unrelated or ambiguous event
 		}
 		// Verify the publisher's signature: a rogue relay must not be able
 		// to forge a body under a CID we asked for. (The hash check below
@@ -232,11 +267,17 @@ func (s *NostrStore) Get(cid [32]byte) ([]byte, error) {
 		if ok, verr := ev.CheckSignature(); verr != nil || !ok {
 			continue
 		}
-		if exp := tagValue(ev.Tags, "exp"); exp != "" {
-			if sec, perr := strconv.ParseInt(exp, 10, 64); perr == nil && sec != 0 && time.Now().Unix() >= sec {
-				sawExpired = true
-				continue
-			}
+		exp, expOK := uniqueTagValue(ev.Tags, "exp")
+		if !expOK {
+			continue
+		}
+		sec, perr := strconv.ParseInt(exp, 10, 64)
+		if perr != nil || sec <= 0 {
+			continue
+		}
+		if time.Now().Unix() >= sec {
+			sawExpired = true
+			continue
 		}
 		body, derr := base64.StdEncoding.DecodeString(ev.Content)
 		if derr != nil || len(body) == 0 || len(body) > s.maxBody {
@@ -280,13 +321,17 @@ func (s *NostrStore) Delete(cid [32]byte) error {
 		}
 	}
 	if eventID == "" {
-		s.removeIndex(cid)
+		if err := s.removeIndex(cid); err != nil {
+			return fmt.Errorf("nostrstore: body absent but local index cleanup failed: %w", err)
+		}
 		return store.ErrNotFound
 	}
 	if err := s.requestDeletion(eventID); err != nil {
 		return err
 	}
-	s.removeIndex(cid)
+	if err := s.removeIndex(cid); err != nil {
+		return fmt.Errorf("nostrstore: deletion requested but local index cleanup failed: %w", err)
+	}
 	return nil
 }
 
@@ -333,34 +378,73 @@ func (s *NostrStore) requestDeletion(eventID string) error {
 }
 
 func tagValue(tags nostr.Tags, key string) string {
-	for _, t := range tags {
-		if len(t) >= 2 && t[0] == key {
-			return t[1]
-		}
-	}
-	return ""
+	value, _ := uniqueTagValue(tags, key)
+	return value
 }
 
-func (s *NostrStore) recordIndex(cid [32]byte, e indexEntry) {
+// uniqueTagValue rejects duplicate or malformed matching tags. NIP-01 tags
+// are attacker-controlled input; a verifier must not silently choose one of
+// several conflicting values for an authorization/content-address field.
+func uniqueTagValue(tags nostr.Tags, key string) (string, bool) {
+	value := ""
+	found := false
+	for _, tag := range tags {
+		if len(tag) == 0 || tag[0] != key {
+			continue
+		}
+		if len(tag) != 2 || found {
+			return "", false
+		}
+		value = tag[1]
+		found = true
+	}
+	return value, found
+}
+
+func (s *NostrStore) recordIndex(cid [32]byte, e indexEntry) error {
 	if s.cfg.IndexPath == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
+	if _, exists := s.index[cid]; !exists && len(s.index) >= s.maxIndexItems {
+		s.mu.Unlock()
+		return fmt.Errorf("nostrstore: local index at %d entries; delete or reap old bodies before publishing", s.maxIndexItems)
+	}
+	previous, existed := s.index[cid]
 	s.index[cid] = e
 	snapshot := s.snapshotLocked()
 	s.mu.Unlock()
-	_ = writeIndex(s.cfg.IndexPath, snapshot)
+	if err := writeIndexBounded(s.cfg.IndexPath, snapshot, s.maxIndexBytes, s.maxIndexItems); err != nil {
+		s.mu.Lock()
+		if existed {
+			s.index[cid] = previous
+		} else {
+			delete(s.index, cid)
+		}
+		s.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
-func (s *NostrStore) removeIndex(cid [32]byte) {
+func (s *NostrStore) removeIndex(cid [32]byte) error {
 	if s.cfg.IndexPath == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
+	previous, existed := s.index[cid]
 	delete(s.index, cid)
 	snapshot := s.snapshotLocked()
 	s.mu.Unlock()
-	_ = writeIndex(s.cfg.IndexPath, snapshot)
+	if err := writeIndexBounded(s.cfg.IndexPath, snapshot, s.maxIndexBytes, s.maxIndexItems); err != nil {
+		if existed {
+			s.mu.Lock()
+			s.index[cid] = previous
+			s.mu.Unlock()
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *NostrStore) indexEventID(cid [32]byte) string {
@@ -378,23 +462,39 @@ func (s *NostrStore) snapshotLocked() map[string]indexEntry {
 }
 
 func (s *NostrStore) loadIndex() error {
-	raw, err := os.ReadFile(s.cfg.IndexPath)
+	f, err := os.Open(s.cfg.IndexPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if stat.Size() > s.maxIndexBytes {
+		return fmt.Errorf("nostrstore: local index is %d bytes; cap is %d", stat.Size(), s.maxIndexBytes)
+	}
+	decoder := json.NewDecoder(io.LimitReader(f, s.maxIndexBytes+1))
 	var m map[string]indexEntry
-	if err := json.Unmarshal(raw, &m); err != nil {
+	if err := decoder.Decode(&m); err != nil {
 		return fmt.Errorf("nostrstore: malformed index: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("nostrstore: malformed index has trailing JSON data")
+	}
+	if len(m) > s.maxIndexItems {
+		return fmt.Errorf("nostrstore: index has %d entries; cap is %d", len(m), s.maxIndexItems)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, e := range m {
 		b, derr := hex.DecodeString(k)
-		if derr != nil || len(b) != 32 {
-			continue // skip a corrupt entry rather than failing the whole load
+		if derr != nil || len(b) != 32 || k != strings.ToLower(k) || !validIndexEntry(e) {
+			continue // skip corrupt or non-canonical entries rather than failing the whole load
 		}
 		var cid [32]byte
 		copy(cid[:], b)
@@ -403,10 +503,37 @@ func (s *NostrStore) loadIndex() error {
 	return nil
 }
 
+func validIndexEntry(entry indexEntry) bool {
+	if entry.Deadline <= 0 || len(entry.EventID) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(entry.EventID)
+	return err == nil && entry.EventID == strings.ToLower(entry.EventID) && len(decoded) == 32
+}
+
 func writeIndex(path string, m map[string]indexEntry) error {
+	return writeIndexBounded(path, m, 1<<20, 4096)
+}
+
+func writeIndexBounded(path string, m map[string]indexEntry, maxBytes int64, maxItems int) error {
+	if maxBytes <= 0 || maxItems <= 0 {
+		return errors.New("nostrstore: invalid index size limit")
+	}
+	if len(m) > maxItems {
+		return fmt.Errorf("nostrstore: index has %d entries; cap is %d", len(m), maxItems)
+	}
+	for cid, entry := range m {
+		decoded, err := hex.DecodeString(cid)
+		if err != nil || len(decoded) != 32 || cid != strings.ToLower(cid) || !validIndexEntry(entry) {
+			return errors.New("nostrstore: refusing to persist malformed index entry")
+		}
+	}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return err
+	}
+	if int64(len(raw)) > maxBytes {
+		return fmt.Errorf("nostrstore: index would be %d bytes; cap is %d", len(raw), maxBytes)
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -424,6 +551,9 @@ func writeIndex(path string, m map[string]indexEntry) error {
 		return e
 	}
 	if _, err := tmp.Write(raw); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Sync(); err != nil {
 		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {

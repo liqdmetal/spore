@@ -80,6 +80,20 @@ The fabric is a commons — the spore under the forest. Use-cases for the
 operators: cross-chain notifications, cross-chain pointer handoff, and — when
 the identity proof lands — cross-chain settlement signaling.
 
+### 9. Public bulletin snapshots
+A publisher can post a bounded, expiring public snapshot for a channel and
+sign its content hash, deadline, and monotonically increasing sequence with a
+pinned Spore Ed25519 identity. The body is intentionally public and stored as a
+content-addressed Nostr event; the relay key is separate from the publisher
+identity. Readers fetch the requested sequence and verify the publisher
+signature, body hash, channel, sequence, and expiry. This is useful for public
+release notes, operator status, or a small DAO announcement feed. It is a
+best-effort relay commons: it has no canonical latest pointer, trusted
+availability, global deletion guarantee, or consensus finality. A DERO
+contract prototype can bind publication records to the deployed SCID and
+serialize sequence updates, but that code is simulator-only until exercised
+against the exact R153 DVM implementation and an isolated harness.
+
 ---
 
 ## What it is NOT (stay honest)
