@@ -6,8 +6,11 @@ Address is the dry-run PLACEHOLDER; replace it (and the receipt lines) with
 the real §3 receipt values before this lands on release day.
 Apply with: git apply release-designs/v0.9.0-doc-flips.patch
 Rehearse with: bash scripts/release-day-rehearsal.sh
+Re-derived 2026-10-25 against main@cb1e74c: the README roadmap paragraph was
+reflowed after the freeze, so its hunk is regenerated from the current text
+with the same flip applied. Every other hunk is byte-identical to the original.
 diff --git a/README.md b/README.md
-index 7703ed7..c08a2e2 100644
+index daac0ea..b69892f 100644
 --- a/README.md
 +++ b/README.md
 @@ -28,7 +28,7 @@ setup. Releases also carry SLSA keyless provenance
@@ -28,12 +31,13 @@ index 7703ed7..c08a2e2 100644
  | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
  | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
  | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
-@@ -269,7 +269,7 @@ transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
- one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, and
- serverless bodies over `spore-peer` (`sporepeer://` store backend, `spore
- serve` daemon, cross-binary Go↔Rust interop tests). Next: tokenized search,
--in-chat settlement (escrow/swap), and real-chain EVM deployment.
-+in-chat settlement (escrow/swap), and documentation cleanup following the v0.9.0 Base EVM deployment (receipt: `docs/LIVE_NODES.md` §3).
+@@ -318,8 +318,7 @@ transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
+ one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, serverless bodies over `spore-peer`
+ (`sporepeer://` store backend, `spore serve` daemon, cross-binary Go↔Rust
+ interop tests), and direct E2 body fetch via `disk://` + `spore-peer serve`.
+-Next: tokenized search, in-chat settlement (escrow/swap), and real-chain EVM
+-deployment.
++Next: tokenized search, in-chat settlement (escrow/swap), and documentation cleanup following the v0.9.0 Base EVM deployment (receipt: `docs/LIVE_NODES.md` §3).
  
  ## License
  

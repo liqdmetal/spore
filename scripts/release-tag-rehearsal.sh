@@ -466,7 +466,10 @@ step "sign it (ephemeral ssh key, throwaway repository)"
 REPO="$ROOT/tagrepo"
 mkdir -p "$REPO"
 git init -q "$REPO"
-GITC=(-c commit.gpgsign=false -c user.name='spore release rehearsal' -c user.email='rehearsal@spore.invalid')
+# core.hooksPath= : the throwaway repo inherits the developer's git config, and a
+# global commit-msg hook (scripts/install-global-hooks.sh) rejects this unattended
+# 'rehearsal commit' on every machine that has the hooks installed.
+GITC=(-c commit.gpgsign=false -c core.hooksPath= -c user.name='spore release rehearsal' -c user.email='rehearsal@spore.invalid')
 git -C "$REPO" "${GITC[@]}" commit -q --allow-empty -m 'rehearsal commit'
 ssh-keygen -q -t ed25519 -N '' -C 'rehearsal@spore.invalid' -f "$ROOT/key" ||
   fail "could not generate the throwaway signing key"
