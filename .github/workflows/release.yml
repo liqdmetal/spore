@@ -1,0 +1,99 @@
+name: release
+
+# A tag push builds the six Go targets and attaches them to the release.
+# Re-running on an existing release replaces its assets (--clobber) rather
+# than failing, so a bad build can be fixed without moving the tag.
+#
+# Not built here: spore-peer / spore-iroh. They are Rust and need their own
+# targets and cross toolchains; this workflow covers the Go messenger only.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v0.10.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: spore-${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          out="spore-${GOOS}-${GOARCH}"
+          if [ "$GOOS" = windows ]; then out="${out}.exe"; fi
+          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o "$out" ./cmd/spore/
+          sha256sum "$out" > "${out}.sha256"
+          # the one artifact this runner can execute is the smoke test
+          if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then ./"$out" version; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spore-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            spore-${{ matrix.goos }}-${{ matrix.goarch }}*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum $(find . -maxdepth 1 -type f -name 'spore-*' ! -name '*.sha256' -printf '%f\n' | sort) > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists — replacing its assets"
+            gh release upload "$TAG" dist/* --clobber
+          elif ! gh release create "$TAG" dist/* --title "$TAG" --notes-from-tag; then
+            # lightweight tags carry no message; fall back to generated notes
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes
+          fi
