@@ -58,8 +58,8 @@ landed since v0.8.6.
   restarts, mailbox deploy units with the wallet RPC login kept out of
   argv, and a scheduled fuzz soak that keeps and reports what it finds.
 
-The v0.9.0 tag message is not yet finalized; this entry is the in-repo
-record until it is.
+**Superseded by v0.10.0.** This tag was never published with binaries, and the
+work since has shipped as v0.10.0, the current production release.
 
 ## v0.8.6 — the station pages you: watch mode, Prometheus, and a daily drill (2026-10-05)
 
