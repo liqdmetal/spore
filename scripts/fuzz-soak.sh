@@ -108,7 +108,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+REPO=""
+PR_TITLE=""
+PR_BODY=""
 
 TIME=60
 SHOW_STATUS=0
@@ -128,16 +130,28 @@ while [ $# -gt 0 ]; do
     --doctor) SHOW_DOCTOR=1; shift ;;
     --pr) PROPOSE_PR=1; shift ;;
     --propose) PROPOSE_ONLY=1; shift ;;
+    --repo)
+      [ $# -ge 2 ] || { echo "fuzz-soak: --repo needs REPO_ROOT" >&2; exit 2; }
+      REPO="$2"
+      shift 2
+      ;;
+    --message)
+      [ $# -ge 2 ] || { echo "fuzz-soak: --message needs PR_TITLE" >&2; exit 2; }
+      PR_TITLE="$2"
+      shift 2
+      ;;
     -h | --help)
       cat <<'USAGE'
 usage: scripts/fuzz-soak.sh [--time SECONDS] [--status] [--print-schedule] [--doctor]
-                             [--pr] [--propose]
+                             [--pr] [--propose] [--repo REPO_ROOT] [--message PR_TITLE]
   --time SECONDS    fuzz seconds per target (default 60, the deep pass)
   --status          print the last report, then stop
   --print-schedule  print the scheduler incantation for this host, then stop
   --doctor          check the installed schedule can still run, then stop
   --pr              run a pass, then update the haul's rolling branch + PR, then stop
   --propose         branch + pull request the corpus as it stands; run no pass
+  --repo REPO_ROOT  set the repo root explicitly (default: script's parent directory)
+  --message PR_TITLE  set the pull request title (default: auto-generated)
 USAGE
       exit 0
       ;;
@@ -147,6 +161,11 @@ USAGE
       ;;
   esac
 done
+
+if [ -n "$REPO" ]; then
+  REPO_ROOT="$REPO"
+fi
+cd "$REPO_ROOT"
 
 case "$TIME" in
   '' | *[!0-9]*)
@@ -712,8 +731,9 @@ restore_hauled_corpus() { # restore_hauled_corpus BRANCH
   # loop on a failed test, and pipefail would read that as a listing that failed —
   # a refusal the first time any seed was ever minimized away, dressed up as a
   # sentence about a branch that was never asked anything.
+  at_risk=""
   if ! at_risk="$(git -C "$REPO_ROOT" ls-files -mo --exclude-standard -- "${paths[@]}" 2>/dev/null \
-      | while IFS= read -r p; do if [ -e "$p" ]; then printf '%s\n' "$p"; fi; done | LC_ALL=C sort)"; then
+      | while IFS= read -r p; do if [ -e "$p" ]; then printf '%s\n' "$p"; fi; done | LC_ALL=C sort)" && [ -z "$at_risk" ]; then
     HAUL_RESTORE="left the corpus in the tree: it would not list, so there is no way to know $branch carries it"
     return 0
   fi
