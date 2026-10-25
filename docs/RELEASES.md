@@ -23,16 +23,17 @@ portable BLAKE3 locators, fetched over disk, a peer, or an iroh sidecar.
 
 ### Artifacts
 
-Six statically linked Go binaries (`CGO_ENABLED=0`, `go1.27.3`), one per
-target — linux/darwin/windows × amd64/arm64 — each with a `.sha256` sibling
-plus `SHA256SUMS`, attached to the tag. `spore version` and the `spore demo`
-send → receive → burn lifecycle were run on Windows amd64 and Linux amd64
-before upload.
+Six statically linked Go binaries (`CGO_ENABLED=0`), one per target —
+linux/darwin/windows × amd64/arm64 — each with a `.sha256` sibling plus
+`SHA256SUMS`, built and attached by `.github/workflows/release.yml` when the
+tag is pushed. The shipped linux/amd64 artifact was downloaded from the
+release and run; the full `spore demo` lifecycle was exercised on Windows
+amd64 and Linux amd64 on the same source.
 
 Two gaps, named rather than implied: this release has **no SLSA provenance**
-(v0.7.0–v0.8.6 shipped `multiple.intoto.jsonl`; these binaries were built
-locally), and it carries **no `spore-peer` binaries** — the peer and sidecar
-are Rust and were not part of this build.
+(v0.7.0–v0.8.6 shipped `multiple.intoto.jsonl`; this build is attested only by
+its workflow run and checksums), and it carries **no `spore-peer` binaries** —
+the peer and sidecar are Rust and are not built by that workflow.
 
 It also settles the numbering: v0.10.0 supersedes `v0.9.0` (tagged, never
 released) and `v0.5.1` (a stray tag with no assets), and is a minor bump
