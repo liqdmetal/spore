@@ -129,9 +129,20 @@ jobs:
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
             done
             gh release upload "$TAG" dist/* --clobber
-          elif ! gh release create "$TAG" dist/* --title "$TAG" --notes-from-tag; then
-            # lightweight tags carry no message; fall back to generated notes
-            gh release create "$TAG" dist/* --title "$TAG" --generate-notes
+          else
+            # --notes-from-tag reads the tag locally, which a tag checkout can
+            # lack (it then silently uses the commit subject). Read the
+            # annotation from the API instead, falling back to the commit
+            # message for a lightweight tag.
+            obj=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")
+            sha=$(printf '%s' "$obj" | jq -r '.object.sha')
+            kind=$(printf '%s' "$obj" | jq -r '.object.type')
+            if [ "$kind" = "tag" ]; then
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.message' > notes.md
+            else
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.commit.message' > notes.md
+            fi
+            gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md
           fi
 
       - name: Note skipped provenance
