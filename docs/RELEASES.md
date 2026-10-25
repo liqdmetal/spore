@@ -3,6 +3,41 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.10.0 — iroh E2 body store, peer transport, and E2-over-peer PUT (2026-10-25)
+
+Bodies can live somewhere other than a relay: content-addressed storage with
+portable BLAKE3 locators, fetched over disk, a peer, or an iroh sidecar.
+
+- **Iroh E2 store** — `iroh://`, `disk://` and `peer://` schemes, a Rust
+  `spore-iroh` sidecar, and **E2 Pointer V2** on the ratchet wire protocol
+  carrying the locator. Peer discovery, the peerstore server and device
+  approval moved with it.
+- **Wired into production** — the iroh config moved out of the dead `e2Store`
+  path into `newE2BodyStore`, the constructor the send path actually calls, so
+  the schemes work outside tests.
+- **iroh-blobs 0.103.1** — 0.100 through 0.103.0 are yanked from crates.io.
+- **spore-peer PUT** — `{"put": {"cid": "<64 hex>", "body": "<hex body>"}}`
+  stores a ciphertext on the peer with a 24-hour expiry and confirms receipt,
+  so an encrypted body can travel to the peer directly, bypassing the relay.
+  The transport is unauthenticated: trusted LAN or VPN only.
+
+### Artifacts
+
+Six statically linked Go binaries (`CGO_ENABLED=0`, `go1.27.3`), one per
+target — linux/darwin/windows × amd64/arm64 — each with a `.sha256` sibling
+plus `SHA256SUMS`, attached to the tag. `spore version` and the `spore demo`
+send → receive → burn lifecycle were run on Windows amd64 and Linux amd64
+before upload.
+
+Two gaps, named rather than implied: this release has **no SLSA provenance**
+(v0.7.0–v0.8.6 shipped `multiple.intoto.jsonl`; these binaries were built
+locally), and it carries **no `spore-peer` binaries** — the peer and sidecar
+are Rust and were not part of this build.
+
+It also settles the numbering: v0.10.0 supersedes `v0.9.0` (tagged, never
+released) and `v0.5.1` (a stray tag with no assets), and is a minor bump
+because the store and peer transport are features.
+
 ## v0.9.0 — fabric refusals counted, prekey health in status and doctor, and the mailbox ships (2026-10-16)
 
 Operator-visible health for the encrypted E2 path, plus the work that
