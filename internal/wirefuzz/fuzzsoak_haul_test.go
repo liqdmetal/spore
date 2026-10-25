@@ -219,7 +219,13 @@ func (sb sandbox) isAncestor(t *testing.T, older, newer string) bool {
 
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// -c core.hooksPath= : these sandboxes inherit the developer's git config,
+	// and this repo installs a global core.hooksPath
+	// (scripts/install-global-hooks.sh) whose commit-msg hook enforces
+	// Conventional Commits in EVERY repo — so "corpus: merge fresh finding" was
+	// rejected on any machine with the hooks installed. The tests exercise the
+	// soak's git plumbing, not the hooks of the machine running them.
+	cmd := exec.Command("git", append([]string{"-c", "core.hooksPath="}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
