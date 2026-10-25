@@ -281,6 +281,24 @@ The global hooks setup is backed up in this repo:
 self-verifies; `scripts/verify-hooks.sh` detects drift on any machine
 against the committed `scripts/hooks-manifest.sha256`.
 
+Pushes authenticate through `scripts/git-credential-guard.sh`, a bounded
+wrapper in front of Git Credential Manager. When the store holds two
+accounts for one host, `git push` asks for a credential with no username, GCM
+answers with an interactive account picker, and with no terminal to answer it
+the push waits forever with no output — the failure that cost 120 s per push
+on 2026-10-25. The guard refuses that case in under a second, naming the
+accounts and the `git-credential-manager github logout` that clears the
+duplicate, and kills any other helper stall after ten seconds
+(`GIT_CRED_GUARD_TIMEOUT`). Enable it once per clone:
+
+```
+scripts/git-credential-guard.sh --install             # this clone
+scripts/git-credential-guard.sh --install --global    # every repo
+scripts/git-credential-guard.sh --uninstall           # back to plain GCM
+```
+
+`GIT_CRED_GUARD=0 git push …` bypasses it for a single command.
+
 ## Sustainability (FOSS, grassroots — no VC, no token)
 
 Spore is BSD-3 free software. It stays free. The operator (not the protocol)
