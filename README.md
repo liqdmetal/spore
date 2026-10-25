@@ -297,7 +297,10 @@ scripts/git-credential-guard.sh --install --global    # every repo
 scripts/git-credential-guard.sh --uninstall           # back to plain GCM
 ```
 
-`GIT_CRED_GUARD=0 git push …` bypasses it for a single command.
+`GIT_CRED_GUARD=0 git push …` bypasses it for a single command. The
+pre-push gate in `scripts/gates.sh` refuses a push from a clone that never
+armed it, so the omission fails the push instead of waiting for the first
+ambiguity to hurt.
 
 ## Sustainability (FOSS, grassroots — no VC, no token)
 

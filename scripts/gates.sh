@@ -12,9 +12,10 @@
 #
 # --quick skips the spore-peer (Rust) gates, the -race + cross-binary interop
 # run, and the fuzz-smoke timing itself for fast inner-loop feedback;
-# everything else (gofmt/goimports, build+vet+test, doc-refs, the
-# fuzz-smoke target list) still runs. It complements the full suite — a push
-# is still gated by the full run, never by --quick.
+# everything else (the credential-guard check, gofmt/goimports,
+# build+vet+test, doc-refs, the fuzz-smoke target list) still runs. It
+# complements the full suite — a push is still gated by the full run, never
+# by --quick.
 #
 # Every gate prints its duration when it finishes, and a slowest-first
 # timing table prints before the final banner — slow gates are visible at
@@ -169,6 +170,88 @@ check_race() {
   fi
 }
 
+# ---- credential guard ------------------------------------------------------
+# scripts/git-credential-guard.sh wraps GCM so a credential-store ambiguity
+# fails a push in a second instead of hanging it on an account picker no
+# terminal can answer. It protects only a clone whose helper list routes
+# through it — .git/config is not versioned, so a fresh clone inherits plain
+# `manager` — which is why this gate runs FIRST: a push from a clone that
+# never armed the guard is refused before the expensive gates spend their
+# minutes, and the fix is one command.
+#
+# Skipped, loudly, where the guard cannot matter: no git-credential-manager on
+# PATH (SSH-key and other-helper machines never make the GCM query the guard
+# exists for), or an origin that is not https (git never consults the helper
+# at all). Both are printed, never silent.
+check_cred_guard() {
+  gcm="${GIT_CRED_GUARD_GCM:-git-credential-manager}"
+  if ! command -v "$gcm" >/dev/null 2>&1; then
+    echo "credential guard: $gcm not on PATH — nothing to wrap, skipped"
+    return 0
+  fi
+
+  # The URL a push ACTUALLY uses — `git remote get-url --push` applies the
+  # url.<base>.insteadOf / pushInsteadOf rewrites, which on this machine (and
+  # any box with the global rule) turn a stored `git@github.com:` remote into
+  # https. Reading raw remote.origin.url here called this clone "ssh" while
+  # its pushes were going through GCM.
+  url="$(git remote get-url --push origin 2>/dev/null || true)"
+  case "$url" in
+    https://*) ;;
+    *)
+      echo "credential guard: push URL is not https (${url:-none}) — helper unused, skipped"
+      return 0
+      ;;
+  esac
+
+  # Effective helper list under git's own rule: an empty value RESETS the
+  # list, which is exactly how --install discards an inherited global
+  # `manager` before adding the guard. Reading the raw values without
+  # applying that rule would call an unarmed clone armed.
+  effective="$( { git config --get-all credential.helper 2>/dev/null || true; } | awk '
+    { if ($0 == "") { n = 0; delete l; next } l[++n] = $0 }
+    END { for (i = 1; i <= n; i++) print l[i] }')"
+
+  helper="$(printf '%s\n' "$effective" | grep -F 'git-credential-guard.sh' | tail -1 || true)"
+  if [ -z "$helper" ]; then
+    cat >&2 <<EOF
+credential guard NOT armed for this clone — a push here would hand GCM a
+username-less query, the exact call that hangs forever once two GitHub
+accounts are stored. Arm it once (nothing is stored outside .git/config):
+
+  scripts/git-credential-guard.sh --install            # this clone
+  scripts/git-credential-guard.sh --install --global   # every repo
+
+If the guard is unwanted here, remove GCM from PATH or push over ssh — this
+gate skips where the helper cannot be consulted (see scripts/gates.sh).
+EOF
+    return 1
+  fi
+
+  # The configured path must still exist: a moved or deleted script leaves
+  # every push failing at auth time with git's own "cannot run" and no hint.
+  path="${helper#!}"
+  path="${path%\"}"
+  path="${path#\"}"
+  if [ ! -f "$path" ]; then
+    echo "credential guard: configured helper no longer exists: $path" >&2
+    echo "  re-run scripts/git-credential-guard.sh --install" >&2
+    return 1
+  fi
+
+  # Git runs a `!` helper as a shell command, so the script must carry the
+  # executable bit where that exists: on POSIX a 100644 checkout made every
+  # push die with "Permission denied" while the config still looked armed.
+  # (On Windows this is always true — MSYS reports every file executable.)
+  if [ ! -x "$path" ]; then
+    echo "credential guard: helper is not executable: $path" >&2
+    echo "  chmod +x \"$path\"   (the mode is versioned: commit it)" >&2
+    return 1
+  fi
+
+  echo "credential guard: armed ($helper)"
+}
+
 # ---- gates -----------------------------------------------------------------
 echo "== pre-push gates =="
 echo "spore: $SPORE_DIR"
@@ -183,6 +266,8 @@ PRE_ROWS=0
 if [ -n "$CSV_PATH" ] && [ -f "$CSV_PATH" ]; then
   PRE_ROWS=$(( $(wc -l < "$CSV_PATH") ))
 fi
+
+run_gate 'credential guard' check_cred_guard
 
 run_gate gofmt check_gofmt
 
