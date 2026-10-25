@@ -3,6 +3,30 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.10.1 — first pipeline-built release, with SLSA provenance (2026-10-25)
+
+No messenger code changed since v0.10.0. This tag ships the same source built
+end to end by `.github/workflows/release.yml`, and it is the first release that
+exists because of that pipeline rather than a local cross-compile.
+
+- All six targets (linux/darwin/windows × amd64/arm64) build on GitHub Actions
+  from the tag, each with a `.sha256` sibling plus `SHA256SUMS`.
+- `multiple.intoto.jsonl` comes from the SLSA generic generator pinned at
+  `v2.1.0` and covers all six digests:
+
+  ```bash
+  slsa-verifier verify-artifact spore-linux-amd64 \
+    --provenance-path multiple.intoto.jsonl \
+    --source-uri github.com/liqdmetal/spore --source-tag v0.10.1
+  ```
+
+- A dispatch rebuild or a re-pushed tag replaces the binaries and drops the
+  previous attestation before uploading, so stale provenance can never sit
+  next to new digests.
+
+`spore version` reports `v0.10.1`. Behaviour is otherwise identical to
+v0.10.0, which stays published without provenance.
+
 ## v0.10.0 — iroh E2 body store, peer transport, and E2-over-peer PUT (2026-10-25)
 
 Bodies can live somewhere other than a relay: content-addressed storage with
