@@ -123,7 +123,13 @@ func TestApprovalMetricsVolumesSkipReasonsAndLatency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := buildApprovalMetrics(queueDir, outDir, stateDir, time.Now())
+	// Measure against `base`, not the wall clock. Every fixture timestamp above
+	// is derived from base, so passing a fresh time.Now() made each age grow by
+	// however long the test itself took: under a full parallel `go test ./...`
+	// the 30s lock read 35.003s and failed a [25,35] window on elapsed time
+	// alone. base makes the ages exact (30s lock, 120s pending) with no
+	// assertion widened.
+	m, err := buildApprovalMetrics(queueDir, outDir, stateDir, base)
 	if err != nil {
 		t.Fatal(err)
 	}

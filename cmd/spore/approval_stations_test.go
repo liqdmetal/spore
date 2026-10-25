@@ -157,7 +157,9 @@ func TestApprovalStationDrillChild(t *testing.T) {
 	identityPath := os.Getenv("SPORE_STATION_IDENTITY")
 	outDir := os.Getenv("SPORE_STATION_OUT")
 	stateDir := os.Getenv("SPORE_STATION_STATE")
-	deadline := time.Now().Add(10 * time.Second)
+	// Generous deadline: the parent stops the stations as soon as both requests
+	// are signed, so this only bounds a wedged child.
+	deadline := time.Now().Add(45 * time.Second)
 	seen := make(map[string]string)
 	for time.Now().Before(deadline) {
 		if _, _, err := runApprovalWatchCycle(queue, identityPath, outDir, stateDir, true, seen); err != nil {
@@ -230,15 +232,50 @@ func TestApprovalTwoStationDrillNeverDoubleSign(t *testing.T) {
 		}
 	}()
 
+	readLogs := func() string {
+		var b strings.Builder
+		for _, name := range []string{"station1.log", "station2.log"} {
+			if body, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+				fmt.Fprintf(&b, "-- %s --\n%s\n", name, body)
+			}
+		}
+		return b.String()
+	}
+	// Wait for the signature itself instead of guessing how long two competing
+	// test binaries need to start, read the queue and sign. The old fixed
+	// sleeps gave drill2 1.5s of wall clock; under a full parallel
+	// `go test ./...` a station had not got that far, and the drill reported
+	// "signed exactly once, got 0" — a load artefact, not a double-sign. A
+	// signature that never arrives still fails, now with both station logs.
+	waitSigned := func(name string) {
+		t.Helper()
+		path := filepath.Join(outDir, name+".signed.json")
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(path); err == nil {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		stop(station1)
+		stop(station2)
+		t.Fatalf("no station signed %q within 30s; station logs:\n%s", name, readLogs())
+	}
+
 	time.Sleep(600 * time.Millisecond) // stations settle on an empty queue
 	if err := os.Rename(req1, filepath.Join(queue, filepath.Base(req1))); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	waitSigned("warm")
 	if err := os.Rename(req2, filepath.Join(queue, filepath.Base(req2))); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	waitSigned("drill2")
+	// A signature exists for both, so keep both stations running a moment
+	// longer: a duplicate, if the lock ever failed to prevent one, would show
+	// up as a second SIGNED line before they are stopped. The drill proves
+	// at-most-once, not just at-least-once.
+	time.Sleep(time.Second)
 	stop(station1)
 	stop(station2)
 
