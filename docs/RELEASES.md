@@ -3,6 +3,30 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.10.2 — release notes come from the tag annotation (2026-10-25)
+
+No messenger code changed since v0.10.1. One pipeline fix, proven end to end.
+
+- `publish` no longer creates releases with `gh release create --notes-from-tag`.
+  That flag reads the tag from the local checkout and silently falls back to the
+  commit subject when the annotation is not there — which is why the v0.10.1
+  release page showed a one-line body. The step now reads the tag object through
+  the API (falling back to the commit message for a lightweight tag) and creates
+  the release with `--notes-file`.
+- The v0.10.1 release body was corrected in place to its tag annotation.
+
+All six targets build on GitHub Actions from the tag, each with a `.sha256`
+sibling plus `SHA256SUMS`, and `multiple.intoto.jsonl` from the SLSA generic
+generator pinned at `v2.1.0`:
+
+```bash
+slsa-verifier verify-artifact spore-linux-amd64 \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/liqdmetal/spore --source-tag v0.10.2
+```
+
+`spore version` reports `v0.10.2`. Behaviour is identical to v0.10.1.
+
 ## v0.10.1 — first pipeline-built release, with SLSA provenance (2026-10-25)
 
 No messenger code changed since v0.10.0. This tag ships the same source built
