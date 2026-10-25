@@ -1,8 +1,10 @@
 name: release
 
-# A tag push builds the six Go targets and attaches them to the release.
-# Re-running on an existing release replaces its assets (--clobber) rather
-# than failing, so a bad build can be fixed without moving the tag.
+# A tag push builds the six Go targets, publishes them with checksums, and
+# attaches SLSA provenance (multiple.intoto.jsonl) signed by the SLSA generic
+# generator. Re-running on an existing release replaces its assets
+# (--clobber) rather than failing, so a bad build can be fixed without moving
+# the tag.
 #
 # Not built here: spore-peer / spore-iroh. They are Rust and need their own
 # targets and cross toolchains; this workflow covers the Go messenger only.
@@ -13,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and publish (e.g. v0.10.0)"
+        description: "Existing tag to build and publish (e.g. v0.11.0)"
         required: true
         type: string
 
@@ -66,23 +68,46 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
+  checksums:
+    name: checksums
     needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: SHA256SUMS and provenance subjects
+        id: hash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum $(find . -maxdepth 1 -type f -name 'spore-*' ! -name '*.sha256' -printf '%f\n' | sort) > SHA256SUMS
+          cat SHA256SUMS
+          # base64 of the sha256sum lines: the generator's subjects input
+          echo "hashes=$(base64 -w0 SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: checksums
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
+          name: dist
           path: dist
-          merge-multiple: true
-
-      - name: Build SHA256SUMS
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum $(find . -maxdepth 1 -type f -name 'spore-*' ! -name '*.sha256' -printf '%f\n' | sort) > SHA256SUMS
-          cat SHA256SUMS
 
       - name: Publish release
         env:
@@ -97,3 +122,17 @@ jobs:
             # lightweight tags carry no message; fall back to generated notes
             gh release create "$TAG" dist/* --title "$TAG" --generate-notes
           fi
+
+  provenance:
+    name: slsa-provenance
+    needs: [checksums, publish]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    # must be referenced by a full semver tag — the generator enforces it
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.checksums.outputs.hashes }}
+      upload-assets: true
+      upload-tag-name: ${{ github.event.inputs.tag || github.ref_name }}
