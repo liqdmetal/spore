@@ -35,8 +35,12 @@
 # green run still exits 0. A gate needs >= 3 prior samples before its
 # median is trusted; gate labels are compared across quick and full modes.
 #
-# The -race gate needs cgo enabled (the default on most dev boxes). Exit code
-# is 0 only if every gate that ran passed; skips are printed, not hidden.
+# The -race gate needs cgo, and cgo needs a C compiler. Where PATH has none the
+# gate looks for a Windows mingw-w64 install itself (MSYS2 ucrt64/mingw64,
+# scoop, TDM-GCC, MinGW) instead of dying with go's "requires cgo" line, which
+# names the wrong cause and suggests no fix. Finding nothing is a FAILURE, not
+# a skip. Exit code is 0 only if every gate that ran passed; skips are printed,
+# not hidden.
 #
 # NOTE: the flags are set explicitly below rather than trusted to the
 # shebang — shebang flags are silently dropped when the script is invoked as
@@ -162,7 +166,100 @@ check_goimports() {
 # subscribe` binary; it self-skips when SPORE_PEER_BIN is absent, so the
 # plain -race pass on a machine without the spore-peer checkout stays green.
 RACE_PKGS="./internal/store ./internal/peerstore ./cmd/spore"
+
+# ---- C toolchain for -race -------------------------------------------------
+# `go test -race` needs cgo, and cgo needs a C compiler. Windows is where this
+# bites: git hands a hook the environment of whatever launched the push — an
+# IDE client, a task runner, a bare bash — so a machine with a perfectly good
+# mingw-w64 installed still fails in 68 ms with
+#   go: -race requires cgo; enable cgo by setting CGO_ENABLED=1
+# which names the wrong thing (cgo is on; the compiler is merely not on PATH)
+# and suggests no fix. Real case 2026-10-26: the first push whose gates
+# actually ran on this machine died exactly there, with mingw present at
+# /c/msys64/mingw64/bin the whole time.
+#
+# So the gate looks for a compiler itself and prints the one it used. A
+# missing compiler is still a FAILURE, never a skip: a gate that cannot run
+# has verified nothing.
+CC_USED=""
+
+# _cc_candidates — Windows keeps a mingw-w64 gcc outside PATH by default.
+# MSYS2 first (what Go's own Windows docs use), current ucrt64 prefix before
+# the older mingw64 one; D: is included because MSYS2 is often installed there.
+_cc_candidates() {
+  cat <<EOF
+${MINGW_PREFIX:-}
+${MSYS2_ROOT:-/c/msys64}/ucrt64/bin
+${MSYS2_ROOT:-/c/msys64}/mingw64/bin
+${MSYS2_ROOT:-/d/msys64}/ucrt64/bin
+${MSYS2_ROOT:-/d/msys64}/mingw64/bin
+$HOME/scoop/apps/gcc/current/bin
+/c/TDM-GCC-64/bin
+/c/mingw64/bin
+/c/MinGW/bin
+/c/ProgramData/mingw64/mingw64/bin
+/c/Program Files/mingw64/bin
+EOF
+}
+
+# find_c_toolchain — true when a C compiler is reachable, adding its directory
+# to PATH when it was found off-PATH. Sets CC_USED.
+find_c_toolchain() {
+  # An explicit CC is a decision, not a hint: keep it, and fail loudly rather
+  # than quietly compiling with something the user did not choose.
+  if [ -n "${CC:-}" ]; then
+    if command -v "$CC" >/dev/null 2>&1; then
+      CC_USED="$(command -v "$CC")"
+      return 0
+    fi
+    echo "CC=$CC is set but not on PATH — refusing to pick a different compiler." >&2
+    return 1
+  fi
+  if command -v gcc >/dev/null 2>&1; then
+    CC_USED="$(command -v gcc)"
+    return 0
+  fi
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) return 1 ;;   # elsewhere a missing compiler is what PATH says it is
+  esac
+  local d
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    if [ -x "$d/gcc.exe" ]; then
+      PATH="$d:$PATH"
+      export PATH
+      CC_USED="$d/gcc.exe"
+      return 0
+    fi
+  done < <(_cc_candidates)
+  return 1
+}
+
 check_race() {
+  if ! find_c_toolchain; then
+    cat >&2 <<'EOF'
+-race needs cgo, and cgo needs a C compiler — none was found.
+  Windows (MSYS2, what Go's docs use):
+      pacman -S mingw-w64-ucrt-x86_64-gcc     # installs into C:\msys64\ucrt64\bin
+    this gate checks there, mingw64, scoop, TDM-GCC and MinGW with no PATH
+    edit; if yours is elsewhere, set CC to its gcc.
+  Debian/Ubuntu:  sudo apt install gcc
+  Fedora:         sudo dnf install gcc
+  macOS:          xcode-select --install
+A gate that cannot run has verified nothing, so this fails the push. For a
+single push the documented escape hatches still apply (--no-verify,
+LEFTHOOK=0).
+EOF
+    return 1
+  fi
+  # cgo disabled explicitly makes the detector impossible to build; the gate's
+  # purpose is the detector, so turn it on for this run and say so.
+  if [ "$(go env CGO_ENABLED)" = "0" ]; then
+    echo "-race: CGO_ENABLED=0 in the environment — enabling cgo for this gate"
+    export CGO_ENABLED=1
+  fi
+  echo "-race: cgo via $CC_USED"
   if [ -n "$PEER_BIN" ]; then
     SPORE_PEER_BIN="$PEER_BIN" go test -race -count=1 $RACE_PKGS
   else
