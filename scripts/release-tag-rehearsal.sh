@@ -248,6 +248,23 @@ fi
 }
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/spore-tag-rehearsal.XXXXXX")
+
+# Windows: ssh-keygen copies the directory's inherited ACEs onto the private key
+# it writes and then refuses to sign with it if any of them belong to someone
+# else — including a SID this machine cannot even resolve (a deleted profile, a
+# container user, a removed service account), which it prints as "Bad
+# permissions ... user: UNKNOWN\UNKNOWN". %TEMP% is a common carrier of such a
+# stale entry, and it silently breaks the signing step below on an otherwise
+# healthy box. Drop inheritance on the scratch directory and grant only the
+# current user, which is what mktemp's 0700 gives us everywhere else.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v icacls >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+      icacls "$(cygpath -w "$ROOT")" /inheritance:r /grant:r "$(id -un):(OI)(CI)F" >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
 echo "== release-tag rehearsal: fill all nine fields, strip, sign, verify =="
 echo "draft:  $DRAFT"
 echo "tag:    $TAGNAME (in a throwaway repository)"
