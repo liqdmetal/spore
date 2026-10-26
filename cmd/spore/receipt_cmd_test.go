@@ -319,6 +319,100 @@ func TestReceiptCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("export writes sorted rows and skips non-spend files", func(t *testing.T) {
+		expDir := t.TempDir()
+		// Two settlements, deliberately given out of order, plus a self-declared
+		// cash row and an attested receipt that must not become an expense row.
+		if out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", filepath.Join(expDir, "oct.json"), "-identity", clientKey,
+			"-service-category", "plumbing.emergency", "-service-summary", "Replace valve, kitchen line",
+			"-period-from", "2026-10-01T00:00:00Z", "-period-to", "2026-10-31T23:59:59Z",
+			"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid="+txid+",settled=2026-10-24T16:44:03Z",
+			"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=100,txid="+txid+",settled=2026-10-02T09:00:00Z"); err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		if out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", filepath.Join(expDir, "cash.json"), "-identity", clientKey,
+			"-service-category", "auto.bodywork", "-service-summary", "cash callout, no chain",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=12000,settled=2026-10-05T11:00:00Z"); err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		if err := os.WriteFile(filepath.Join(expDir, "attested.json"), vector, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		csvOut, err := runSpore(t, bin, "sign", "receipt", "export", "-dir", expDir)
+		if err != nil {
+			t.Fatalf("export: %v\n%s", err, csvOut)
+		}
+		lines := strings.Split(strings.TrimSpace(strings.SplitN(csvOut, "exported", 2)[0]), "\n")
+		if len(lines) != 4 { // header + three rows
+			t.Fatalf("expected header + 3 rows, got %d:\n%s", len(lines), csvOut)
+		}
+		if lines[0] != strings.Join([]string{"period_start", "period_end", "category", "summary", "rail", "network", "asset", "amount_atomic", "txid", "settlement_time", "evidence", "receipt_id"}, ",") {
+			t.Errorf("header is not the §9 column order:\n%s", lines[0])
+		}
+		// Ascending settlement time, whatever order the files were written in.
+		if !strings.Contains(lines[1], "2026-10-02T09:00:00Z") || !strings.Contains(lines[2], "2026-10-05T11:00:00Z") || !strings.Contains(lines[3], "2026-10-24T16:44:03Z") {
+			t.Errorf("rows are not sorted by settlement time:\n%s", csvOut)
+		}
+		if !strings.Contains(lines[2], "self-declared") {
+			t.Errorf("the cash row did not keep its per-row evidence:\n%s", lines[2])
+		}
+		if !strings.Contains(csvOut, "1 non-spend file(s) skipped") {
+			t.Errorf("attested receipt was not reported as skipped:\n%s", csvOut)
+		}
+
+		// Two exports of the same directory must be identical, or last month
+		// cannot be diffed against this one.
+		first := filepath.Join(t.TempDir(), "a.csv")
+		second := filepath.Join(t.TempDir(), "b.csv")
+		if out, err := runSpore(t, bin, "sign", "receipt", "export", "-dir", expDir, "-out", first); err != nil {
+			t.Fatalf("export -out: %v\n%s", err, out)
+		}
+		if out, err := runSpore(t, bin, "sign", "receipt", "export", "-dir", expDir, "-out", second); err != nil {
+			t.Fatalf("export -out: %v\n%s", err, out)
+		}
+		a, err := os.ReadFile(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Fatalf("two exports of one directory differ:\n%s\n---\n%s", a, b)
+		}
+	})
+
+	t.Run("export refuses an unsigned declaration", func(t *testing.T) {
+		bare := t.TempDir()
+		if out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", filepath.Join(bare, "cash.json"), "-identity", clientKey,
+			"-service-category", "auto.bodywork", "-service-summary", "cash callout",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=12000,settled=2026-10-05T11:00:00Z"); err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		if err := os.Remove(filepath.Join(bare, "cash.json.sig")); err != nil {
+			t.Fatal(err)
+		}
+		badOut, err := runSpore(t, bin, "sign", "receipt", "export", "-dir", bare)
+		if err == nil {
+			t.Fatalf("exported a declaration nobody signed:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "refusing to export") {
+			t.Errorf("rejection did not explain itself:\n%s", badOut)
+		}
+		allowed, err := runSpore(t, bin, "sign", "receipt", "export", "-dir", bare, "-allow-unsigned")
+		if err != nil {
+			t.Fatalf("-allow-unsigned: %v\n%s", err, allowed)
+		}
+		if !strings.Contains(allowed, "WARNING") {
+			t.Errorf("-allow-unsigned exported without a warning:\n%s", allowed)
+		}
+	})
+
 	t.Run("provider-only record carries no client fields", func(t *testing.T) {
 		rec := filepath.Join(t.TempDir(), "solo.json")
 		createOut, err := runSpore(t, bin, "sign", "receipt", "create",

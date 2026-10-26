@@ -219,6 +219,7 @@ func usage() {
   spore sign receipt create -out F -service-category C -service-summary S -provider-pub HEX [-client-pub HEX | -provider-only] -started-at T -finished-at T -settlement K=V,... [-deliverable K=V,...]   (emit the canonical job receipt; its SHA-256 is the receipt id)
   spore sign receipt sign -role client|provider -identity F -file F [-out SIG]   (sign with the role's fixed statement; refuses a key that is not that role)
   spore sign receipt spend -out F -identity F -service-category C -service-summary S -settlement K=V,... [-provider-pub HEX -salt-out FILE]   (emit+sign the provider-blind accounting record; no txid on a line makes it self-declared)
+  spore sign receipt export -dir D [-format csv|jsonl] [-out F] [-allow-unsigned]   (§9 accounting rows: one per settlement line, evidence per row, sorted by settlement time then txid)
   spore sign receipt verify -file F -sigs A.sig,B.sig [-required both|client|provider] [-provider-pub HEX -salt FILE]   (signatures AND the role statement each one must carry; a spend receipt is verified by protocol)
   spore publish issue -identity F -channel C -seq N -file BODY [-title T]   (sender-key newsletter: encrypt ONCE, fan out tiny notices)
   spore publish open -notice F -body F -publisher HEX [-last-seq N]         (verify publisher signature + decrypt an issue)

@@ -1,11 +1,11 @@
 # Job receipts v1 — a signed record of work, portable by design
 
-**Status: both kinds ship.** `spore sign receipt create|sign|spend|verify` emits the
+**Status: both kinds ship, with their export.** `create|sign|spend|verify|export` emits the
 attested record, signs it with the role's fixed statement, and refuses a signature
 that asserts something else; `spore sign receipt spend` emits and signs the
-provider-blind accounting record with its salted commitment. What is still missing
-is bookkeeping tooling, not protocol: the §9 export and the §8 aggregator are
-unbuilt. Everything the attested kind is built from was already there: `spore sign doc` produces a
+provider-blind accounting record with its salted commitment; `export` writes the
+§9 rows. What is still missing is the reputation side: §8's aggregator is a
+rulebook with no code behind it. Everything the attested kind is built from was already there: `spore sign doc` produces a
 detached Ed25519 attestation over a file ([signcmd.go](../cmd/spore/signcmd.go),
 `internal/attest`), `spore sign sheet` verifies a set and reports who is missing,
 `spore sign anchor` publishes a digest for a timestamp, and `spore archive put`
@@ -382,6 +382,20 @@ inside spore and never as a float. `evidence` travels with every row so a
 `settlement_time`, then `txid`, so two exports of the same month are identical
 byte for byte.
 
+```
+spore sign receipt export -dir october/ [-format csv|jsonl] [-out october.csv]
+```
+
+The directory holds spend receipts; each `*.json` is parsed strictly, its
+`.sig` beside it is verified against the client key and the statement constant,
+and one row is written per settlement line. Anything that is not a spend receipt
+is skipped and counted, so pointing it at a folder of job receipts yields an
+empty file with an explanation rather than a wrong one. A missing signature is a
+hard error unless `-allow-unsigned` is given, which prints a warning and marks
+the export as unverified — an accounting file is treated as fact, so the client's
+word has to be labelled as such. Blank `period_*` columns mean the record claimed
+no period; they are never filled in from the settlement dates.
+
 ## 10. Supersede, correction, and deletion
 
 - A correction is a new record with `supersedes` set to the old `receipt_id`,
@@ -441,9 +455,6 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
   records joined by `links.work_order_id`, but the paid work order protocol is
   itself design-stage ([PAID_WORK_ORDER_PROTOCOL_V1.md](PAID_WORK_ORDER_PROTOCOL_V1.md)),
   so that join is not yet testable.
-- **No export yet.** `sign receipt spend` writes one canonical record; §9's
-  CSV/JSONL export, with `evidence` per row and its fixed sort, is still manual
-  (`jq` and a spreadsheet will do, badly).
 - **No aggregator.** §8 is a rulebook, not code; nothing yet walks `supersedes`
   chains or counts distinct clients.
 - **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),

@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -40,12 +43,14 @@ func signReceipt(args []string) {
 		receiptSign(args[1:])
 	case "spend":
 		receiptSpend(args[1:])
+	case "export":
+		receiptExport(args[1:])
 	case "verify":
 		receiptVerify(args[1:])
 	case "-h", "--help":
 		receiptUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|spend|verify)\n", args[0])
+		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|spend|export|verify)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -71,6 +76,11 @@ func receiptUsage() {
         [-provider-pub HEX -salt-out FILE] [-sig-out SIG]
         (emit AND sign the provider-blind accounting record; a line without a
          txid makes the whole record self-declared, not chain-backed)
+
+  spore sign receipt export -dir D [-format csv|jsonl] [-out F] [-allow-unsigned]
+        (§9 accounting rows: one per settlement line, evidence per row, sorted by
+         settlement time then txid; every input must carry a valid signature
+         unless -allow-unsigned is given)
 
   spore sign receipt verify -file F -sigs A.sig,B.sig [-required both|client|provider]
         (verify the signatures AND that each one carries its role's statement;
@@ -508,6 +518,160 @@ func receiptSpend(args []string) {
 	}
 }
 
+// receiptExport turns a directory of spend receipts into §9 rows. It refuses to
+// export a declaration it cannot verify unless told otherwise, because an export
+// is what an accountant treats as fact — a missing signature is not a detail to
+// discover later.
+func receiptExport(args []string) {
+	fs := flag.NewFlagSet("sign receipt export", flag.ExitOnError)
+	dir := fs.String("dir", "", "directory holding spend receipts (required)")
+	format := fs.String("format", "csv", "csv|jsonl")
+	out := fs.String("out", "", "write here instead of stdout")
+	allowUnsigned := fs.Bool("allow-unsigned", false, "include declarations with no .sig beside them (never use this for a verified export)")
+	_ = fs.Parse(args)
+
+	if *dir == "" {
+		check(errors.New("sign receipt export: -dir is required"))
+	}
+	if *format != "csv" && *format != "jsonl" {
+		check(fmt.Errorf("sign receipt export: -format must be csv or jsonl, got %q", *format))
+	}
+
+	entries, err := os.ReadDir(*dir)
+	check(err)
+
+	var rows []jobreceipt.ExportRow
+	signed, unsigned, records, skipped := 0, 0, 0, 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(*dir, entry.Name())
+		body, err := os.ReadFile(path)
+		check(err)
+		proto, err := jobreceipt.ProtocolOf(body)
+		if err != nil {
+			check(fmt.Errorf("%s: %w", path, err))
+		}
+		if proto != jobreceipt.SpendProtocol {
+			// An attested receipt is evidence of work, not an expense row, and its
+			// amounts are the provider's copy of the same money.
+			skipped++
+			continue
+		}
+		rec, err := jobreceipt.ParseSpend(body)
+		if err != nil {
+			check(fmt.Errorf("%s: %w", path, err))
+		}
+		sigPath := path + ".sig"
+		if _, statErr := os.Stat(sigPath); statErr == nil {
+			if _, err := checkSpendEnvelope(body, rec, sigPath); err != nil {
+				check(err)
+			}
+			signed++
+		} else if *allowUnsigned {
+			unsigned++
+		} else {
+			check(fmt.Errorf("%s: no signature at %s — refusing to export a declaration nobody verified (pass -allow-unsigned to include it anyway)", path, sigPath))
+		}
+		records++
+		rows = append(rows, jobreceipt.RowsFromSpend(rec, jobreceipt.ID(body))...)
+	}
+
+	jobreceipt.SortRows(rows)
+
+	var buf bytes.Buffer
+	if *format == "csv" {
+		w := csv.NewWriter(&buf)
+		if err := w.Write(jobreceipt.ExportColumns); err != nil {
+			check(err)
+		}
+		for _, row := range rows {
+			if err := w.Write(row.Fields()); err != nil {
+				check(err)
+			}
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			check(err)
+		}
+	} else {
+		for _, row := range rows {
+			line, err := exportJSONLine(row)
+			if err != nil {
+				check(err)
+			}
+			buf.WriteString(line)
+			buf.WriteByte('\n')
+		}
+	}
+
+	if *out == "" {
+		_, err := os.Stdout.Write(buf.Bytes())
+		check(err)
+	} else {
+		if err := os.WriteFile(*out, buf.Bytes(), 0o600); err != nil {
+			check(err)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "exported %d row(s) from %d spend receipt(s): %d signed, %d unsigned, %d non-spend file(s) skipped\n",
+		len(rows), records, signed, unsigned, skipped)
+	if unsigned > 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: rows from unsigned declarations are not verified by anyone; treat them as the client's word")
+	}
+}
+
+// exportJSONLine writes one row as a JSON object with the §9 column order (a
+// map would sort keys, csv order would be lost).
+func exportJSONLine(row jobreceipt.ExportRow) (string, error) {
+	values := row.Fields()
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, name := range jobreceipt.ExportColumns {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		key, err := json.Marshal(name)
+		if err != nil {
+			return "", err
+		}
+		val, err := json.Marshal(values[i])
+		if err != nil {
+			return "", err
+		}
+		b.Write(key)
+		b.WriteByte(':')
+		b.Write(val)
+	}
+	b.WriteByte('}')
+	return b.String(), nil
+}
+
+// checkSpendEnvelope is the single rule for "is this the client's declaration":
+// the right key, the right statement, a valid signature over these exact bytes.
+func checkSpendEnvelope(body []byte, rec *jobreceipt.SpendRecord, path string) (*attest.Envelope, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var env attest.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("%s: not a signature envelope: %w", path, err)
+	}
+	if env.SignerPub != rec.ClientPub {
+		return nil, fmt.Errorf("%s: %s is not the client key on this spend receipt (%s) — a spend receipt is signed by the client alone", path, env.SignerPub, rec.ClientPub)
+	}
+	if env.Statement != jobreceipt.SpendStatement {
+		return nil, fmt.Errorf("%s: statement is %q, but a spend declaration must be %q", path, env.Statement, jobreceipt.SpendStatement)
+	}
+	sum := sha256.Sum256(body)
+	if err := env.Verify(sum[:]); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &env, nil
+}
+
 // receiptVerifySpend checks the only signature a spend receipt can have. The
 // statement comparison is the same rule as the attested kind: the client's key
 // over these bytes is not enough if it declared something else.
@@ -517,31 +681,17 @@ func receiptVerifySpend(body []byte, sigs, required, providerPub, saltPath strin
 	if required == jobreceipt.RoleProvider {
 		check(errors.New("sign receipt verify: a spend receipt has no provider signature; the client signs it alone"))
 	}
-	sum := sha256.Sum256(body)
 	signed := ""
 	for _, path := range strings.Split(sigs, ",") {
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue
 		}
-		raw, err := os.ReadFile(path)
-		check(err)
-		var env attest.Envelope
-		if err := json.Unmarshal(raw, &env); err != nil {
-			check(fmt.Errorf("%s: not a signature envelope: %w", path, err))
-		}
-		if env.SignerPub != rec.ClientPub {
-			check(fmt.Errorf("%s: %s is not the client key on this spend receipt (%s) — a spend receipt is signed by the client alone", path, env.SignerPub, rec.ClientPub))
-		}
-		if env.Statement != jobreceipt.SpendStatement {
-			check(fmt.Errorf("%s: statement is %q, but a spend declaration must be %q", path, env.Statement, jobreceipt.SpendStatement))
-		}
 		if signed != "" {
 			check(fmt.Errorf("%s: the client already signed this receipt; a spend receipt carries one signature", path))
 		}
-		if err := env.Verify(sum[:]); err != nil {
-			check(fmt.Errorf("%s: %w", path, err))
-		}
+		env, err := checkSpendEnvelope(body, rec, path)
+		check(err)
 		signed = env.SignerPub
 	}
 
