@@ -222,6 +222,10 @@ accounts are stored. Arm it once (nothing is stored outside .git/config):
   scripts/git-credential-guard.sh --install            # this clone
   scripts/git-credential-guard.sh --install --global   # every repo
 
+or arm this clone's hooks and its guard together with one command:
+
+  scripts/setup.sh
+
 If the guard is unwanted here, remove GCM from PATH or push over ssh — this
 gate skips where the helper cannot be consulted (see scripts/gates.sh).
 EOF

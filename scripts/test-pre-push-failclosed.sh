@@ -18,6 +18,20 @@
 #     (exit 1) — that check failing means the shim is NOT the hand-patch,
 #     which after the retirement step is exactly right.
 #
+# Empty-range guards (added after a gate-bypassing push on 2026-10-26):
+#   * a GATED repo whose stdin carries no ref lines ABORTS — the push range is
+#     unknown, and upstream lefthook exits 0 there without running anything;
+#   * a gated repo where lefthook reports "no matching push files" while
+#     commits are arriving ABORTS — the skip can never read as a pass again;
+#   * the same skip on a deletion-only push (all-zero local sha) is allowed —
+#     nothing arrives, so there is nothing to gate;
+#   * a clean run still exits 0, and a failing gate still propagates its own
+#     exit code (the guards add no false blocks and swallow nothing).
+#
+# The stub lefthook binaries used by those scenarios exercise the exact
+# summary line lefthook 1.12.4 prints on its skip path, without needing a
+# real index, remote or network.
+#
 # usage: test-pre-push-failclosed.sh [path-to-pre-push-shim]
 #        test-pre-push-failclosed.sh --installer
 #
@@ -92,14 +106,31 @@ echo "battery target: $TARGET_DESC"
 # which is exactly the "config sits in the repo root" shape under test.
 fails=0
 hand_patch_asserted=0
+extra=""
+refs_in=""
+STUB_DIR="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+# Keep the --installer extraction dir cleanup working: replacing the earlier
+# EXIT trap here would otherwise leak it every run.
+trap 'rm -rf "$STUB_DIR"; [ -z "${EXTRACT_DIR:-}" ] || rm -rf "$EXTRACT_DIR"' EXIT
 
+# stdin comes from $refs_in: empty means /dev/null (the "no refs at all"
+# shape git never produces but a chained tool or a dropped pipe does).
+# HOME is pointed at the sandbox: the shim also probes $HOME/go/bin for the
+# `go install` lefthook that install-global-hooks.sh creates, and on a machine
+# that has one the "binary absent" scenarios would otherwise be untestable.
 run() {
   name="$1"; want="$2"; setup="$3"; shift 3
   s="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+  mkdir -p "$s/home"
   ( cd "$s" && "$setup" "$s" )
   rc=0
-  ( cd "$s" && env -u LEFTHOOK -u LEFTHOOK_CONFIG $extra \
-      PATH="$SAFE_PATH" sh "$SHIM" --hand-patch-battery-run </dev/null ) >/dev/null 2>&1 || rc=$?
+  if [ -n "$refs_in" ]; then
+    ( cd "$s" && printf '%s\n' "$refs_in" | env -u LEFTHOOK -u LEFTHOOK_CONFIG $extra \
+        HOME="$s/home" PATH="$SAFE_PATH" sh "$SHIM" --hand-patch-battery-run ) >/dev/null 2>&1 || rc=$?
+  else
+    ( cd "$s" && env -u LEFTHOOK -u LEFTHOOK_CONFIG $extra \
+        HOME="$s/home" PATH="$SAFE_PATH" sh "$SHIM" --hand-patch-battery-run </dev/null ) >/dev/null 2>&1 || rc=$?
+  fi
   rm -rf "$s"
   if [ "$rc" -eq "$want" ]; then
     echo "  ok   $name (rc=$rc)"
@@ -114,10 +145,17 @@ mk_toml()  { printf '[pre-push]\n' > "$1/lefthook.toml"; }
 
 mk_nothing() { :; }
 
+# A push that carries commits: local sha differs from the remote sha, so a
+# gate run is mandatory. A deletion sends the all-zero local sha instead.
+ARRIVING="refs/heads/main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+DELETION="(delete) 0000000000000000000000000000000000000000 refs/heads/gone cccccccccccccccccccccccccccccccccccccccc"
+
 echo "scenarios:"
 
-# 1: canonical fail-open case (the 1.13.6 bug): config exists, binary absent.
+refs_in="$ARRIVING"
 extra=""
+
+# 1: canonical fail-open case (the 1.13.6 bug): config exists, binary absent.
 run "yml config + no binary aborts the push" 1 mk_yml
 
 # 2: the TOML half of the loader set (the exact repo shape the 4-name check
@@ -132,13 +170,17 @@ run "absolute LEFTHOOK_CONFIG + no binary aborts" 1 mk_nothing
 rm -rf "${override%/override.yml}"
 
 # 4: the no-op contract: shared hooks dir serving config-less repos.
+# No config means nothing to gate, so an empty ref list is not an error here.
 extra=""
+refs_in=""
 run "no config, no binary: silent no-op" 0 mk_nothing
 
 # 5: the escape hatch must keep working even with a config present.
 extra="LEFTHOOK=0"
+refs_in="$ARRIVING"
 run "LEFTHOOK=0 + config: escape hatch honored" 0 mk_yml
 extra=""
+refs_in=""
 
 # 6: negative control for scenario 3 — a SET but nonexistent override must
 # not abort (the verdict comes from file presence, not the variable).
@@ -150,15 +192,58 @@ extra=""
 # shim is still the hand-patch and this must pass; after retirement the
 # native shim does not know the marker, which is the expected end state.
 assert_dir="$(mktemp -d)"
-rc=0
+mkdir -p "$assert_dir/home"
+assert_rc=0
 ( cd "$assert_dir" && env -u LEFTHOOK -u LEFTHOOK_CONFIG \
-    LEFTHOOK_CLAUDE_SHIM_ASSERT=1 PATH="$SAFE_PATH" sh "$SHIM" </dev/null ) >/dev/null 2>&1 || rc=$?
+    LEFTHOOK_CLAUDE_SHIM_ASSERT=1 HOME="$assert_dir/home" PATH="$SAFE_PATH" sh "$SHIM" </dev/null ) >/dev/null 2>&1 || assert_rc=$?
 rm -rf "$assert_dir"
-if [ "$rc" -eq 1 ]; then
+
+# 8: a gated repo whose stdin is empty. The push range is unknowable, so the
+# gates cannot run and upstream lefthook would exit 0 having checked nothing.
+extra=""
+refs_in=""
+run "gated repo + empty stdin aborts" 1 mk_yml
+
+# 9: lefthook's own skip path on a push that carries commits — the gate
+# bypass this battery exists to prevent. rc must be 1, not lefthook's 0.
+STUB_SKIP="$STUB_DIR/lefthook-skip"
+printf '#!/bin/sh\necho "gates (skip) no matching push files"\nexit 0\n' > "$STUB_SKIP"
+chmod +x "$STUB_SKIP"
+refs_in="$ARRIVING"
+extra="LEFTHOOK_BIN=$STUB_SKIP"
+run "skip on an arriving push aborts" 1 mk_yml
+
+# 10: the one legitimate skip — deleting a remote ref arrives with no commits.
+refs_in="$DELETION"
+run "skip on a deletion-only push is allowed" 0 mk_yml
+
+# 10b: refs that already point at what the remote has. The range is empty and
+# nothing is being deleted, so there is no reason for the gates to have been
+# skipped — the same loud abort applies.
+refs_in="refs/heads/main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+run "empty push range (refs already at the remote) aborts" 1 mk_yml
+
+# 11: a clean run still passes; the guards must not block healthy pushes.
+STUB_OK="$STUB_DIR/lefthook-ok"
+printf '#!/bin/sh\necho "gates (0.1 seconds)"\nexit 0\n' > "$STUB_OK"
+chmod +x "$STUB_OK"
+refs_in="$ARRIVING"
+extra="LEFTHOOK_BIN=$STUB_OK"
+run "clean run passes" 0 mk_yml
+
+# 12: a failing gate still propagates its exit code (nothing is swallowed).
+STUB_FAIL="$STUB_DIR/lefthook-fail"
+printf '#!/bin/sh\nexit 3\n' > "$STUB_FAIL"
+chmod +x "$STUB_FAIL"
+extra="LEFTHOOK_BIN=$STUB_FAIL"
+run "failing gate still fails" 3 mk_yml
+extra=""
+refs_in=""
+if [ "$assert_rc" -eq 1 ]; then
   echo "  ok   hand-patch assertion (shim is still the 2026-09-17 patch)"
   hand_patch_asserted=1
 else
-  echo "  note hand-patch assertion not claimed (rc=$rc) — native or already-retired shim"
+  echo "  note hand-patch assertion not claimed (rc=$assert_rc) — native or already-retired shim"
 fi
 
 # ---- verdict ----------------------------------------------------------------

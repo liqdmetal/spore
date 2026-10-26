@@ -178,6 +178,17 @@ call_lefthook()
     elif devbox run lefthook -h >/dev/null 2>&1
     then
       devbox run lefthook "$@"
+    # `go install github.com/evilmartians/lefthook@latest` — what
+    # install-global-hooks.sh itself uses — lands in $HOME/go/bin, which is
+    # not on PATH in every shell (git on Windows, cron, IDE git clients).
+    # Without these the not-found guard below would abort every commit/push
+    # in a gated repo on a machine that is in fact correctly set up.
+    elif test -x "$HOME/go/bin/lefthook.exe"
+    then
+      "$HOME/go/bin/lefthook.exe" "$@"
+    elif test -x "$HOME/go/bin/lefthook"
+    then
+      "$HOME/go/bin/lefthook" "$@"
     else
       echo "Can't find lefthook in PATH"
       echo "ERROR: Operation is aborted due to lefthook settings."
@@ -188,7 +199,7 @@ call_lefthook()
   fi
 }
 
-call_lefthook run "pre-commit" "$@"
+call_lefthook run "pre-commit" --no-auto-install "$@"
 HOOK_EOF_9x
 chmod +x "$HOOKS/pre-commit"
 
@@ -259,6 +270,17 @@ call_lefthook()
     elif devbox run lefthook -h >/dev/null 2>&1
     then
       devbox run lefthook "$@"
+    # `go install github.com/evilmartians/lefthook@latest` — what
+    # install-global-hooks.sh itself uses — lands in $HOME/go/bin, which is
+    # not on PATH in every shell (git on Windows, cron, IDE git clients).
+    # Without these the not-found guard below would abort every commit/push
+    # in a gated repo on a machine that is in fact correctly set up.
+    elif test -x "$HOME/go/bin/lefthook.exe"
+    then
+      "$HOME/go/bin/lefthook.exe" "$@"
+    elif test -x "$HOME/go/bin/lefthook"
+    then
+      "$HOME/go/bin/lefthook" "$@"
     else
       echo "Can't find lefthook in PATH"
       echo "ERROR: Operation is aborted due to lefthook settings."
@@ -269,13 +291,46 @@ call_lefthook()
   fi
 }
 
-call_lefthook run "prepare-commit-msg" "$@"
+call_lefthook run "prepare-commit-msg" --no-auto-install "$@"
 HOOK_EOF_9x
 chmod +x "$HOOKS/prepare-commit-msg"
 
 # ----- pre-push (verbatim) -----
 cat > "$HOOKS/pre-push" <<'HOOK_EOF_9x'
 #!/bin/sh
+# Global pre-push shim (machine-wide, installed by scripts/install-global-hooks.sh).
+#
+# Runs the repo's lefthook pre-push commands — for spore that is the full gate
+# suite in scripts/gates.sh. Beyond the upstream render it carries two
+# fail-closed guards, because lefthook's own "nothing matched, skip" path exits
+# 0 and a gate-bypassing push then looks exactly like a passing one:
+#
+#   1. NO REF LINES. git writes the push's refs to the hook on stdin; if that
+#      list is empty the push range is unknown and lefthook has nothing to
+#      compute a diff from. Upstream also exits 0 here. We abort.
+#   2. SKIPPED GATES ON A REAL PUSH. lefthook prints
+#        gates (skip) no matching push files
+#      and exits 0 when the diff range comes back empty (dropped/consumed refs,
+#      an unfetchable remote sha, a path filter that matches nothing). When the
+#      push carries new commits — or carries none because every ref already
+#      points at what the remote has — that is a bypass, so it aborts. A
+#      deletion-only push is the one legitimate skip: nothing arrives, so it is
+#      allowed with a note.
+#
+# The refs are buffered once and replayed to lefthook, so no downstream
+# consumer (git-lfs, a wrapper) can eat them on the way.
+#
+# lefthook is invoked with --no-auto-install on purpose: its hook-sync step
+# re-renders every hook in core.hooksPath, and a re-render REPLACES this file
+# with the upstream shim — guards and all. (Real case, 2026-10-26: one push
+# from a repo with an unfamiliar lefthook.yml rewrote all three shims and the
+# manifest drifted mid-session.) With the flag, our own runs cannot undo
+# themselves; scripts/verify-hooks.sh still catches a re-render from anything
+# else.
+#
+# Escape hatches: LEFTHOOK=0 git push ...  |  git push --no-verify
+# Battery: spore scripts/test-pre-push-failclosed.sh (also run by
+# gen-hooks-backup.sh before it regenerates the installer).
 
 if [ "$LEFTHOOK_VERBOSE" = "1" -o "$LEFTHOOK_VERBOSE" = "true" ]; then
   set -x
@@ -284,6 +339,33 @@ fi
 if [ "$LEFTHOOK" = "0" ]; then
   exit 0
 fi
+
+# repo_uses_lefthook — true when lefthook would load a config for this repo.
+# The set is lefthook's own search list (internal/config/loader.go:
+# MainConfigNames + LocalConfigNames, x Extensions), plus LEFTHOOK_CONFIG when
+# it names an existing file. Repos without a config keep the silent no-op
+# contract: nothing to gate, nothing to guard.
+repo_uses_lefthook()
+{
+  dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  if test -n "$LEFTHOOK_CONFIG"
+  then
+    test -f "$LEFTHOOK_CONFIG" && return 0
+    test -f "$dir/$LEFTHOOK_CONFIG" && return 0
+  fi
+  for base in lefthook .lefthook .config/lefthook \
+              lefthook-local .lefthook-local .config/lefthook-local
+  do
+    for ext in .yml .yaml .json .jsonc .toml
+    do
+      if test -f "$dir/$base$ext"
+      then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
 
 call_lefthook()
 {
@@ -312,7 +394,7 @@ call_lefthook()
     elif test -f "$dir/node_modules/lefthook/bin/index.js"
     then
       "$dir/node_modules/lefthook/bin/index.js" "$@"
-    
+
     elif go tool lefthook -h >/dev/null 2>&1
     then
       go tool lefthook "$@"
@@ -340,6 +422,17 @@ call_lefthook()
     elif devbox run lefthook -h >/dev/null 2>&1
     then
       devbox run lefthook "$@"
+    # `go install github.com/evilmartians/lefthook@latest` — what
+    # install-global-hooks.sh itself uses — lands in $HOME/go/bin, which is
+    # not on PATH in every shell (git on Windows, cron, IDE git clients).
+    # Without these the not-found guard below would abort every push in a
+    # gated repo on a machine that is in fact correctly set up.
+    elif test -x "$HOME/go/bin/lefthook.exe"
+    then
+      "$HOME/go/bin/lefthook.exe" "$@"
+    elif test -x "$HOME/go/bin/lefthook"
+    then
+      "$HOME/go/bin/lefthook" "$@"
     else
       echo "Can't find lefthook in PATH"
       dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -353,41 +446,9 @@ call_lefthook()
       # Fail CLOSED when this repo actually uses lefthook but no binary was
       # found: exiting 0 would silently skip the pre-push gate. Repos that
       # do not use lefthook stay a silent no-op (exit 0).
-      # The config set is lefthook's own search list from
-      # internal/config/loader.go: MainConfigNames + LocalConfigNames
-      # (lefthook, .lefthook, .config/lefthook [+ -local] variants) x
-      # Extensions (.yml .yaml .json .jsonc .toml). Keep in sync with the
-      # upstream template (PR evilmartians/lefthook#1549); the generated
-      # shim will converge with this when lefthook re-renders hooks.
       # Retirement runbook: gen-hooks-backup.sh header in the spore repo
       # (battery: scripts/test-pre-push-failclosed.sh).
-      found=""
-      for base in lefthook .lefthook .config/lefthook \
-                  lefthook-local .lefthook-local .config/lefthook-local
-      do
-        for ext in .yml .yaml .json .jsonc .toml
-        do
-          if test -f "$dir/$base$ext"
-          then
-            found=1
-            break
-          fi
-        done
-        if test -n "$found"
-        then
-          break
-        fi
-      done
-      if test -n "$LEFTHOOK_CONFIG"
-      then
-        # Match the loader's resolution: absolute paths (incl. UNC/rooted
-        # Windows forms) are used as-is; relative ones join the repo root.
-        # A missing override makes lefthook itself error out, so no-op here
-        # cannot bypass a working setup.
-        test -f "$LEFTHOOK_CONFIG" && found=1
-        test -f "$dir/$LEFTHOOK_CONFIG" && found=1
-      fi
-      if test -n "$found"
+      if repo_uses_lefthook
       then
         echo "ERROR: Operation is aborted due to lefthook settings."
         echo "Make sure lefthook is available in your environment and re-try."
@@ -398,7 +459,84 @@ call_lefthook()
   fi
 }
 
-call_lefthook run "pre-push" "$@"
+# ---- guard: the push range must be knowable --------------------------------
+REFS_FILE="$(mktemp)" || {
+  echo "pre-push: cannot create a temp file for the push refs — refusing to run blind." >&2
+  exit 1
+}
+OUT_FILE="$(mktemp)" || {
+  rm -f "$REFS_FILE"
+  echo "pre-push: cannot create a temp file for the lefthook output — refusing to run blind." >&2
+  exit 1
+}
+trap 'rm -f "$REFS_FILE" "$OUT_FILE"' EXIT
+trap 'exit 1' INT TERM
+
+# git hands the hook: <local ref> <local sha> <remote ref> <remote sha>.
+# Buffer once; the replay below is the only consumer, so a chained tool
+# cannot eat the lines the way git-lfs did before this was buffered.
+cat >"$REFS_FILE"
+
+ref_lines=$(grep -c . "$REFS_FILE" 2>/dev/null || true)
+[ -n "$ref_lines" ] || ref_lines=0
+
+# A push "arrives" when at least one ref carries commits: local sha present,
+# not the all-zero null sha (deletion), and different from the remote side.
+# Deletion-only pushes are the one legitimate no-files push.
+ZERO_SHA=0000000000000000000000000000000000000000
+arriving=""
+deleting=""
+while read -r _lref lsha _rref rsha
+do
+  [ -n "$lsha" ] || continue
+  if [ "$lsha" = "$ZERO_SHA" ]; then
+    deleting=1
+    continue
+  fi
+  if [ "$lsha" != "$rsha" ]; then
+    arriving=1
+  fi
+done <"$REFS_FILE"
+
+refuse_skip()
+{
+  echo "" >&2
+  echo "pre-push: REFUSING TO SKIP THE GATES — $1" >&2
+  echo "  lefthook reports a pass in that situation, so a push that ran no gates" >&2
+  echo "  would be indistinguishable from one that ran them all. This push is" >&2
+  echo "  aborted instead. Nothing was verified." >&2
+  echo "  If this push genuinely has nothing to gate, use the documented escape" >&2
+  echo "  hatches for this one push:" >&2
+  echo "    git push --no-verify ...        (per-invocation)" >&2
+  echo "    LEFTHOOK=0 git push ...         (env-scoped)" >&2
+  echo "  Otherwise fix the refs or the lefthook config and push again." >&2
+  exit 1
+}
+
+if repo_uses_lefthook && [ "$ref_lines" -eq 0 ]; then
+  refuse_skip "stdin carried no ref lines, so the push range is unknown"
+fi
+
+call_lefthook run "pre-push" --no-auto-install "$@" <"$REFS_FILE" >"$OUT_FILE" 2>&1
+rc=$?
+cat "$OUT_FILE" >&2
+
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# lefthook's skip path: the summary shows the command as skipped for "no
+# matching push files" and the exit code is still 0. Treat that as a failure
+# whenever commits are actually arriving.
+if grep -q "no matching push files" "$OUT_FILE"; then
+  if [ -n "$arriving" ]; then
+    refuse_skip "lefthook skipped the gates ('no matching push files') for a push that carries new commits"
+  fi
+  if [ -z "$deleting" ]; then
+    refuse_skip "the push range came back empty — no ref carries a commit the remote does not already have"
+  fi
+  echo "pre-push: note: gates skipped for a deletion-only push (no commits arriving)." >&2
+fi
+
+exit 0
 HOOK_EOF_9x
 chmod +x "$HOOKS/pre-push"
 
