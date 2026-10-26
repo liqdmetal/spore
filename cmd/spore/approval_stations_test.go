@@ -262,7 +262,12 @@ func TestApprovalTwoStationDrillNeverDoubleSign(t *testing.T) {
 		t.Fatalf("no station signed %q within 30s; station logs:\n%s", name, readLogs())
 	}
 
-	time.Sleep(600 * time.Millisecond) // stations settle on an empty queue
+	// Keep this sleep, unlike the two it replaced: it is not waiting for an
+	// outcome, it just lets both stations finish their startup cycle before a
+	// request appears, so the drill exercises live competition rather than
+	// first-boot. Nothing is asserted after it, so a slow machine only delays
+	// the run, it cannot fail it.
+	time.Sleep(600 * time.Millisecond)
 	if err := os.Rename(req1, filepath.Join(queue, filepath.Base(req1))); err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +280,11 @@ func TestApprovalTwoStationDrillNeverDoubleSign(t *testing.T) {
 	// longer: a duplicate, if the lock ever failed to prevent one, would show
 	// up as a second SIGNED line before they are stopped. The drill proves
 	// at-most-once, not just at-least-once.
+	//
+	// Do NOT turn this one into a wait-for-file poll or delete it as "another
+	// flaky sleep": absence has no event to poll for. Shortening it only
+	// widens the window in which a duplicate could land after the assertions
+	// read the logs.
 	time.Sleep(time.Second)
 	stop(station1)
 	stop(station2)
