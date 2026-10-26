@@ -1,10 +1,11 @@
 # Job receipts v1 — a signed record of work, portable by design
 
-**Status: the attested receipt ships** — `spore sign receipt create|sign|verify`
-emits the canonical record, signs it with the role's fixed statement, and refuses a
-signature that asserts something else. The **spend receipt (§4) is specified but
-not emitted yet**, so the accounting path is still a manual one. Everything the
-attested kind is built from was already there: `spore sign doc` produces a
+**Status: both kinds ship.** `spore sign receipt create|sign|spend|verify` emits the
+attested record, signs it with the role's fixed statement, and refuses a signature
+that asserts something else; `spore sign receipt spend` emits and signs the
+provider-blind accounting record with its salted commitment. What is still missing
+is bookkeeping tooling, not protocol: the §9 export and the §8 aggregator are
+unbuilt. Everything the attested kind is built from was already there: `spore sign doc` produces a
 detached Ed25519 attestation over a file ([signcmd.go](../cmd/spore/signcmd.go),
 `internal/attest`), `spore sign sheet` verifies a set and reports who is missing,
 `spore sign anchor` publishes a digest for a timestamp, and `spore archive put`
@@ -205,6 +206,34 @@ Spend receipts are usually period documents (one per month) rather than one per
 job, because that is what an accountant asks for. Both are valid; `period` is
 then the span the lines fall in.
 
+Emitted and signed in one step, because there is nobody to hand it to:
+
+```
+spore sign receipt spend -out oct.json -identity client.key \
+  -service-category plumbing.emergency -service-summary "Replace failed shutoff valve" \
+  -period-from 2026-10-01T00:00:00Z -period-to 2026-10-31T23:59:59Z \
+  -settlement rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid=HEX,settled=2026-10-24T16:44:03Z \
+  -provider-pub HEX -salt-out oct.salt
+```
+
+The salt is written to `-salt-out` **before** the record, so a receipt that
+exists always has a salt that can open it. The two files must then be kept apart:
+together they are the link the commitment was hiding, which is why the command
+refuses `-provider-pub` without an explicit salt path. `evidence` is derived
+from the settlement lines, never asserted by the caller — a row with no txid
+makes the whole record `self-declared`, and the command says so on stderr.
+
+Opening a commitment is part of verification, not a separate ceremony:
+
+```
+spore sign receipt verify -file oct.json -sigs oct.json.sig \
+  -provider-pub HEX -salt oct.salt
+```
+
+That prints either `commitment  MATCH: opens to …` or fails: a client claiming
+"this row was for provider X" has to produce a salt that actually hashes to the
+committed value, which is the only thing the commitment is for.
+
 ## 5. Provider policy — how "optional" is enforced
 
 A provider publishes one of three policies wherever they can be booked:
@@ -250,6 +279,11 @@ key in the record. `verify` checks the signatures, that each signer is a party,
 that no role signed twice, and — the check `sign sheet` cannot make — that each
 envelope carries the exact statement its role must assert. `-required
 both|client|provider` decides what counts as complete.
+
+`verify` dispatches on the record's `protocol`, so the same command checks a
+spend receipt (§4): there the only acceptable signer is `client_pub`, a second
+signature is an error rather than a bonus, and `-provider-pub`/`-salt` open the
+commitment when one is present.
 
 The same artifacts can be produced with the primitives underneath, which is what
 an implementation without this command would do. Provider side:
@@ -365,8 +399,8 @@ byte for byte.
 ## 11. Acceptance tests
 
 Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
-4, 8, 9**. Still unbuilt, because the feature they test does not exist yet: **5,
-6, 7, 10**.
+4, 6, 7, 8, 9**. Still unbuilt, because the feature they test does not exist yet:
+**5** (front-end policy) and **10** (a `supersedes`-walking aggregator).
 
 1. **Round trip, no state.** Two signatures verify with `spore sign receipt
    verify` (and with `sign sheet`) on a machine holding only the file, the
@@ -383,9 +417,9 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
    not implemented here)*
 6. **Spend receipt blindness.** A spend receipt verifies with the client key
    alone; grepping it for the provider's key, hostname or display name finds
-   nothing. *(spend receipts are not emitted yet)*
+   nothing.
 7. **Commitment opening.** The kept salt opens `provider_commitment` to the
-   provider key; a wrong salt or a different provider does not. *(same)*
+   provider key; a wrong salt or a different provider does not.
 8. **Tamper.** Changing one digit of `amount_atomic` invalidates both
    signatures.
 9. **One-sided.** A provider-only record is reported as `coverage: provider-only`
@@ -407,9 +441,9 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
   records joined by `links.work_order_id`, but the paid work order protocol is
   itself design-stage ([PAID_WORK_ORDER_PROTOCOL_V1.md](PAID_WORK_ORDER_PROTOCOL_V1.md)),
   so that join is not yet testable.
-- **The spend receipt is specified, not implemented.** `sign receipt` emits the
-  attested kind only. Until it can emit spend rows (§4) and the export shape
-  (§9), the accounting path is manual, and `provider_commitment` has no tool.
+- **No export yet.** `sign receipt spend` writes one canonical record; §9's
+  CSV/JSONL export, with `evidence` per row and its fixed sort, is still manual
+  (`jq` and a spreadsheet will do, badly).
 - **No aggregator.** §8 is a rulebook, not code; nothing yet walks `supersedes`
   chains or counts distinct clients.
 - **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),

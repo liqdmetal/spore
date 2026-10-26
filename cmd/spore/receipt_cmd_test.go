@@ -189,6 +189,136 @@ func TestReceiptCommand(t *testing.T) {
 		}
 	})
 
+	// No comma in this subtest name: t.TempDir() inherits it, and -sigs is a
+	// comma-separated list (the same list syntax `sign sheet` uses).
+	t.Run("spend receipt is blind and openable", func(t *testing.T) {
+		spendDir := t.TempDir()
+		rec := filepath.Join(spendDir, "spend.json")
+		salt := filepath.Join(spendDir, "spend.salt")
+		out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", rec, "-identity", clientKey,
+			"-service-category", "plumbing.emergency",
+			"-service-summary", "Replace failed shutoff valve",
+			"-period-from", "2026-10-01T00:00:00Z", "-period-to", "2026-10-31T23:59:59Z",
+			"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid="+txid+",settled=2026-10-24T16:44:03Z",
+			"-provider-pub", providerPub, "-salt-out", salt)
+		if err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		body, err := os.ReadFile(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte(providerPub)) {
+			t.Fatalf("spend receipt names the provider's key:\n%s", body)
+		}
+		if strings.Contains(string(body), "parties") || strings.Contains(string(body), "client_verdict") {
+			t.Fatalf("spend receipt carries attested-kind fields:\n%s", body)
+		}
+		if !strings.Contains(out, "evidence    chain-backed") {
+			t.Errorf("a fully txid-backed row should derive chain-backed:\n%s", out)
+		}
+
+		verifyOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", rec, "-sigs", rec+".sig", "-provider-pub", providerPub, "-salt", salt)
+		if err != nil {
+			t.Fatalf("verify spend: %v\n%s", err, verifyOut)
+		}
+		for _, want := range []string{"not named", "commitment  MATCH", "COMPLETE", "not a reputation entry"} {
+			if !strings.Contains(verifyOut, want) {
+				t.Errorf("verify output missing %q:\n%s", want, verifyOut)
+			}
+		}
+
+		wrongSalt := filepath.Join(spendDir, "wrong.salt")
+		if err := os.WriteFile(wrongSalt, []byte(strings.Repeat("00", 32)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		badOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", rec, "-sigs", rec+".sig", "-provider-pub", providerPub, "-salt", wrongSalt)
+		if err == nil {
+			t.Fatalf("a wrong salt opened the commitment:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "does NOT open") {
+			t.Errorf("mismatch was not explained:\n%s", badOut)
+		}
+	})
+
+	t.Run("spend receipt without a txid is self-declared", func(t *testing.T) {
+		rec := filepath.Join(t.TempDir(), "cash.json")
+		out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", rec, "-identity", clientKey,
+			"-service-category", "plumbing.emergency",
+			"-service-summary", "cash callout",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=12000,settled=2026-10-24T16:44:03Z")
+		if err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "evidence    self-declared") {
+			t.Errorf("a row without a txid should derive self-declared:\n%s", out)
+		}
+		body, err := os.ReadFile(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte("txid")) {
+			t.Errorf("a self-declared row must omit the txid entirely:\n%s", body)
+		}
+	})
+
+	t.Run("spend receipt is signed by the client alone", func(t *testing.T) {
+		rec := filepath.Join(t.TempDir(), "spend.json")
+		if out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", rec, "-identity", clientKey,
+			"-service-category", "plumbing.emergency",
+			"-service-summary", "cash callout",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=12000,settled=2026-10-24T16:44:03Z"); err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+
+		// A provider's signature, however valid, is not part of this document.
+		providerSig := filepath.Join(t.TempDir(), "provider.sig")
+		if out, err := runSpore(t, bin, "sign", "doc", "-identity", providerKey,
+			"-file", rec, "-statement", "spore.spend-receipt/v1 client declaration", "-out", providerSig); err != nil {
+			t.Fatalf("sign doc: %v\n%s", err, out)
+		}
+		badOut, err := runSpore(t, bin, "sign", "receipt", "verify", "-file", rec, "-sigs", providerSig)
+		if err == nil {
+			t.Fatalf("a provider signature completed a spend receipt:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "not the client key") {
+			t.Errorf("rejection did not explain the signer rule:\n%s", badOut)
+		}
+
+		// And a client signature asserting something else is not a declaration.
+		para := filepath.Join(t.TempDir(), "para.sig")
+		if out, err := runSpore(t, bin, "sign", "doc", "-identity", clientKey,
+			"-file", rec, "-statement", "I spent this", "-out", para); err != nil {
+			t.Fatalf("sign doc: %v\n%s", err, out)
+		}
+		paraOut, err := runSpore(t, bin, "sign", "receipt", "verify", "-file", rec, "-sigs", para)
+		if err == nil {
+			t.Fatalf("verify accepted a paraphrased spend declaration:\n%s", paraOut)
+		}
+		if !strings.Contains(paraOut, "spore.spend-receipt/v1 client declaration") {
+			t.Errorf("rejection did not cite the constant:\n%s", paraOut)
+		}
+	})
+
+	t.Run("spend refuses a commitment without a salt", func(t *testing.T) {
+		badOut, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", filepath.Join(t.TempDir(), "x.json"), "-identity", clientKey,
+			"-service-category", "plumbing.emergency", "-service-summary", "x",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=100,settled=2026-10-24T16:44:03Z",
+			"-provider-pub", providerPub)
+		if err == nil {
+			t.Fatalf("emitted a commitment with no salt to open it:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "-salt-out") {
+			t.Errorf("rejection did not name the missing flag:\n%s", badOut)
+		}
+	})
+
 	t.Run("provider-only record carries no client fields", func(t *testing.T) {
 		rec := filepath.Join(t.TempDir(), "solo.json")
 		createOut, err := runSpore(t, bin, "sign", "receipt", "create",

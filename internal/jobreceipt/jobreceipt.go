@@ -86,8 +86,10 @@ type Settlement struct {
 	Network      string `json:"network"`
 	Asset        string `json:"asset"`
 	AmountAtomic string `json:"amount_atomic"`
-	TxID         string `json:"txid"`
-	SettledAt    string `json:"settled_at"`
+	// TxID is required by the attested kind and optional on a spend receipt,
+	// where an absent txid is exactly what makes the row self-declared.
+	TxID      string `json:"txid,omitempty"`
+	SettledAt string `json:"settled_at"`
 }
 
 type Deliverable struct {
@@ -158,14 +160,9 @@ func ID(body []byte) string {
 // fields are rejected, because a reader that ignores them would accept "the
 // same" record with extra signed content it does not understand.
 func Parse(body []byte) (*Record, error) {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
 	var rec Record
-	if err := dec.Decode(&rec); err != nil {
-		return nil, fmt.Errorf("jobreceipt: not a v1 record: %w", err)
-	}
-	if dec.More() {
-		return nil, errors.New("jobreceipt: trailing data after the record object")
+	if err := parseStrict(body, &rec); err != nil {
+		return nil, err
 	}
 	if err := rec.Validate(); err != nil {
 		return nil, err
@@ -237,19 +234,9 @@ func (r *Record) Validate() error {
 		return errors.New("jobreceipt: at least one settlement line is required")
 	}
 	for i, s := range r.Settlement {
-		where := fmt.Sprintf("settlement[%d]", i)
-		for name, v := range map[string]string{"rail": s.Rail, "network": s.Network, "asset": s.Asset} {
-			if v == "" {
-				return fmt.Errorf("jobreceipt: %s.%s is required", where, name)
-			}
-		}
-		if !reAmount.MatchString(s.AmountAtomic) {
-			return fmt.Errorf("jobreceipt: %s.amount_atomic %q must be a decimal string of non-negative integer atomic units (no sign, no decimal point)", where, s.AmountAtomic)
-		}
-		if !reHex64.MatchString(s.TxID) {
-			return fmt.Errorf("jobreceipt: %s.txid must be 64 lowercase hex characters", where)
-		}
-		if _, err := checkStamp(where+".settled_at", s.SettledAt); err != nil {
+		// An attested receipt always cites the payment: without a txid there is
+		// nothing for the provider's signature to be about.
+		if err := checkSettlementLine(fmt.Sprintf("settlement[%d]", i), s, true); err != nil {
 			return err
 		}
 	}
@@ -275,6 +262,31 @@ func (r *Record) Validate() error {
 	}
 	if r.Supersedes != "" && !reDigest.MatchString(r.Supersedes) {
 		return errors.New("jobreceipt: supersedes must be \"sha256:\" plus 64 lowercase hex characters")
+	}
+	return nil
+}
+
+// checkSettlementLine validates one money row. requireTx is true for the
+// attested kind (the payment is what the provider attests to) and false for a
+// spend receipt, where a self-declared bookkeeping row may cite none.
+func checkSettlementLine(where string, s Settlement, requireTx bool) error {
+	for name, v := range map[string]string{"rail": s.Rail, "network": s.Network, "asset": s.Asset} {
+		if v == "" {
+			return fmt.Errorf("jobreceipt: %s.%s is required", where, name)
+		}
+	}
+	if !reAmount.MatchString(s.AmountAtomic) {
+		return fmt.Errorf("jobreceipt: %s.amount_atomic %q must be a decimal string of non-negative integer atomic units (no sign, no decimal point)", where, s.AmountAtomic)
+	}
+	if requireTx {
+		if !reHex64.MatchString(s.TxID) {
+			return fmt.Errorf("jobreceipt: %s.txid must be 64 lowercase hex characters", where)
+		}
+	} else if s.TxID != "" && !reHex64.MatchString(s.TxID) {
+		return fmt.Errorf("jobreceipt: %s.txid must be empty or 64 lowercase hex characters", where)
+	}
+	if _, err := checkStamp(where+".settled_at", s.SettledAt); err != nil {
+		return err
 	}
 	return nil
 }

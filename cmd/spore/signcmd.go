@@ -62,10 +62,10 @@ func signUsage() {
         (multi-party contract: verify all, report who has not signed)
   spore sign anchor -sig SIG
         (print the 32-byte digest to publish on-chain for a real timestamp)
-  spore sign receipt create|sign|verify ...
+  spore sign receipt create|sign|spend|verify ...
         (job receipt per docs/JOB_RECEIPT_V1.md: canonical record, fixed role
          statements, and a verifier that rejects a signature asserting the
-         wrong thing)
+         wrong thing; 'spend' emits the provider-blind accounting record)
 
 The signing key is the SAME Ed25519 key whose public half you already share
 out-of-band as -pinned-sig. Your contact pins you once; that same anchor

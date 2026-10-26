@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -37,12 +38,14 @@ func signReceipt(args []string) {
 		receiptCreate(args[1:])
 	case "sign":
 		receiptSign(args[1:])
+	case "spend":
+		receiptSpend(args[1:])
 	case "verify":
 		receiptVerify(args[1:])
 	case "-h", "--help":
 		receiptUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|verify)\n", args[0])
+		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|spend|verify)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -62,8 +65,16 @@ func receiptUsage() {
         (sign with the role's FIXED statement; refuses an identity that is not
          that role's key in the record)
 
+  spore sign receipt spend -out F -identity F -service-category C -service-summary S
+        -settlement rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,settled=RFC3339[,txid=HEX]
+        [-settlement ...] [-period-from RFC3339 -period-to RFC3339]
+        [-provider-pub HEX -salt-out FILE] [-sig-out SIG]
+        (emit AND sign the provider-blind accounting record; a line without a
+         txid makes the whole record self-declared, not chain-backed)
+
   spore sign receipt verify -file F -sigs A.sig,B.sig [-required both|client|provider]
-        (verify the signatures AND that each one carries its role's statement)
+        (verify the signatures AND that each one carries its role's statement;
+         a spend receipt is dispatched by its own protocol)
 
 A receipt is optional. Nothing here creates one unless someone runs create, and a
 provider-only record (no client key, no verdict) is not a reputation entry.`)
@@ -255,6 +266,8 @@ func receiptVerify(args []string) {
 	file := fs.String("file", "", "the receipt record (required)")
 	sigs := fs.String("sigs", "", "comma-separated signature files (required)")
 	required := fs.String("required", "both", "both|client|provider")
+	commitPub := fs.String("provider-pub", "", "optional (spend only): open the commitment to this provider")
+	commitSalt := fs.String("salt", "", "optional (spend only): the salt you kept")
 	_ = fs.Parse(args)
 
 	if *sigs == "" {
@@ -274,6 +287,15 @@ func receiptVerify(args []string) {
 
 	body, err := os.ReadFile(*file)
 	check(err)
+	proto, err := jobreceipt.ProtocolOf(body)
+	check(err)
+	if proto == jobreceipt.SpendProtocol {
+		receiptVerifySpend(body, *sigs, *required, *commitPub, *commitSalt)
+		return
+	}
+	if *commitPub != "" || *commitSalt != "" {
+		check(errors.New("sign receipt verify: -provider-pub/-salt only apply to a spend receipt (an attested one names the provider outright)"))
+	}
 	rec, err := jobreceipt.Parse(body)
 	check(err)
 	sum := sha256.Sum256(body)
@@ -339,6 +361,228 @@ func receiptVerify(args []string) {
 		return
 	}
 	fmt.Printf("\nCOMPLETE for the %s role.\n", need[0])
+}
+
+// receiptSpend emits the client's own accounting record: no provider key, no
+// provider name, and a commitment the client can open later if it needs to prove
+// who the row was for. The signature is applied here rather than by a separate
+// command because a spend receipt is unilateral by definition — there is no
+// second party to hand it to.
+func receiptSpend(args []string) {
+	fs := flag.NewFlagSet("sign receipt spend", flag.ExitOnError)
+	out := fs.String("out", "", "write the canonical spend receipt here (required)")
+	identity := fs.String("identity", "", "file holding the client's identity private key hex (required)")
+	category := fs.String("service-category", "", "e.g. plumbing.emergency (required)")
+	summary := fs.String("service-summary", "", "one line of what the money was for (required)")
+	from := fs.String("period-from", "", "optional RFC 3339 UTC start of the period this row falls in")
+	to := fs.String("period-to", "", "optional RFC 3339 UTC end of the period")
+	var settlements receiptList
+	fs.Var(&settlements, "settlement", "rail=…,network=…,asset=…,amount=…,settled=RFC3339[,txid=…] (repeatable)")
+	providerPub := fs.String("provider-pub", "", "optional: blind commitment to this provider (requires -salt-out)")
+	saltOut := fs.String("salt-out", "", "where to keep the 32-byte commitment salt; required with -provider-pub")
+	sigOut := fs.String("sig-out", "", "where to write the signature (default: OUT.sig)")
+	_ = fs.Parse(args)
+
+	if *out == "" {
+		check(errors.New("sign receipt spend: -out is required"))
+	}
+	if (*from == "") != (*to == "") {
+		check(errors.New("sign receipt spend: -period-from and -period-to go together"))
+	}
+	if *providerPub != "" && *saltOut == "" {
+		check(errors.New("sign receipt spend: -provider-pub needs -salt-out — the salt is the only way to open the commitment later, and keeping it in this file would defeat the blindness"))
+	}
+	if *providerPub == "" && *saltOut != "" {
+		check(errors.New("sign receipt spend: -salt-out only makes sense with -provider-pub"))
+	}
+
+	key, err := identitySigKey(*identity)
+	check(err)
+	clientPub := hex.EncodeToString(key.Public().(ed25519.PublicKey))
+
+	rec := &jobreceipt.SpendRecord{
+		Protocol:  jobreceipt.SpendProtocol,
+		Version:   jobreceipt.Version,
+		Kind:      jobreceipt.KindSpend,
+		ClientPub: clientPub,
+		Service: jobreceipt.Service{
+			Category: *category,
+			Summary:  *summary,
+		},
+	}
+	if *from != "" {
+		rec.Period = &jobreceipt.Period{From: *from, To: *to}
+	}
+
+	for i, spec := range settlements {
+		kv, err := receiptKV(spec)
+		if err != nil {
+			check(fmt.Errorf("sign receipt spend: -settlement #%d: %w", i+1, err))
+		}
+		allowed := map[string]bool{"rail": true, "network": true, "asset": true, "amount": true, "settled": true, "txid": true}
+		for k := range kv {
+			if !allowed[k] {
+				check(fmt.Errorf("sign receipt spend: -settlement #%d has unknown key %q (want rail, network, asset, amount, settled, and optional txid)", i+1, k))
+			}
+		}
+		for _, name := range []string{"rail", "network", "asset", "amount", "settled"} {
+			if kv[name] == "" {
+				check(fmt.Errorf("sign receipt spend: -settlement #%d is missing %s=", i+1, name))
+			}
+		}
+		rec.Settlement = append(rec.Settlement, jobreceipt.Settlement{
+			Rail:         kv["rail"],
+			Network:      kv["network"],
+			Asset:        kv["asset"],
+			AmountAtomic: kv["amount"],
+			TxID:         kv["txid"],
+			SettledAt:    kv["settled"],
+		})
+	}
+	jobreceipt.SortSettlements(rec.Settlement)
+
+	// Derived, never asserted: a row without a txid is the client's word, and the
+	// record has to say so rather than let a caller claim otherwise.
+	rec.Evidence = jobreceipt.DeriveEvidence(rec.Settlement)
+
+	var saltHex string
+	if *providerPub != "" {
+		salt := make([]byte, 32)
+		if _, err := rand.Read(salt); err != nil {
+			check(fmt.Errorf("sign receipt spend: generate salt: %w", err))
+		}
+		value, err := jobreceipt.CommitmentFor(*providerPub, salt)
+		check(err)
+		rec.ProviderCommitment = &jobreceipt.ProviderCommitment{
+			Scheme: jobreceipt.CommitmentScheme,
+			Value:  value,
+		}
+		saltHex = hex.EncodeToString(salt)
+		// Written before the record, so a receipt that exists always has a salt.
+		if err := os.WriteFile(*saltOut, []byte(saltHex+"\n"), 0o600); err != nil {
+			check(fmt.Errorf("sign receipt spend: write salt: %w", err))
+		}
+	}
+
+	body, err := rec.Encode()
+	check(err)
+	if err := os.WriteFile(*out, body, 0o600); err != nil {
+		check(err)
+	}
+
+	sum := sha256.Sum256(body)
+	env, err := attest.Sign(key, sum[:], int64(len(body)), jobreceipt.SpendStatement, time.Now())
+	check(err)
+	dest := *sigOut
+	if dest == "" {
+		dest = *out + ".sig"
+	}
+	blob, err := json.MarshalIndent(env, "", "  ")
+	check(err)
+	if err := os.WriteFile(dest, append(blob, '\n'), 0o600); err != nil {
+		check(err)
+	}
+
+	txids := 0
+	for _, s := range rec.Settlement {
+		if s.TxID != "" {
+			txids++
+		}
+	}
+	fmt.Printf("receipt     %s (%d bytes)\n", *out, len(body))
+	fmt.Printf("receipt id  %s\n", jobreceipt.ID(body))
+	fmt.Printf("client      %s\n", clientPub)
+	fmt.Printf("provider    not named\n")
+	fmt.Printf("settlement  %d line(s), %d with a txid\n", len(rec.Settlement), txids)
+	fmt.Printf("evidence    %s\n", rec.Evidence)
+	if rec.ProviderCommitment != nil {
+		fmt.Printf("commitment  %s (scheme %s)\n", rec.ProviderCommitment.Value, rec.ProviderCommitment.Scheme)
+		fmt.Printf("salt        %s — keep this AWAY from the receipt: together they are the link\n", *saltOut)
+	}
+	fmt.Printf("statement   %q\n", jobreceipt.SpendStatement)
+	fmt.Printf("wrote       %s and %s\n", *out, dest)
+	fmt.Println()
+	if rec.Evidence == jobreceipt.EvidenceSelf {
+		fmt.Println("note: at least one line has no txid, so this whole record is self-declared —")
+		fmt.Println("      an export must print it that way and must not present it as chain-verified.")
+	}
+}
+
+// receiptVerifySpend checks the only signature a spend receipt can have. The
+// statement comparison is the same rule as the attested kind: the client's key
+// over these bytes is not enough if it declared something else.
+func receiptVerifySpend(body []byte, sigs, required, providerPub, saltPath string) {
+	rec, err := jobreceipt.ParseSpend(body)
+	check(err)
+	if required == jobreceipt.RoleProvider {
+		check(errors.New("sign receipt verify: a spend receipt has no provider signature; the client signs it alone"))
+	}
+	sum := sha256.Sum256(body)
+	signed := ""
+	for _, path := range strings.Split(sigs, ",") {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		check(err)
+		var env attest.Envelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			check(fmt.Errorf("%s: not a signature envelope: %w", path, err))
+		}
+		if env.SignerPub != rec.ClientPub {
+			check(fmt.Errorf("%s: %s is not the client key on this spend receipt (%s) — a spend receipt is signed by the client alone", path, env.SignerPub, rec.ClientPub))
+		}
+		if env.Statement != jobreceipt.SpendStatement {
+			check(fmt.Errorf("%s: statement is %q, but a spend declaration must be %q", path, env.Statement, jobreceipt.SpendStatement))
+		}
+		if signed != "" {
+			check(fmt.Errorf("%s: the client already signed this receipt; a spend receipt carries one signature", path))
+		}
+		if err := env.Verify(sum[:]); err != nil {
+			check(fmt.Errorf("%s: %w", path, err))
+		}
+		signed = env.SignerPub
+	}
+
+	fmt.Printf("receipt     spend receipt (%d bytes)\n", len(body))
+	fmt.Printf("receipt id  %s\n", jobreceipt.ID(body))
+	fmt.Printf("client      %s\n", rec.ClientPub)
+	fmt.Printf("provider    not named (commitment: %s)\n", map[bool]string{true: "present, unopened", false: "none"}[rec.ProviderCommitment != nil])
+	fmt.Printf("settlement  %d line(s)\n", len(rec.Settlement))
+	fmt.Printf("evidence    %s\n", rec.Evidence)
+
+	// Opening the commitment is the only thing the salt is for, so the verifier
+	// is where it belongs: a client claiming "this row was for provider X" has to
+	// produce a salt that actually hashes to the committed value.
+	if providerPub != "" || saltPath != "" {
+		if providerPub == "" || saltPath == "" {
+			check(errors.New("sign receipt verify: opening a commitment needs both -provider-pub and -salt"))
+		}
+		if rec.ProviderCommitment == nil {
+			check(errors.New("sign receipt verify: this receipt carries no provider_commitment to open"))
+		}
+		rawSalt, err := os.ReadFile(saltPath)
+		check(err)
+		salt, err := hex.DecodeString(strings.TrimSpace(string(rawSalt)))
+		if err != nil || len(salt) != 32 {
+			check(fmt.Errorf("sign receipt verify: %s is not a 32-byte hex salt", saltPath))
+		}
+		ok, err := jobreceipt.OpensCommitment(providerPub, salt, rec.ProviderCommitment.Value)
+		check(err)
+		if !ok {
+			check(errors.New("sign receipt verify: the salt does NOT open this commitment to that provider — either the wrong salt, or the row was for someone else"))
+		}
+		fmt.Printf("commitment  MATCH: opens to %s\n", providerPub)
+	}
+
+	if signed == "" {
+		fmt.Println("\nINCOMPLETE: the client has not signed this declaration.")
+		os.Exit(1)
+	}
+	fmt.Printf("signatures  1 valid\n  OK  client    %s  %q\n", signed, jobreceipt.SpendStatement)
+	fmt.Println("\nCOMPLETE: the client signed this declaration. It is not a reputation entry —")
+	fmt.Println("nobody co-signed it, so it says what the client says it paid.")
 }
 
 // receiptList is a repeatable string flag.
