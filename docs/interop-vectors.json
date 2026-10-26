@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden interop vectors for the Spore wire formats. Source of truth: docs/WIRE_SPEC.md. Regenerate: go test ./internal/secure/ -run TestGenerateWireSpecVectors.",
+  "_comment": "Golden interop vectors for the Spore wire formats. Source of truth: docs/WIRE_SPEC.md. Regenerate: SPORE_REGEN_VECTORS=1 go test ./internal/secure/ -run TestGenerateWireSpecVectors.",
   "canonical": {
     "encode_pointer_body_cid": "9b380613c88bc1086d3cf1a83612b9aed39f056a3169a6380df78c97ebc4cb76",
     "encode_pointer_eph_pub": "4eee259c3e75ea0072962a0a06627388260ff26349e8f6a783d206488e58b652",

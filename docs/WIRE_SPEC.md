@@ -2,7 +2,7 @@
 
 *Source of truth for the canonical payload, envelope, pointer, and spore-peer
 transport formats. Golden test vectors: [`interop-vectors.json`](interop-vectors.json)
-(regenerate: `go test ./internal/secure/ -run TestGenerateWireSpecVectors`).
+(regenerate: `SPORE_REGEN_VECTORS=1 go test ./internal/secure/ -run TestGenerateWireSpecVectors`).
 Conformance tests: Go `internal/secure` `TestSpec*`; Rust `spore_peer.rs`
 `spec_*`. Byte-order note: canonical length prefixes are BIG-endian; the
 spore-peer transport length prefix is LITTLE-endian (historical).*

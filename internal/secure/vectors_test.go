@@ -2,17 +2,24 @@ package secure
 
 // Wire-spec vector generation. Run with:
 //
-//	go test ./internal/secure/ -run TestGenerateWireSpecVectors -v
+//	SPORE_REGEN_VECTORS=1 go test ./internal/secure/ -run TestGenerateWireSpecVectors -v
 //
-// and commit the printed JSON as docs/interop-vectors.json. The vectors are
-// fully deterministic: fixed X25519 scalars, fixed ephemeral scalar, fixed
-// nonce, deterministic Ed25519 seed derivation. See docs/WIRE_SPEC.md.
+// which writes docs/interop-vectors.json atomically; commit the result. Without
+// the variable the test only prints the JSON, so a plain `go test ./...` never
+// modifies a tracked file. The vectors are fully deterministic: fixed X25519
+// scalars, fixed ephemeral scalar, fixed nonce, deterministic Ed25519 seed
+// derivation. See docs/WIRE_SPEC.md.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"encoding/binary"
@@ -293,7 +300,7 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 	}
 
 	doc := map[string]interface{}{
-		"_comment": "Golden interop vectors for the Spore wire formats. Source of truth: docs/WIRE_SPEC.md. Regenerate: go test ./internal/secure/ -run TestGenerateWireSpecVectors.",
+		"_comment": "Golden interop vectors for the Spore wire formats. Source of truth: docs/WIRE_SPEC.md. Regenerate: SPORE_REGEN_VECTORS=1 go test ./internal/secure/ -run TestGenerateWireSpecVectors.",
 		"fixed_scalars": map[string]string{
 			"alice_x25519_priv": h32(alicePriv),
 			"bob_x25519_priv":   h32(bobPriv),
@@ -334,7 +341,147 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 		// must agree byte-for-byte — the decided handle-epoch scheme.
 		"fabric_v1": fabricV1Vectors(),
 	}
-	out, _ := json.MarshalIndent(doc, "", "  ")
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("vectors:\n%s", out)
-	_ = os.WriteFile("../../docs/interop-vectors.json", out, 0o644)
+
+	// The vectors are a committed golden file read by internal/fabric,
+	// internal/secure, internal/wirefuzz and internal/peerstore, and mirrored by
+	// the Rust side. Writing it unconditionally meant any `go test ./...` rewrote
+	// a tracked file while sibling packages were reading it — and `go test ./...`
+	// runs packages in parallel, while os.WriteFile truncates before it writes.
+	// A reader that lost that race died with
+	// "parse interop-vectors.json: unexpected end of JSON input", blaming code that
+	// was fine, and left the working tree dirty after a test run.
+	//
+	// So the write is opt-in, and atomic when it happens: a temp file in the same
+	// directory renamed over the target, so a concurrent reader sees either the
+	// old file or the new one and never a truncation.
+	if os.Getenv("SPORE_REGEN_VECTORS") == "" {
+		return
+	}
+	if err := writeFileAtomic("../../docs/interop-vectors.json", out, 0o644); err != nil {
+		t.Fatalf("regenerate interop-vectors.json: %v", err)
+	}
+	t.Log("wrote ../../docs/interop-vectors.json")
+}
+
+// writeFileAtomic replaces path with data via a temp file in the same directory
+// and a rename, so no reader can observe a partially written file. Existing
+// contents that already match are left alone, so re-running a generator does not
+// churn the mtime of a tracked file.
+// TestWriteFileAtomicNoTornReads pins the property the generator depends on:
+// while the file is being replaced over and over, a concurrent reader must
+// never see bytes that are not valid JSON. This is the regression test for the
+// flake it fixes — `go test ./...` rewriting docs/interop-vectors.json while
+// internal/fabric read it and failed with "unexpected end of JSON input". A
+// plain os.WriteFile fails this test.
+func TestWriteFileAtomicNoTornReads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vectors.json")
+	payload := func(i int) []byte {
+		out, err := json.MarshalIndent(map[string]interface{}{
+			"i":   i,
+			"pad": strings.Repeat("x", 4096), // bigger than a pipe buffer, like the real file
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if err := writeFileAtomic(path, payload(0), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		wg       sync.WaitGroup
+		stop     = make(chan struct{})
+		torn     int64 // reads that returned bytes which do not parse
+		replaced int64
+	)
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					// A concurrent replace can be refused outright on Windows (sharing
+					// violation). That is a missed read, not a corrupt one.
+					continue
+				}
+				if !json.Valid(raw) {
+					atomic.AddInt64(&torn, 1)
+				}
+			}
+		}()
+	}
+
+	lastWritten := 0
+	for i := 1; i <= 100; i++ {
+		if err := writeFileAtomic(path, payload(i), 0o644); err != nil {
+			continue // Windows sharing violation; see above
+		}
+		lastWritten = i
+		atomic.AddInt64(&replaced, 1)
+	}
+	close(stop)
+	wg.Wait()
+
+	if torn > 0 {
+		t.Fatalf("%d of the concurrent reads saw a torn file — the write is not atomic", torn)
+	}
+	if replaced == 0 {
+		t.Fatal("no replacement succeeded, so the test proved nothing")
+	}
+	final, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(final, payload(lastWritten)) {
+		t.Fatal("file does not hold the last payload written successfully")
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(path) {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename has succeeded
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
