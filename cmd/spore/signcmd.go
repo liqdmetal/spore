@@ -42,10 +42,12 @@ func signcmd(args []string) {
 		signSheet(args[1:])
 	case "anchor":
 		signAnchor(args[1:])
+	case "receipt":
+		signReceipt(args[1:])
 	case "-h", "--help":
 		signUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "sign: unknown subcommand %q (want doc|verify|sheet|anchor)\n", args[0])
+		fmt.Fprintf(os.Stderr, "sign: unknown subcommand %q (want doc|verify|sheet|anchor|receipt)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -60,6 +62,10 @@ func signUsage() {
         (multi-party contract: verify all, report who has not signed)
   spore sign anchor -sig SIG
         (print the 32-byte digest to publish on-chain for a real timestamp)
+  spore sign receipt create|sign|verify ...
+        (job receipt per docs/JOB_RECEIPT_V1.md: canonical record, fixed role
+         statements, and a verifier that rejects a signature asserting the
+         wrong thing)
 
 The signing key is the SAME Ed25519 key whose public half you already share
 out-of-band as -pinned-sig. Your contact pins you once; that same anchor

@@ -1,12 +1,15 @@
 # Job receipts v1 — a signed record of work, portable by design
 
-**Status: design.** No command emits a receipt today. What exists is everything a
-receipt is built from: `spore sign doc` produces a detached Ed25519 attestation
-over a file ([signcmd.go](../cmd/spore/signcmd.go), `internal/attest`), `spore sign
-sheet` verifies a set of them and reports who is missing, `spore sign anchor`
-publishes a digest for a timestamp, and `spore archive put` keeps the bytes. This
-document fixes the *record*, so that two implementations sign the same bytes
-instead of two plausible formats.
+**Status: the attested receipt ships** — `spore sign receipt create|sign|verify`
+emits the canonical record, signs it with the role's fixed statement, and refuses a
+signature that asserts something else. The **spend receipt (§4) is specified but
+not emitted yet**, so the accounting path is still a manual one. Everything the
+attested kind is built from was already there: `spore sign doc` produces a
+detached Ed25519 attestation over a file ([signcmd.go](../cmd/spore/signcmd.go),
+`internal/attest`), `spore sign sheet` verifies a set and reports who is missing,
+`spore sign anchor` publishes a digest for a timestamp, and `spore archive put`
+keeps the bytes. This document fixes the *record*, so that two implementations
+sign the same bytes instead of two plausible formats.
 
 Bounded by the same rule as [HOOKED_INTEGRATION.md](HOOKED_INTEGRATION.md): nothing
 here hands a platform the ability to decrypt a message. A receipt is about a job,
@@ -223,7 +226,33 @@ obliges the provider to issue one. A booking with `off` is a complete booking.
 
 ## 6. Producing and verifying one
 
-Attested receipt, provider side:
+The whole sequence, with the role statements chosen by the command rather than by
+the caller:
+
+```
+spore sign receipt create -out job.json \
+  -service-category plumbing.emergency -service-summary "Replace failed shutoff valve" \
+  -provider-pub HEX -client-pub HEX \
+  -started-at 2026-10-24T15:02:11Z -finished-at 2026-10-24T16:41:52Z \
+  -settlement rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid=HEX,settled=2026-10-24T16:44:03Z \
+  -deliverable label=before,digest=sha256:HEX,bytes=184223 \
+  -client-accepted -client-rating 5
+
+spore sign receipt sign -role provider -identity provider.key -file job.json
+spore sign receipt sign -role client   -identity client.key   -file job.json
+
+spore sign receipt verify -file job.json -sigs job.json.client.sig,job.json.provider.sig
+```
+
+`create` prints the `receipt_id` (the SHA-256 of the bytes it wrote). `sign`
+derives the statement from `-role` and refuses an identity that is not that role's
+key in the record. `verify` checks the signatures, that each signer is a party,
+that no role signed twice, and — the check `sign sheet` cannot make — that each
+envelope carries the exact statement its role must assert. `-required
+both|client|provider` decides what counts as complete.
+
+The same artifacts can be produced with the primitives underneath, which is what
+an implementation without this command would do. Provider side:
 
 ```
 spore sign doc -identity provider.key -file job.json \
@@ -246,9 +275,11 @@ spore sign sheet -file job.json -sigs client.sig,provider.sig \
 ```
 
 A sheet that fills both slots is a complete receipt. A sheet reporting a missing
-signer is not a receipt yet, and must not be rendered as one. Optional real
-timestamp: `spore sign anchor -sig client.sig` (chain commitment; costs a fee,
-needs no recipient cooperation).
+signer is not a receipt yet, and must not be rendered as one — but note that this
+is the raw path: `sign sheet` does not compare statements (§3), so a verifier
+using it must do that itself, which is exactly what `sign receipt verify` adds.
+Optional real timestamp: `spore sign anchor -sig client.sig` (chain commitment;
+costs a fee, needs no recipient cooperation).
 
 Durability: `spore archive put -file job.json` for the record and one for each
 signature, since the mirror set is what survives a lost disk. Keep them together
@@ -331,29 +362,38 @@ byte for byte.
   with an anchor is public as a hash, which is enough to prove it existed by a
   time and not enough to read it.
 
-## 11. Acceptance tests before this ships
+## 11. Acceptance tests
 
-1. **Round trip, no state.** Two signatures verify with `spore sign sheet` on a
-   machine holding only the file, the signatures and the two public keys.
-2. **Byte stability.** Ten thousand re-serializations of one record in shuffled
-   key order produce one byte sequence and one `receipt_id`.
-3. **Float refusal.** `"amount_atomic": 0.25` is rejected by the parser, not
-   coerced.
+Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
+4, 8, 9**. Still unbuilt, because the feature they test does not exist yet: **5,
+6, 7, 10**.
+
+1. **Round trip, no state.** Two signatures verify with `spore sign receipt
+   verify` (and with `sign sheet`) on a machine holding only the file, the
+   signatures and the two public keys.
+2. **Byte stability.** Re-serializations of one record in shuffled key order
+   produce one byte sequence and one `receipt_id`; `create` reproduces the
+   published vector byte for byte.
+3. **Float refusal.** `amount=0.25` is rejected by `create`, not coerced.
 4. **Statement binding.** An envelope signed with a paraphrased statement is
-   rejected even though the key and document match.
+   rejected by `verify` even though the key and document match — and accepted by
+   `sign sheet`, which is why the check lives in the receipt command.
 5. **Provider `off`.** No receipt file is created, and a grep of every front-end
-   table for the job id finds no receipt row or digest.
+   table for the job id finds no receipt row or digest. *(front-end behaviour,
+   not implemented here)*
 6. **Spend receipt blindness.** A spend receipt verifies with the client key
    alone; grepping it for the provider's key, hostname or display name finds
-   nothing.
+   nothing. *(spend receipts are not emitted yet)*
 7. **Commitment opening.** The kept salt opens `provider_commitment` to the
-   provider key; a wrong salt or a different provider does not.
+   provider key; a wrong salt or a different provider does not. *(same)*
 8. **Tamper.** Changing one digit of `amount_atomic` invalidates both
    signatures.
 9. **One-sided.** A provider-only record is reported as `coverage: provider-only`
-   and is refused by an aggregator that counts attested receipts.
+   and is refused by an aggregator that counts attested receipts; `verify`
+   reports it incomplete against `-required both`.
 10. **Supersede.** A corrected record counts once, at its head, and the earlier
-    record still verifies.
+    record still verifies. *(`supersedes` is emitted; no chain-walking
+    aggregator exists yet)*
 
 ## 12. Open items
 
@@ -367,8 +407,14 @@ byte for byte.
   records joined by `links.work_order_id`, but the paid work order protocol is
   itself design-stage ([PAID_WORK_ORDER_PROTOCOL_V1.md](PAID_WORK_ORDER_PROTOCOL_V1.md)),
   so that join is not yet testable.
+- **The spend receipt is specified, not implemented.** `sign receipt` emits the
+  attested kind only. Until it can emit spend rows (§4) and the export shape
+  (§9), the accounting path is manual, and `provider_commitment` has no tool.
+- **No aggregator.** §8 is a rulebook, not code; nothing yet walks `supersedes`
+  chains or counts distinct clients.
 - **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),
-  exercised by `cmd/spore/jobreceipt_test.go`). A cross-language set — the same
-  record printed by a second implementation, plus its receipt id — must exist
-  before that implementation claims conformance, the same demand
-  [WIRE_SPEC.md](WIRE_SPEC.md) makes of the wire format.
+  exercised by `cmd/spore/jobreceipt_test.go` and reproduced byte for byte by
+  `create`). A cross-language set — the same record printed by a second
+  implementation, plus its receipt id — must exist before that implementation
+  claims conformance, the same demand [WIRE_SPEC.md](WIRE_SPEC.md) makes of the
+  wire format.

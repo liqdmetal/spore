@@ -1,0 +1,217 @@
+package main
+
+// End-to-end tests for `spore sign receipt`: the emitter must reproduce the
+// published vector byte for byte, and the command — not the caller — must own
+// the role statements, the signing key, and the party list.
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const receiptVectorPath = "../../docs/job-receipt-v1.vector.json"
+
+// receiptSeedKeys writes the three fixed identity seeds used by these tests and
+// by the published vector: 0x52… is the client, 0x63… the provider, 0x33… a
+// stranger whose signature is valid but irrelevant.
+func receiptSeedKeys(t *testing.T) (client, provider, stranger string) {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, seed string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(strings.Repeat(seed, 32)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	return write("client.key", "52"), write("provider.key", "63"), write("stranger.key", "33")
+}
+
+func TestReceiptCommand(t *testing.T) {
+	bin := buildSporeBinary(t)
+	clientKey, providerKey, strangerKey := receiptSeedKeys(t)
+
+	vector, err := os.ReadFile(receiptVectorPath)
+	if err != nil {
+		t.Fatalf("read vector: %v", err)
+	}
+	clientPub := fixtureClientPub(t, vector)
+	providerPub := fixtureProviderPub(t, vector)
+	txSum := sha256.Sum256([]byte("spore job receipt v1 vector: settlement"))
+	txid := fmt.Sprintf("%x", txSum)
+
+	createArgs := func(out string) []string {
+		return []string{"sign", "receipt", "create",
+			"-out", out,
+			"-service-category", "plumbing.emergency",
+			"-service-summary", "Replace failed shutoff valve, kitchen line",
+			"-provider-pub", providerPub,
+			"-client-pub", clientPub,
+			"-started-at", "2026-10-24T15:02:11Z",
+			"-finished-at", "2026-10-24T16:41:52Z",
+			"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid=" + txid + ",settled=2026-10-24T16:44:03Z",
+			"-deliverable", "label=before,digest=sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb,bytes=6",
+			"-deliverable", "label=after,digest=sha256:f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8,bytes=5",
+			"-client-accepted", "-client-rating", "5",
+		}
+	}
+
+	// One record, created once and reused: the subtests below then test what the
+	// command refuses, which is where the enforcement lives.
+	dir := t.TempDir()
+	record := filepath.Join(dir, "job.json")
+	out, err := runSpore(t, bin, createArgs(record)...)
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+
+	t.Run("create reproduces the published vector", func(t *testing.T) {
+		got, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, vector) {
+			t.Fatalf("create did not reproduce the vector:\n--- got ---\n%s\n--- want ---\n%s", got, vector)
+		}
+		wantID := fmt.Sprintf("%x", sha256.Sum256(vector))
+		if !strings.Contains(out, wantID) {
+			t.Errorf("create did not print the receipt id %s:\n%s", wantID, out)
+		}
+	})
+
+	t.Run("create refuses a fractional amount", func(t *testing.T) {
+		args := createArgs(filepath.Join(t.TempDir(), "bad.json"))
+		for i, a := range args {
+			if strings.Contains(a, "amount=2500000000000") {
+				args[i] = strings.Replace(a, "amount=2500000000000", "amount=0.25", 1)
+			}
+		}
+		badOut, err := runSpore(t, bin, args...)
+		if err == nil {
+			t.Fatalf("create accepted a fractional amount:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "amount_atomic") {
+			t.Errorf("rejection did not name the field:\n%s", badOut)
+		}
+	})
+
+	t.Run("sign refuses a key that is not that role's", func(t *testing.T) {
+		badOut, err := runSpore(t, bin, "sign", "receipt", "sign",
+			"-role", "client", "-identity", strangerKey, "-file", record,
+			"-out", filepath.Join(dir, "stranger.sig"))
+		if err == nil {
+			t.Fatalf("signed as the client with a stranger key:\n%s", badOut)
+		}
+		if !strings.Contains(badOut, "this identity is") {
+			t.Errorf("rejection did not explain the key mismatch:\n%s", badOut)
+		}
+	})
+
+	t.Run("sign derives the statement from the role", func(t *testing.T) {
+		for _, tc := range []struct{ role, key string }{{"provider", providerKey}, {"client", clientKey}} {
+			sigPath := record + "." + tc.role + ".sig"
+			sigOut, err := runSpore(t, bin, "sign", "receipt", "sign",
+				"-role", tc.role, "-identity", tc.key, "-file", record, "-out", sigPath)
+			if err != nil {
+				t.Fatalf("sign as %s: %v\n%s", tc.role, err, sigOut)
+			}
+			want := "spore.job-receipt/v1 " + tc.role + " " + map[string]string{"client": "acceptance", "provider": "attestation"}[tc.role]
+			if !strings.Contains(sigOut, want) {
+				t.Errorf("%s signature does not carry %q:\n%s", tc.role, want, sigOut)
+			}
+		}
+	})
+
+	t.Run("verify reports a complete receipt", func(t *testing.T) {
+		verifyOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", record,
+			"-sigs", record+".client.sig,"+record+".provider.sig")
+		if err != nil {
+			t.Fatalf("verify: %v\n%s", err, verifyOut)
+		}
+		for _, want := range []string{"signatures  2 valid", "FULLY EXECUTED", clientPub, providerPub} {
+			if !strings.Contains(verifyOut, want) {
+				t.Errorf("verify output missing %q:\n%s", want, verifyOut)
+			}
+		}
+	})
+
+	t.Run("verify rejects a signature asserting something else", func(t *testing.T) {
+		// The same client key, the same bytes, a different assertion. This is the
+		// case `sign sheet` cannot catch and `sign receipt verify` must.
+		para := filepath.Join(t.TempDir(), "paraphrased.sig")
+		paraOut, err := runSpore(t, bin, "sign", "doc", "-identity", clientKey,
+			"-file", record, "-statement", "I accepted the work described above", "-out", para)
+		if err != nil {
+			t.Fatalf("sign doc: %v\n%s", err, paraOut)
+		}
+		verifyOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", record, "-sigs", record+".provider.sig,"+para)
+		if err == nil {
+			t.Fatalf("verify accepted a paraphrased statement:\n%s", verifyOut)
+		}
+		if !strings.Contains(verifyOut, "must be \"spore.job-receipt/v1 client acceptance\"") {
+			t.Errorf("rejection did not cite the role constant:\n%s", verifyOut)
+		}
+	})
+
+	t.Run("verify rejects a key that is not a party", func(t *testing.T) {
+		foreign := filepath.Join(t.TempDir(), "foreign.sig")
+		foreignOut, err := runSpore(t, bin, "sign", "doc", "-identity", strangerKey,
+			"-file", record, "-statement", "spore.job-receipt/v1 client acceptance", "-out", foreign)
+		if err != nil {
+			t.Fatalf("sign doc: %v\n%s", err, foreignOut)
+		}
+		verifyOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", record, "-sigs", record+".provider.sig,"+foreign)
+		if err == nil {
+			t.Fatalf("verify accepted a non-party signer:\n%s", verifyOut)
+		}
+		if !strings.Contains(verifyOut, "is not a party to this record") {
+			t.Errorf("rejection did not name the party rule:\n%s", verifyOut)
+		}
+	})
+
+	t.Run("one signature is not a complete receipt", func(t *testing.T) {
+		verifyOut, err := runSpore(t, bin, "sign", "receipt", "verify",
+			"-file", record, "-sigs", record+".provider.sig")
+		if err == nil {
+			t.Fatalf("provider-only verification reported complete:\n%s", verifyOut)
+		}
+		if !strings.Contains(verifyOut, "INCOMPLETE") || !strings.Contains(verifyOut, "client") {
+			t.Errorf("incomplete report did not name the missing role:\n%s", verifyOut)
+		}
+	})
+
+	t.Run("provider-only record carries no client fields", func(t *testing.T) {
+		rec := filepath.Join(t.TempDir(), "solo.json")
+		createOut, err := runSpore(t, bin, "sign", "receipt", "create",
+			"-out", rec,
+			"-service-category", "plumbing.emergency",
+			"-service-summary", "Replace failed shutoff valve, kitchen line",
+			"-provider-pub", providerPub,
+			"-provider-only",
+			"-started-at", "2026-10-24T15:02:11Z",
+			"-finished-at", "2026-10-24T16:41:52Z",
+			"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=2500000000000,txid="+txid+",settled=2026-10-24T16:44:03Z")
+		if err != nil {
+			t.Fatalf("create provider-only: %v\n%s", err, createOut)
+		}
+		body, err := os.ReadFile(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte("client_pub")) {
+			t.Fatalf("provider-only record names a client key:\n%s", body)
+		}
+		if !strings.Contains(createOut, "not a reputation entry") {
+			t.Errorf("create did not flag the record as non-reputation:\n%s", createOut)
+		}
+	})
+}
