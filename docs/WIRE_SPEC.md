@@ -144,6 +144,17 @@ Semantics:
   the body reads as not-found and reap cleans it up), never a body whose
   expiry is unknown — a body that could never be reaped would break the
   compost guarantee the whole store exists to provide.
+- **Concurrent ordering.** That ordering is an ordering of two SEQUENCES,
+  so writes must not interleave with reaping: the store serializes `Put`,
+  `Reap` and `Delete` against each other. Put writes record-then-body while
+  reap removes body-then-record, and a reap pass landing between the two
+  halves of a Put used to delete the record and then let the body land
+  beside nothing — the never-expires case above, reached by concurrency
+  rather than by crash, and unreachable by reap ever after. Implementations
+  that reap must hold an equivalent exclusion (the reference is a
+  per-process lock; a dir shared by two processes needs filesystem-level
+  locking). Reads need no exclusion: every file is whole, thanks to
+  temp+rename.
 - **Deadline resolution.** `.expms`, when present and parseable, is
   authoritative; otherwise the seconds floor applies. The ms record exists
   so mid-second deadlines are enforced at read time and reaped on the

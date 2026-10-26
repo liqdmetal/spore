@@ -77,6 +77,17 @@ func spinPastDeadline(t *testing.T, deadline time.Time) {
 //     environmental condition, reported as such. If the counter advances
 //     but the bytes persist, THAT is a product bug, and the failure names
 //     both numbers so the two cases can never be confused.
+//
+// The first half is deterministic NOW, but it was not always: it used to
+// fail roughly one run in fifteen, because the expired body SURVIVED its
+// reap pass with no .exp beside it. That orphan — a .body with no deadline
+// record, which deadlineFor reads as "never expires" — was manufactured by
+// the background ticker whenever a pass removed the deadline records in the
+// window between Put writing them and its body rename. DiskStore now
+// serializes Put/Reap/Delete so the interleave cannot happen, and
+// TestPutConcurrentWithReapNeverOrphansABody (internal/store) reproduces the
+// race directly: a regression fails there in seconds rather than showing up
+// here as an intermittent failure one push in fifteen.
 func TestReapTickerCompostsExpiredBodiesWithoutAccess(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewSporePeerStore(SporePeerConfig{Dir: dir, ReapEvery: 25 * time.Millisecond})

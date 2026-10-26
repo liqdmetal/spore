@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,27 @@ import (
 //	                 the seconds floor — the conservative direction)
 type DiskStore struct {
 	dir string
+
+	// mu serializes the multi-file sequences against each other. Put writes
+	// the deadline records and THEN the body; Reap and Delete remove the
+	// body and then the records — the two orders are safe on their own but
+	// not against each other. A reap pass that lands in the window between
+	// Put's record write and its body rename deletes the records, and the
+	// body is then renamed into place with NO .exp beside it; deadlineFor
+	// reads a missing .exp as "no deadline = never expires", so that body
+	// can never be reaped again. That is silent permanent retention of
+	// ciphertext — the exact failure this store exists to prevent — and it
+	// was observed for real (peerstore's reap test intermittently saw a
+	// body with no .exp, once per few hundred Puts under a 25 ms ticker).
+	// Holding mu across each sequence makes the interleave impossible.
+	//
+	// This is a per-process lock: a single writer per dir is the design (a
+	// node holds the bodies it serves). Two processes sharing one dir would
+	// still need filesystem-level locking. Reads (Get, Len) deliberately do
+	// not take it — they see whole files either way, thanks to the
+	// temp+rename discipline, and holding it there would let a large read
+	// stall the ticker.
+	mu sync.Mutex
 }
 
 // NewDiskStoreFromURL opens a local body store from a disk:// URL. It accepts
@@ -64,6 +86,8 @@ func (s *DiskStore) expPathMS(cid [32]byte) string {
 }
 
 func (s *DiskStore) Put(cid [32]byte, body []byte, deadline time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Write the deadline BEFORE the body, both via temp+rename so each half
 	// is atomic on its own. This ordering matters: expired() treats a
 	// missing .exp file as "never expires" (see below), so if a crash lands
@@ -182,6 +206,8 @@ func (s *DiskStore) Get(cid [32]byte) ([]byte, error) {
 }
 
 func (s *DiskStore) Delete(cid [32]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rm := func(p string) {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			// best-effort; caller sees the primary error below
@@ -205,6 +231,8 @@ func (s *DiskStore) Delete(cid [32]byte) error {
 // including mid-second deadlines — and never earlier than it would be
 // refused at read.
 func (s *DiskStore) Reap(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	matches, _ := filepath.Glob(filepath.Join(s.dir, "*.exp"))
 	n := 0
 	for _, expFile := range matches {
