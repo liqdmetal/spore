@@ -45,12 +45,14 @@ func signReceipt(args []string) {
 		receiptSpend(args[1:])
 	case "export":
 		receiptExport(args[1:])
+	case "tally":
+		receiptTally(args[1:])
 	case "verify":
 		receiptVerify(args[1:])
 	case "-h", "--help":
 		receiptUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|spend|export|verify)\n", args[0])
+		fmt.Fprintf(os.Stderr, "sign receipt: unknown subcommand %q (want create|sign|spend|export|tally|verify)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -81,6 +83,11 @@ func receiptUsage() {
         (§9 accounting rows: one per settlement line, evidence per row, sorted by
          settlement time then txid; every input must carry a valid signature
          unless -allow-unsigned is given)
+
+  spore sign receipt tally -dir D [-provider-pub HEX] [-verified-txids FILE] [-json]
+        (§8 view: dual-signed receipts only, one count per client/provider PAIR,
+         mean over rated pairs with the rated-client count, oldest and newest
+         shown, no weighting of any kind)
 
   spore sign receipt verify -file F -sigs A.sig,B.sig [-required both|client|provider]
         (verify the signatures AND that each one carries its role's statement;
@@ -516,6 +523,231 @@ func receiptSpend(args []string) {
 		fmt.Println("note: at least one line has no txid, so this whole record is self-declared —")
 		fmt.Println("      an export must print it that way and must not present it as chain-verified.")
 	}
+}
+
+// receiptTally applies §8 to a directory of job receipts. The rules are strict
+// on purpose: only dual-signed records count, a pair counts once, and the mean is
+// shown next to the number of clients it came from. There is deliberately no
+// weight, decay or recency flag — every such knob is a lever to sell placement.
+func receiptTally(args []string) {
+	fs := flag.NewFlagSet("sign receipt tally", flag.ExitOnError)
+	dir := fs.String("dir", "", "directory holding job receipts (required)")
+	providerFilter := fs.String("provider-pub", "", "only this provider (exit 1 when it has no admissible receipt)")
+	verifiedTxids := fs.String("verified-txids", "", "file of txids YOU confirmed on-chain; only receipts citing one count")
+	jsonOut := fs.Bool("json", false, "machine-readable output")
+	_ = fs.Parse(args)
+
+	if *dir == "" {
+		check(errors.New("sign receipt tally: -dir is required"))
+	}
+
+	verified := map[string]bool{}
+	haveList := *verifiedTxids != ""
+	if haveList {
+		raw, err := os.ReadFile(*verifiedTxids)
+		check(err)
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			verified[strings.ToLower(line)] = true
+		}
+		if len(verified) == 0 {
+			check(fmt.Errorf("sign receipt tally: %s lists no txids", *verifiedTxids))
+		}
+	}
+
+	entries, err := os.ReadDir(*dir)
+	check(err)
+
+	var admitted []jobreceipt.TallyEntry
+	skipOrder := []string{"spend receipt", "not a receipt", "provider-only", "missing a signature", "no txid"}
+	skips := map[string]int{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(*dir, entry.Name())
+		body, err := os.ReadFile(path)
+		check(err)
+		proto, err := jobreceipt.ProtocolOf(body)
+		if err != nil {
+			check(fmt.Errorf("%s: %w", path, err))
+		}
+		if proto == jobreceipt.SpendProtocol {
+			skips["spend receipt"]++ // §8: never merged into reputation
+			continue
+		}
+		if proto != jobreceipt.Protocol {
+			skips["not a receipt"]++
+			continue
+		}
+		rec, err := jobreceipt.Parse(body)
+		if err != nil {
+			check(fmt.Errorf("%s: %w", path, err))
+		}
+		if rec.Coverage == jobreceipt.CoverageProviderOnly {
+			skips["provider-only"]++
+			continue
+		}
+
+		clientSig := path + ".client.sig"
+		providerSig := path + ".provider.sig"
+		if _, err := os.Stat(clientSig); err != nil {
+			skips["missing a signature"]++
+			continue
+		}
+		if _, err := os.Stat(providerSig); err != nil {
+			skips["missing a signature"]++
+			continue
+		}
+		for role, sigPath := range map[string]string{jobreceipt.RoleClient: clientSig, jobreceipt.RoleProvider: providerSig} {
+			if _, err := checkJobEnvelope(body, rec, sigPath, role); err != nil {
+				check(err)
+			}
+		}
+
+		paid := false
+		for _, s := range rec.Settlement {
+			if s.TxID == "" {
+				continue
+			}
+			if !haveList || verified[strings.ToLower(s.TxID)] {
+				paid = true
+				break
+			}
+		}
+		if !paid {
+			skips["no txid"]++
+			continue
+		}
+
+		admitted = append(admitted, jobreceipt.TallyEntry{Record: rec, ReceiptID: jobreceipt.ID(body)})
+	}
+
+	tallies := jobreceipt.TallyEntries(admitted)
+	if *providerFilter != "" {
+		filtered := tallies[:0:0]
+		for _, t := range tallies {
+			if t.ProviderPub == *providerFilter {
+				filtered = append(filtered, t)
+			}
+		}
+		tallies = filtered
+		if len(tallies) == 0 {
+			fmt.Fprintf(os.Stderr, "sign receipt tally: no admissible receipt for provider %s in %s — %s\n",
+				*providerFilter, *dir, describeSkips(skipOrder, skips))
+			os.Exit(1)
+		}
+	}
+
+	if *jsonOut {
+		type jsonTally struct {
+			ProviderPub   string  `json:"provider_pub"`
+			Records       int     `json:"records"`
+			Pairs         int     `json:"pairs"`
+			Rated         int     `json:"rated_pairs"`
+			Mean          float64 `json:"mean"`
+			Oldest        string  `json:"oldest"`
+			Newest        string  `json:"newest"`
+			OldestReceipt string  `json:"oldest_receipt"`
+			NewestReceipt string  `json:"newest_receipt"`
+		}
+		out := struct {
+			Tallies []jsonTally    `json:"tallies"`
+			Skipped map[string]int `json:"skipped"`
+		}{Skipped: skips}
+		for _, t := range tallies {
+			out.Tallies = append(out.Tallies, jsonTally{
+				ProviderPub: t.ProviderPub, Records: t.Records, Pairs: t.Pairs,
+				Rated: t.Rated, Mean: t.Mean,
+				Oldest: t.Oldest, Newest: t.Newest,
+				OldestReceipt: t.OldestReceipt, NewestReceipt: t.NewestReceipt,
+			})
+		}
+		blob, err := json.MarshalIndent(out, "", "  ")
+		check(err)
+		fmt.Println(string(blob))
+		return
+	}
+
+	if len(tallies) == 0 {
+		// Nothing counts: say why, and exit non-zero so a script asking "how does
+		// this provider stand" cannot read silence as a result. The JSON form above
+		// stays exit 0 — there, an empty array is a valid answer.
+		fmt.Fprintf(os.Stderr, "no admissible receipt in %s — %s\n", *dir, describeSkips(skipOrder, skips))
+		os.Exit(1)
+	}
+	for i, t := range tallies {
+		if i > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("provider    %s\n", t.ProviderPub)
+		fmt.Printf("pairs       %d distinct client(s) from %d record(s)\n", t.Pairs, t.Records)
+		if t.Rated == 0 {
+			fmt.Printf("rating      no ratings (%d pair(s) counted anyway)\n", t.Pairs)
+		} else {
+			fmt.Printf("rating      mean %.2f over %d rated client(s) of %d pair(s)\n", t.Mean, t.Rated, t.Pairs)
+		}
+		fmt.Printf("window      %s .. %s\n", t.Oldest, t.Newest)
+		if haveList {
+			fmt.Printf("payment     every pair cites a txid you listed as confirmed\n")
+		} else {
+			fmt.Printf("payment     cites at least one txid; NOT chain-checked (pass -verified-txids to require that)\n")
+		}
+	}
+	if len(skips) > 0 {
+		fmt.Printf("\nnot counted: %s\n", describeSkips(skipOrder, skips))
+	}
+	fmt.Println("\none receipt per client counts; there is no weighting, decay or promoted tier.")
+	fmt.Println("each counted pair cost a real payment and a distinct key — a price, not a proof.")
+}
+
+func describeSkips(order []string, skips map[string]int) string {
+	var parts []string
+	for _, name := range order {
+		if n := skips[name]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, name))
+		}
+	}
+	if len(parts) == 0 {
+		return "nothing skipped"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// checkJobEnvelope is the attested-receipt rule shared by verify and tally: the
+// signer must hold the role the file claims, must have asserted that role's
+// constant, and the signature must cover these bytes.
+func checkJobEnvelope(body []byte, rec *jobreceipt.Record, path, wantRole string) (*attest.Envelope, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var env attest.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("%s: not a signature envelope: %w", path, err)
+	}
+	role, err := rec.RoleOf(env.SignerPub)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w — only the record's own keys can sign it", path, err)
+	}
+	if role != wantRole {
+		return nil, fmt.Errorf("%s: signed by the %s key, but this file is the %s signature", path, role, wantRole)
+	}
+	want, err := jobreceipt.StatementFor(role)
+	if err != nil {
+		return nil, err
+	}
+	if env.Statement != want {
+		return nil, fmt.Errorf("%s: statement is %q, but a %s signature must be %q", path, env.Statement, role, want)
+	}
+	sum := sha256.Sum256(body)
+	if err := env.Verify(sum[:]); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &env, nil
 }
 
 // receiptExport turns a directory of spend receipts into §9 rows. It refuses to

@@ -4,8 +4,9 @@
 attested record, signs it with the role's fixed statement, and refuses a signature
 that asserts something else; `spore sign receipt spend` emits and signs the
 provider-blind accounting record with its salted commitment; `export` writes the
-§9 rows. What is still missing is the reputation side: §8's aggregator is a
-rulebook with no code behind it. Everything the attested kind is built from was already there: `spore sign doc` produces a
+§9 rows and `tally` applies the §8 rules. What is missing is a chain client:
+`tally` can check that a receipt cites a txid you have confirmed, never that the
+transaction exists. Everything the attested kind is built from was already there: `spore sign doc` produces a
 detached Ed25519 attestation over a file ([signcmd.go](../cmd/spore/signcmd.go),
 `internal/attest`), `spore sign sheet` verifies a set and reports who is missing,
 `spore sign anchor` publishes a digest for a timestamp, and `spore archive put`
@@ -366,6 +367,28 @@ published with it:
    costs a real payment and a distinct client key, which is a price, not a
    proof.
 
+```
+spore sign receipt tally -dir receipts/ [-provider-pub HEX] [-verified-txids checked.txt] [-json]
+```
+
+The command applies those rules and nothing else: only dual-signed attested
+records whose two `.sig` files sit beside them, both verifying against the
+record's own keys and the role constants; a pair counted once with its **most
+recent** record deciding that client's rating, so booking again cannot lift a
+mean; the mean over rated pairs with the rated-client count printed beside it;
+and the window taken across every counted record, not just the pair
+representatives. There is no flag to weight, decay or promote — the absence is
+the feature.
+
+Two honesty limits are in the output, not in a footnote. **Payment**: spore has
+no chain client and will not pretend to, so by default a receipt counts when it
+*cites* a txid and the line says `NOT chain-checked`. Point `-verified-txids` at
+the list your own explorer check produced and only receipts citing one of those
+hash values count; that is the difference between "claims to have paid" and
+"this payment exists", and only the second is evidence. **Sybil**: distinct
+clients are distinct *keys*, and keys are free — the movement is a price, not a
+proof, exactly as §8.6 says.
+
 ## 9. Accounting export
 
 A spend receipt is the row an export prints. Minimum columns:
@@ -455,8 +478,13 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
   records joined by `links.work_order_id`, but the paid work order protocol is
   itself design-stage ([PAID_WORK_ORDER_PROTOCOL_V1.md](PAID_WORK_ORDER_PROTOCOL_V1.md)),
   so that join is not yet testable.
-- **No aggregator.** §8 is a rulebook, not code; nothing yet walks `supersedes`
-  chains or counts distinct clients.
+- **No `supersedes` walking.** `tally` counts the record it is given; a
+  correction is counted as a separate receipt, so a directory holding both a
+  corrected record and the one it corrects overstates that pair's activity
+  (its rating still comes from the newest record). Deduplicating a chain needs a
+  `supersedes` index, which nothing builds yet.
+- **No chain client.** `tally -verified-txids` trusts a list you produced; spore
+  does not query a chain itself.
 - **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),
   exercised by `cmd/spore/jobreceipt_test.go` and reproduced byte for byte by
   `create`). A cross-language set — the same record printed by a second

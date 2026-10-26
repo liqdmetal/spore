@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,22 @@ const receiptVectorPath = "../../docs/job-receipt-v1.vector.json"
 // receiptSeedKeys writes the three fixed identity seeds used by these tests and
 // by the published vector: 0x52… is the client, 0x63… the provider, 0x33… a
 // stranger whose signature is valid but irrelevant.
+// signerFor discovers a key's public half the way a user would: sign something
+// and read the signer line, rather than importing key derivation into the test.
+func signerFor(t *testing.T, bin, keyPath string) string {
+	t.Helper()
+	doc := filepath.Join(t.TempDir(), "who.txt")
+	if err := os.WriteFile(doc, []byte("who am i\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSpore(t, bin, "sign", "doc", "-identity", keyPath, "-file", doc,
+		"-statement", "probe", "-out", doc+".sig")
+	if err != nil {
+		t.Fatalf("probe signer: %v\n%s", err, out)
+	}
+	return signerLine(t, out)
+}
+
 func receiptSeedKeys(t *testing.T) (client, provider, stranger string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -410,6 +427,101 @@ func TestReceiptCommand(t *testing.T) {
 		}
 		if !strings.Contains(allowed, "WARNING") {
 			t.Errorf("-allow-unsigned exported without a warning:\n%s", allowed)
+		}
+	})
+
+	t.Run("tally counts pairs and skips what it cannot admit", func(t *testing.T) {
+		// A pair counts once, so the two jobs from the same client must not move the
+		// mean: the newer one (rating 3) is that client's contribution.
+		strangerPub := signerFor(t, bin, strangerKey)
+		tallyDir := t.TempDir()
+		mk := func(name, keyPath, pub, finished string, rating int) {
+			t.Helper()
+			rec := filepath.Join(tallyDir, name+".json")
+			if out, err := runSpore(t, bin, "sign", "receipt", "create",
+				"-out", rec,
+				"-service-category", "plumbing.emergency",
+				"-service-summary", "job "+name,
+				"-provider-pub", providerPub, "-client-pub", pub,
+				"-started-at", finished, "-finished-at", finished,
+				"-settlement", "rail=dero,network=dero-mainnet,asset=dero,amount=1000,txid="+txid+",settled="+finished,
+				"-client-accepted", "-client-rating", fmt.Sprint(rating)); err != nil {
+				t.Fatalf("create %s: %v\n%s", name, err, out)
+			}
+			for role, key := range map[string]string{"provider": providerKey, "client": keyPath} {
+				if out, err := runSpore(t, bin, "sign", "receipt", "sign",
+					"-role", role, "-identity", key, "-file", rec); err != nil {
+					t.Fatalf("sign %s as %s: %v\n%s", name, role, err, out)
+				}
+			}
+		}
+		mk("job1", clientKey, clientPub, "2026-10-02T09:00:00Z", 5)
+		mk("job2", clientKey, clientPub, "2026-10-20T09:00:00Z", 3)
+		mk("job3", strangerKey, strangerPub, "2026-10-24T09:00:00Z", 4)
+
+		// Not admissible: a spend receipt, and a job receipt with only one signer.
+		if out, err := runSpore(t, bin, "sign", "receipt", "spend",
+			"-out", filepath.Join(tallyDir, "cash.json"), "-identity", clientKey,
+			"-service-category", "plumbing.emergency", "-service-summary", "cash",
+			"-settlement", "rail=cash,network=none,asset=usd,amount=100,settled=2026-10-05T00:00:00Z"); err != nil {
+			t.Fatalf("spend: %v\n%s", err, out)
+		}
+		half := filepath.Join(tallyDir, "half.json")
+		if body, err := os.ReadFile(filepath.Join(tallyDir, "job1.json")); err != nil {
+			t.Fatal(err)
+		} else if err := os.WriteFile(half, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if sig, err := os.ReadFile(filepath.Join(tallyDir, "job1.json.client.sig")); err != nil {
+			t.Fatal(err)
+		} else if err := os.WriteFile(half+".client.sig", sig, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out, err := runSpore(t, bin, "sign", "receipt", "tally", "-dir", tallyDir)
+		if err != nil {
+			t.Fatalf("tally: %v\n%s", err, out)
+		}
+		for _, want := range []string{
+			"pairs       2 distinct client(s) from 3 record(s)",
+			"mean 3.50 over 2 rated client(s) of 2 pair(s)",
+			"2026-10-02T09:00:00Z .. 2026-10-24T09:00:00Z",
+			"1 spend receipt",
+			"1 missing a signature",
+			"NOT chain-checked",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("tally output missing %q:\n%s", want, out)
+			}
+		}
+
+		jsonOut, err := runSpore(t, bin, "sign", "receipt", "tally", "-dir", tallyDir, "-json")
+		if err != nil {
+			t.Fatalf("tally -json: %v\n%s", err, jsonOut)
+		}
+		var parsed struct {
+			Tallies []struct {
+				Pairs int     `json:"pairs"`
+				Rated int     `json:"rated_pairs"`
+				Mean  float64 `json:"mean"`
+			} `json:"tallies"`
+		}
+		if err := json.Unmarshal([]byte(jsonOut), &parsed); err != nil {
+			t.Fatalf("tally -json is not JSON: %v\n%s", err, jsonOut)
+		}
+		if len(parsed.Tallies) != 1 || parsed.Tallies[0].Pairs != 2 || parsed.Tallies[0].Rated != 2 || parsed.Tallies[0].Mean != 3.5 {
+			t.Fatalf("tally JSON disagrees with the text:\n%s", jsonOut)
+		}
+
+		// A txid list the viewer actually checked is the only way to move from
+		// "cited" to "confirmed", and a list that matches nothing admits nothing.
+		wrongList := filepath.Join(t.TempDir(), "wrong.txt")
+		if err := os.WriteFile(wrongList, []byte(strings.Repeat("0", 64)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		badOut, err := runSpore(t, bin, "sign", "receipt", "tally", "-dir", tallyDir, "-verified-txids", wrongList)
+		if err == nil {
+			t.Fatalf("tally admitted receipts citing an unlisted txid:\n%s", badOut)
 		}
 	})
 
