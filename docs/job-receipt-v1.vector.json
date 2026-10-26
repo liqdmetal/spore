@@ -1,0 +1,43 @@
+{
+  "client_verdict": {
+    "accepted": true,
+    "rating": 5
+  },
+  "deliverables": [
+    {
+      "bytes": 6,
+      "digest": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+      "label": "before"
+    },
+    {
+      "bytes": 5,
+      "digest": "sha256:f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8",
+      "label": "after"
+    }
+  ],
+  "kind": "attested",
+  "parties": {
+    "client_pub": "b9f447f3a67822603772fe3276e09d9ba856e009f173d14e6a20d7ff6754afc2",
+    "provider_pub": "806f220ad128e2fb39138a0f45d95da4040cb2d7096dd11d6face4a0ffca8c78"
+  },
+  "protocol": "spore.job-receipt",
+  "service": {
+    "category": "plumbing.emergency",
+    "summary": "Replace failed shutoff valve, kitchen line"
+  },
+  "settlement": [
+    {
+      "amount_atomic": "2500000000000",
+      "asset": "dero",
+      "network": "dero-mainnet",
+      "rail": "dero",
+      "settled_at": "2026-10-24T16:44:03Z",
+      "txid": "4cadcf77aad0d386abd8c9e2892b8cdeb99031a7366ebb94349aaddb489b0767"
+    }
+  ],
+  "version": 1,
+  "work": {
+    "finished_at": "2026-10-24T16:41:52Z",
+    "started_at": "2026-10-24T15:02:11Z"
+  }
+}

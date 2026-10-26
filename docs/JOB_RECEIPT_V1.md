@@ -127,6 +127,11 @@ Rules that make this usable rather than decorative:
   | client | `spore.job-receipt/v1 client acceptance` |
   | provider | `spore.job-receipt/v1 provider attestation` |
 
+  `spore sign sheet` does **not** make this comparison: it verifies each envelope
+  against the statement that envelope carries, so a revised wording still counts
+  as a valid signature by the right key. The check is the verifier's, and a
+  verifier that skips it is trusting a sentence the signer chose.
+
 - **A provider signature alone is not an attested receipt.** One key is a claim,
   two keys are a record. A record with only the provider's envelope may exist
   locally as `kind: attested, coverage: provider-only`, but no verifier may count
@@ -249,6 +254,15 @@ Durability: `spore archive put -file job.json` for the record and one for each
 signature, since the mirror set is what survives a lost disk. Keep them together
 — a signature whose document is gone is unverifiable.
 
+A worked vector lives in [job-receipt-v1.vector.json](job-receipt-v1.vector.json):
+a canonical record whose `receipt_id` is the SHA-256 of the file
+(`07d6d54b8afb6c98de4f6e5aac2225320e9ef603d685ac8710a0ca30c30d76d5`). Every step
+above is exercised against it end to end by `cmd/spore/jobreceipt_test.go`, which
+also pins the gap just described: it signs with a paraphrased statement and shows
+`sign sheet` still reporting a complete receipt. The settlement `txid` in the
+vector is synthetic — it exists to be the right shape, and nothing verifies it
+on-chain.
+
 ## 7. What each artifact proves
 
 | Claim | Attested receipt | Spend receipt |
@@ -353,6 +367,8 @@ byte for byte.
   records joined by `links.work_order_id`, but the paid work order protocol is
   itself design-stage ([PAID_WORK_ORDER_PROTOCOL_V1.md](PAID_WORK_ORDER_PROTOCOL_V1.md)),
   so that join is not yet testable.
-- **A cross-language golden vector set** must exist before a second
-  implementation claims conformance — the same demand
+- **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),
+  exercised by `cmd/spore/jobreceipt_test.go`). A cross-language set — the same
+  record printed by a second implementation, plus its receipt id — must exist
+  before that implementation claims conformance, the same demand
   [WIRE_SPEC.md](WIRE_SPEC.md) makes of the wire format.
