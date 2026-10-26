@@ -368,10 +368,6 @@ func TestGenerateWireSpecVectors(t *testing.T) {
 	t.Log("wrote ../../docs/interop-vectors.json")
 }
 
-// writeFileAtomic replaces path with data via a temp file in the same directory
-// and a rename, so no reader can observe a partially written file. Existing
-// contents that already match are left alone, so re-running a generator does not
-// churn the mtime of a tracked file.
 // TestWriteFileAtomicNoTornReads pins the property the generator depends on:
 // while the file is being replaced over and over, a concurrent reader must
 // never see bytes that are not valid JSON. This is the regression test for the
@@ -458,6 +454,10 @@ func TestWriteFileAtomicNoTornReads(t *testing.T) {
 	}
 }
 
+// writeFileAtomic replaces path with data via a temp file in the same directory
+// and a rename, so no reader can observe a partially written file. Existing
+// contents that already match are left alone, so re-running a generator does not
+// churn the mtime of a tracked file.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
 		return nil

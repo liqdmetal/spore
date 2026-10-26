@@ -6,8 +6,9 @@ package ratchet
 // Ed25519 are already deterministic; X25519 inputs are the only randomness
 // this construction consumes.
 //
-// Run `go test ./internal/ratchet/ -run TestGenerateRatchetVectors -v` to
-// (re)generate docs/ratchet-vectors.json, then commit it. The conformance
+// Run `SPORE_REGEN_VECTORS=1 go test ./internal/ratchet/ -run
+// TestGenerateRatchetVectors -v` to (re)generate docs/ratchet-vectors.json,
+// then commit it. The conformance
 // test (TestRatchetVectorConformance) CONSUMES the committed file: it
 // replays the SAME deterministic conversation on fresh sessions and requires
 // byte-identical ciphertexts, headers, session ids and a matching final
@@ -19,10 +20,12 @@ package ratchet
 // deliver 2,3,1 from the store — is exercised end to end.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -165,11 +168,15 @@ func runScenario(t *testing.T) ([]vecMsg, string) {
 	return msgs, hex.EncodeToString(final[:])
 }
 
-// TestGenerateRatchetVectors produces the golden file. Only overwrites when
-// SPORE_GEN_VECTORS is set, so CI is read-only-safe by default.
+// TestGenerateRatchetVectors produces the golden file. It only writes when
+// SPORE_REGEN_VECTORS is set — the same single gate as the wire-spec generator
+// in internal/secure, so every regenerator in the tree is armed the same way
+// and a plain `go test ./...` stays read-only. The write is atomic and skipped
+// when the bytes already match, so it can never truncate a tracked file
+// underneath a reader or churn its mtime on a no-op run.
 func TestGenerateRatchetVectors(t *testing.T) {
-	if os.Getenv("SPORE_GEN_VECTORS") == "" {
-		t.Skip("set SPORE_GEN_VECTORS=1 to regenerate docs/ratchet-vectors.json")
+	if os.Getenv("SPORE_REGEN_VECTORS") == "" {
+		t.Skip("set SPORE_REGEN_VECTORS=1 to regenerate docs/ratchet-vectors.json")
 	}
 	msgs, final := runScenario(t)
 	vf := vecFile{Spec: "spore/ratchet-vectors/v1", Scenario: msgs, FinalState: final}
@@ -177,10 +184,44 @@ func TestGenerateRatchetVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("../../docs/ratchet-vectors.json", out, 0o644); err != nil {
-		t.Fatal(err)
+	if err := writeGoldenAtomic("../../docs/ratchet-vectors.json", out, 0o644); err != nil {
+		t.Fatalf("regenerate ratchet-vectors.json: %v", err)
 	}
 	t.Logf("wrote %d vectors", len(msgs))
+}
+
+// writeGoldenAtomic replaces path with data via a temp file in the same
+// directory and a rename, so no reader ever observes a partially written
+// golden file, and leaves an already-matching file untouched. It mirrors
+// writeFileAtomic in internal/secure/vectors_test.go; the two are kept as
+// separate copies because they live in different packages and a shared
+// helper package for two callers would be a worse dependency than the
+// duplication.
+func writeGoldenAtomic(path string, data []byte, perm os.FileMode) error {
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
+		return nil
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename has succeeded
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func opkPtr(b []byte) *[32]byte {
