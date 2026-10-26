@@ -196,21 +196,24 @@ func TestDiskStorePutWritesMsRecordAndZeroDeadlineSkipsIt(t *testing.T) {
 func TestDiskStoreServedAndReapedAgreeOnMidSecondBoundary(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(13)
-	deadline := time.Now().Add(250 * time.Millisecond)
+	// Same boundary anchor as the two tests above. The original hand-rolled
+	// now+250ms window left the pre-deadline phase no margin at all: writing
+	// the two hold records on a loaded Windows -race run can take longer than
+	// that, so Reap legitimately fired and the test reported "reap fired
+	// before the deadline: 1" while the store was behaving correctly.
+	deadline := mintDeadline()
 	writeHolds(t, s, cid, []byte("boundary body"), deadline.Unix(), deadline.UnixMilli())
 
-	if n := s.Reap(time.Now()); n != 0 {
+	// Reap judges the instant it is handed, so hand it one that is provably
+	// before the deadline: whether the body is still servable must not depend
+	// on how long the setup above took.
+	if n := s.Reap(deadline.Add(-time.Millisecond)); n != 0 {
 		t.Fatalf("reap fired before the deadline: %d", n)
 	}
 	if _, err := s.Get(cid); err != nil {
 		t.Fatalf("serving stopped before the ms deadline: %v", err)
 	}
-	for {
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	spinPastDeadline(t, deadline)
 	if _, err := s.Get(cid); err != ErrExpired {
 		t.Fatalf("serving continued past the ms deadline: %v", err)
 	}
