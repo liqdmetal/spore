@@ -16,7 +16,17 @@
 // TXID) when given — the hook's job is delivery: email/webhook/paste the
 // onboarding card to the customer. The batch file must already sit at
 // <batch-dir>/<user>.json (it comes from the customer's device); payments
-// whose batch is missing are held and re-attempted on later polls.
+// whose batch is missing are held, and the poll watermark is pinned at their
+// height so later polls re-read them (see nextBillWatermark — a hold that the
+// wallet never returns again is not a hold, it is a lost payment).
+//
+// Monero is a second rail on the same orchestrator, in billxmr.go: `-price
+// 2.5xmr -xmr-subaddresses FILE` bills off monero-wallet-rpc. It needs a
+// subaddress→customer map because Monero carries no sender field, and it is
+// gated behind -xmr-unverified because no live wallet round trip exists yet
+// (MONERO_SETTLEMENT §5). Everything downstream — provisioning, the token
+// merge, the onboarding record, the hook — is shared and unchanged.
+//
 // Re-runs are safe: progress lives in <out>/bill-state.json.
 package main
 
@@ -73,6 +83,13 @@ watch flags:
   -interval D         poll interval (default 30s)
   -once               single poll, then exit (for cron or a test)
   -dry-run            report what would happen, change nothing
+
+monero flags (only with a -price in xmr; EXPERIMENTAL, see
+MONERO_SETTLEMENT.md §5 — the poller has never spoken to a live wallet):
+  -xmr-unverified     required to bill xmr at all; says every result is suspect
+  -xmr-subaddresses F JSON map of subaddress minor index -> hosted user
+                      (required: Monero carries no sender field)
+  -xmr-confirmations N confirmations before provisioning (default 10; 0 refused)
 `)
 }
 
@@ -93,6 +110,12 @@ type billState struct {
 	Height uint64            `json:"height"`
 	Done   map[string]string `json:"done"` // txid -> provisioned user
 	Held   map[string]string `json:"held"` // txid -> user (batch missing)
+	// XMRRefused is the Monero branch's LAST POLL: txid -> why it was not billed.
+	// Rebuilt each poll, so a transfer that gets provisioned (or becomes
+	// billable) disappears from it. It exists because the log scrolls away and
+	// "the poller refused this and here is why" is the question an operator
+	// actually asks. Empty on the DERO path.
+	XMRRefused map[string]string `json:"xmr_refused,omitempty"`
 }
 
 type paymentPlan struct {
@@ -135,6 +158,30 @@ func planPayments(price uint64, entries []billEntry, done map[string]string) []p
 	return out
 }
 
+// nextBillWatermark is the min_height for the next poll: the highest height seen,
+// pulled back to the oldest transfer that must be re-read.
+//
+// This exists because a deferred transfer is only ever seen again by being
+// fetched again. min_height is an inclusive >= filter on both rails — DERO R153
+// filters block height directly (internal/dero, internal/whisper), Monero gates
+// the same behaviour on filter_by_height — so the boundary height re-matches and
+// a deferred transfer stays visible until it is billed or becomes un-billable.
+//
+// A height of 0 is never pinned: it cannot be re-fetched by height, and pinning
+// on one would ask the wallet for its entire history on every poll.
+func nextBillWatermark(highest uint64, deferred []uint64) uint64 {
+	next := highest
+	for _, h := range deferred {
+		if h == 0 {
+			continue
+		}
+		if next == 0 || h < next {
+			next = h
+		}
+	}
+	return next
+}
+
 func billWatch(args []string) {
 	fs := flag.NewFlagSet("bill watch", flag.ExitOnError)
 	rpc := fs.String("rpc", "", "wallet RPC endpoint")
@@ -149,6 +196,9 @@ func billWatch(args []string) {
 	interval := fs.Duration("interval", 30*time.Second, "poll interval")
 	once := fs.Bool("once", false, "single poll, then exit")
 	dryRun := fs.Bool("dry-run", false, "report only, change nothing")
+	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: the Monero poller is mock-verified only — treat every result as experimental")
+	xmrSubaddresses := fs.String("xmr-subaddresses", "", "JSON map of Monero subaddress minor index -> hosted user (required for -price xmr)")
+	xmrConfirmations := fs.Uint64("xmr-confirmations", 10, "confirmations a Monero payment needs before a mailbox is provisioned (0 is refused)")
 	_ = fs.Parse(args)
 
 	if *rpc == "" || *price == "" || *users == "" || *tokens == "" || *out == "" {
@@ -163,13 +213,29 @@ func billWatch(args []string) {
 	if err != nil {
 		check(err)
 	}
-	if asset != "dero" {
-		// Not a units problem: -price is compared against wallet RPC amounts, which
-		// are atomic in their own rail, so xmr would parse exactly. The blocker is
-		// attribution — the poller below reads DERO's result.entries with a
-		// sender-tagged incoming flag, while Monero returns result.in[] and names no
-		// sender, so a subaddress has to identify the payer first.
-		check(fmt.Errorf("bill watch: -price asset %q is not billable yet: the poller reads DERO's wallet-RPC shape (get_transfers -> result.entries). Monero reports result.in[] and carries no sender field, so XMR billing needs per-order subaddress attribution first (docs/MONERO_SETTLEMENT.md §5); use e.g. 25dero", asset))
+	if err := billAssetAllowed(asset, *xmrUnverified); err != nil {
+		check(err)
+	}
+	// The Monero branch needs the two things Monero cannot supply about itself:
+	// who a payment belongs to (the label map) and how final it has to be (the
+	// confirmation floor). Both are refused up front rather than at poll time.
+	var (
+		xmrLabels map[uint32]string
+		xmrFloor  uint64
+	)
+	if asset == "xmr" {
+		if *xmrSubaddresses == "" {
+			check(errors.New("bill watch: -xmr-subaddresses is required for -price xmr: Monero carries no sender field, so the receiving subaddress is the only thing that identifies who paid (docs/MONERO_SETTLEMENT.md §3)"))
+		}
+		if *xmrConfirmations == 0 {
+			check(errors.New("bill watch: -xmr-confirmations 0 is refused: a provisioned mailbox cannot be clawed back, and an unconfirmed payment can be reorged away (docs/MONERO_SETTLEMENT.md §5)"))
+		}
+		xmrLabels, err = loadXMRSubaddresses(*xmrSubaddresses)
+		if err != nil {
+			check(err)
+		}
+		xmrFloor = *xmrConfirmations
+		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — this poller has never spoken to a live monero-wallet-rpc; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)
@@ -182,11 +248,35 @@ func billWatch(args []string) {
 	}
 
 	poll := func() (int, error) {
-		entries, h, err := billPollRPC(*rpc, *rpcLogin, st.Height)
-		if err != nil {
-			return 0, err
+		var plans []paymentPlan
+		var highest uint64
+		// deferred collects the height of every transfer this poll could not bill
+		// but has to see again: a Monero refusal that can still become payable, or
+		// a payment held for a prekey batch that has not arrived yet.
+		var deferred []uint64
+		if asset == "xmr" {
+			entries, h, err := billPollRPCXMR(*rpc, *rpcLogin, st.Height)
+			if err != nil {
+				return 0, err
+			}
+			var refusals []billXMRRefusal
+			plans, refusals = planXMRPayments(priceAtomic, xmrFloor, xmrLabels, st.Done, entries)
+			for _, r := range refusals {
+				log.Printf("not billing txid=%s subaddress=%d: %s", r.TXID, r.Minor, r.Reason)
+				if r.Retry {
+					deferred = append(deferred, r.Height)
+				}
+			}
+			st.XMRRefused = xmrRefusalSummary(refusals)
+			highest = h
+		} else {
+			entries, h, err := billPollRPC(*rpc, *rpcLogin, st.Height)
+			if err != nil {
+				return 0, err
+			}
+			plans = planPayments(priceAtomic, entries, st.Done)
+			highest = h
 		}
-		plans := planPayments(priceAtomic, entries, st.Done)
 		n := 0
 		for _, p := range plans {
 			if *dryRun {
@@ -198,6 +288,13 @@ func billWatch(args []string) {
 			if _, err := os.Stat(batch); err != nil {
 				log.Printf("txid=%s user=%s: batch %s missing — holding until it arrives", p.TXID, p.User, batch)
 				st.Held[p.TXID] = p.User
+				// Pin the watermark at this payment's height. Without it, the next
+				// payment from a customer whose batch DID arrive advances the
+				// watermark past this one, the wallet never returns it again, and a
+				// paid customer is never provisioned — the hold would be a silent
+				// hole rather than a wait. p.Height is DERO's block height, which is
+				// exactly what get_transfers min_height filters.
+				deferred = append(deferred, p.Height)
 				continue
 			}
 			if err := billProvision(*users, *tokens, *batchDir, *out, p, *relayTokens, *hook); err != nil {
@@ -206,10 +303,15 @@ func billWatch(args []string) {
 			}
 			st.Done[p.TXID] = p.User
 			delete(st.Held, p.TXID)
+			delete(st.XMRRefused, p.TXID) // billed now: no longer a refusal
 			n++
 		}
-		if h > st.Height {
-			st.Height = h
+		// The watermark is the highest height seen, pulled back to the oldest
+		// deferred transfer. It is deliberately not clamped to st.Height: a hold
+		// below the current watermark has to be fetched again, and min_height is
+		// inclusive.
+		if next := nextBillWatermark(highest, deferred); next != st.Height {
+			st.Height = next
 		}
 		raw, _ := json.MarshalIndent(st, "", "  ")
 		_ = os.WriteFile(statePath, append(raw, '\n'), 0o600)
