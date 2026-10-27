@@ -155,6 +155,18 @@ Semantics:
   per-process lock; a dir shared by two processes needs filesystem-level
   locking). Reads need no exclusion: every file is whole, thanks to
   temp+rename.
+- **Recordless bodies.** A `.body` with neither `.exp` nor `.expms` is a
+  state `Put` cannot produce — it writes a record first, `0` included — so an
+  orphan on disk is always an artifact: the concurrency window above, or
+  records removed from outside the store. It is also the one state reap
+  cannot repair, because reap discovers its candidates by globbing `*.exp`,
+  so nothing ever revisits a body with no record, while the read path serves
+  it forever under the never-expires rule. A store therefore MUST be able to
+  report such bodies and reclaim them outside the reap cadence, and MUST NOT
+  do so eagerly: the deadline is exactly what the missing record took away,
+  so a body younger than an age guard may still be inside the TTL its sender
+  asked for. The reference is `DiskStore.Orphans` / `DiskStore.SweepOrphans`,
+  surfaced as `spore store sweep`.
 - **Deadline resolution.** `.expms`, when present and parseable, is
   authoritative; otherwise the seconds floor applies. The ms record exists
   so mid-second deadlines are enforced at read time and reaped on the

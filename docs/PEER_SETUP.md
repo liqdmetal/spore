@@ -176,6 +176,32 @@ if that bothers you. A body whose TTL has passed composts on the holder's
 disk; a late fetch then gets a clean 404, not silence. Interoperates with
 the standalone Rust `spore-peer serve/fetch` binary in both directions.
 
+## Sweeping a hold for bodies with no deadline record
+
+Reaping finds work by globbing `*.exp`, so a body whose record is gone is
+never revisited — and the read path serves it forever, since a missing record
+reads as "never expires". No normal write produces that state (the record is
+renamed in first, and a deliberately never-expires body carries a record
+holding `0`), so a body in it is an artifact: an older build's concurrency
+window, or records removed from outside the store. Worth one pass on any hold
+that has been running since before the write-path fix, and on a schedule if
+the hold matters:
+
+```bash
+spore store sweep -dir /var/lib/spore-peer/hold -dry-run   # list only
+spore store sweep -dir /var/lib/spore-peer/hold            # reclaim > 24h old
+```
+
+`-min-age` (default 24h) is the whole safety argument: once the record is
+gone the deadline is unknowable, so anything younger than the guard may still
+be inside the TTL its sender asked for. Set it above the longest TTL your
+contacts use, or `0` when you already know a directory holds only artifacts.
+It works on the shared hold layout, so it applies to a hold served by the
+Rust `spore-peer` as well. The command refuses a path that is not an existing
+directory — a typo must not create an empty hold that reports all-clear —
+touches only bodies with no record at all, and prints what it keeps beside
+what it reclaims.
+
 ## Running a fabric relay (volunteer operators)
 
 If a contact hands you a `FabricRelays` line for their card, they are asking

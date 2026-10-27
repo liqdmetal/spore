@@ -151,6 +151,8 @@ func main() {
 		invitecmd(os.Args[2:])
 	case "serve":
 		servecmd(os.Args[2:])
+	case "store":
+		storecmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -267,6 +269,7 @@ func usage() {
   spore relay run -listen :ADDR [-dir DIR] [-token SECRET] [-interval 10s] [-reap 30s]
              (store-and-forward hop for opaque bodies: push via X-Relay-Dest, forward to the mailbox)
   spore serve -dir HOLD_DIR [-listen :ADDR] [-reap-every 10m]   (always-on spore-peer body store: your node IS the store — drop-in Go replacement for spore-peer serve --dir)
+  spore store sweep -dir HOLD_DIR [-min-age 24h] [-dry-run]   (bodies with no deadline record are invisible to reap and served forever; list them and reclaim the ones past the age guard)
   spore relay -h, --help                         (relay help)`)
 }
 

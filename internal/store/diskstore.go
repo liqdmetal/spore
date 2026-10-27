@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -306,4 +307,154 @@ func (s *DiskStore) expired(cid [32]byte) bool {
 func (s *DiskStore) Len() int {
 	matches, _ := filepath.Glob(filepath.Join(s.dir, "*.body"))
 	return len(matches)
+}
+
+// Orphan is a stored body with no deadline record beside it: a <cid>.body
+// whose .exp and .expms are both absent.
+//
+// This state is not part of the layout's contract — Put always writes .exp
+// first, and a deliberate never-expires body carries a record holding "0",
+// not a missing one — so an orphan is always an artifact: the concurrency
+// window Reap+Put used to share, or records removed from outside the store.
+// It is also the one state Reap cannot fix: reap discovers candidates by
+// globbing *.exp, so a body with no record is never even considered, while
+// deadlineFor reads the absent record as "never expires" and serves it
+// forever. That combination — served forever, never reclaimed — is silent
+// permanent retention of ciphertext, which is what this type exists to
+// surface instead.
+type Orphan struct {
+	CID     [32]byte
+	Path    string
+	Size    int64
+	ModTime time.Time
+}
+
+// Age is how long the body has been on disk. A body is renamed into place
+// when it is stored, so mtime is the closest honest stand-in for its put
+// time — the deadline itself is exactly what the missing record took away.
+func (o Orphan) Age(now time.Time) time.Duration { return now.Sub(o.ModTime) }
+
+// OrphanSweep is the outcome of SweepOrphans. Removed and Retained are both
+// reported: a body younger than the age guard is deliberately kept, and the
+// operator needs to see it rather than infer silence.
+type OrphanSweep struct {
+	Removed  []Orphan
+	Retained []Orphan
+	Bytes    int64 // bytes reclaimed by Removed
+}
+
+// Orphans lists bodies that have no deadline record. It holds the same lock as
+// Put/Reap/Delete, because a sweep removes bodies and so falls under the
+// store's ordering invariant: the multi-file sequences must not interleave.
+//
+// A first Put is safe by construction — it renames the records in before the
+// body, so a body it is writing never reads as recordless. The window the lock
+// closes is a RE-send of a cid whose records are gone, which is exactly the
+// recovery a missing record invites: its records and body can land between
+// this function's "no record" check and the removal, and the removal would
+// then take a body Put has just stored. Classifying and removing under one
+// hold makes that decision atomic.
+func (s *DiskStore) Orphans() ([]Orphan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.orphansLocked()
+}
+
+func (s *DiskStore) orphansLocked() ([]Orphan, error) {
+	matches, err := filepath.Glob(filepath.Join(s.dir, "*.body"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Orphan, 0)
+	for _, bodyFile := range matches {
+		base := strings.TrimSuffix(bodyFile, ".body")
+		raw, err := hex.DecodeString(filepath.Base(base))
+		if err != nil || len(raw) != 32 {
+			continue // not a store file; leave anything else alone
+		}
+		// A record that exists, or that cannot be ruled out, means "not an
+		// orphan". Only a confirmed absence on BOTH files qualifies, because
+		// the decision here leads to deleting ciphertext.
+		covered := false
+		for _, ext := range []string{".exp", ".expms"} {
+			if _, err := os.Stat(base + ext); err == nil || !os.IsNotExist(err) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		fi, err := os.Stat(bodyFile)
+		if err != nil {
+			continue // vanished between glob and stat
+		}
+		var cid [32]byte
+		copy(cid[:], raw)
+		out = append(out, Orphan{CID: cid, Path: bodyFile, Size: fi.Size(), ModTime: fi.ModTime()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
+}
+
+// partitionOrphans applies the age guard: a body at least minAge old is due
+// for removal, anything younger is kept. minAge <= 0 means "everything is
+// due". Both the plan and the sweep go through this one function, so a dry
+// run can never disagree with a real one about what the guard lets through.
+func partitionOrphans(all []Orphan, now time.Time, minAge time.Duration) OrphanSweep {
+	res := OrphanSweep{Removed: make([]Orphan, 0), Retained: make([]Orphan, 0)}
+	for _, o := range all {
+		if minAge > 0 && o.Age(now) < minAge {
+			res.Retained = append(res.Retained, o)
+			continue
+		}
+		res.Removed = append(res.Removed, o)
+		res.Bytes += o.Size
+	}
+	return res
+}
+
+// OrphanPlan reports what SweepOrphans would reclaim, without removing
+// anything — the dry run an operator wants before a destructive pass.
+func (s *DiskStore) OrphanPlan(now time.Time, minAge time.Duration) (OrphanSweep, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all, err := s.orphansLocked()
+	if err != nil {
+		return OrphanSweep{}, err
+	}
+	return partitionOrphans(all, now, minAge), nil
+}
+
+// SweepOrphans reclaims orphan bodies at least minAge old, and reports the
+// ones it kept. The age guard exists because the deadline is unknowable: a
+// body whose records vanished may still be inside the TTL its sender asked
+// for, and deleting it then would lose a message the sender was entitled to
+// have served. Anything older than the guard has outlived any TTL worth
+// honouring, so reclaiming it restores the compost guarantee instead of
+// breaking it.
+//
+// minAge <= 0 reclaims every orphan regardless of age. A body that cannot be
+// removed (a sharing violation on Windows is the observed case) is reported
+// in the error and left in place for the next run; the rest of the sweep
+// still proceeds.
+func (s *DiskStore) SweepOrphans(now time.Time, minAge time.Duration) (OrphanSweep, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all, err := s.orphansLocked()
+	if err != nil {
+		return OrphanSweep{}, err
+	}
+	plan := partitionOrphans(all, now, minAge)
+	res := OrphanSweep{Removed: make([]Orphan, 0), Retained: plan.Retained}
+	var errs []error
+	for _, o := range plan.Removed {
+		if err := os.Remove(o.Path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("diskstore: reclaim orphan %x: %w", o.CID, err))
+			continue
+		}
+		res.Removed = append(res.Removed, o)
+		res.Bytes += o.Size
+	}
+	return res, errors.Join(errs...)
 }
