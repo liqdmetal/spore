@@ -100,16 +100,32 @@ func TestScanHubOnePollerForManySubscribers(t *testing.T) {
 	}
 
 	// Give the hub a moment to settle, then compare poll counts against what
-	// N independent watchers would have produced.
-	time.Sleep(150 * time.Millisecond)
-	polls := fc.pollCount()
+	// N independent watchers would have produced. The baseline is taken after
+	// the subscriptions because pollCount() is cumulative from the fake's
+	// creation: the watcher's warm-up polls during 12 `Open(t.TempDir())`
+	// calls are setup cost, not a polling pattern, and on a loaded box they
+	// can take seconds and dominate the count.
+	const window = 150 * time.Millisecond
+	baseline := fc.pollCount()
+	start := time.Now()
+	time.Sleep(window)
+	elapsed := time.Since(start)
+	polls := fc.pollCount() - baseline
 
 	// With N independent mailboxes each polling every 5ms over ~150ms we would
 	// expect roughly N * 30 = 360 polls. The hub must be ~30 (one watcher).
 	// Allow generous slack for CI timing but keep the assertion meaningful:
 	// it must be far below N*30 and roughly independent of N.
-	if polls > 120 {
-		t.Fatalf("hub polled the chain %d times in ~150ms with %d subscribers; expected ~30 (one shared watcher), got a per-subscriber polling pattern", polls, n)
+	//
+	// The bound is applied to the count normalised to the nominal window, not
+	// to the raw count: hubChain.ListIncoming blocks 20ms per call, so polls
+	// accrue per unit of REAL elapsed time, and a loaded box can stretch a
+	// 150ms sleep several-fold. Raw, that reads as a per-subscriber pattern
+	// when the hub is sharing one watcher perfectly well.
+	normalized := float64(polls) * float64(window) / float64(elapsed)
+	if normalized > 120 {
+		t.Fatalf("hub polled the chain %d times in %v with %d subscribers (%.1f per %v); expected ~30 (one shared watcher), got a per-subscriber polling pattern",
+			polls, elapsed.Round(time.Millisecond), n, normalized, window)
 	}
 	if st := hub.Stats(); st.Subscribers != n {
 		t.Fatalf("Stats().Subscribers = %d, want %d", st.Subscribers, n)
