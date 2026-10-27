@@ -53,6 +53,20 @@ func mintDeadline() time.Time {
 	return d
 }
 
+// mintFaraway anchors the "has NOT expired yet" half of a test: a mid-second
+// deadline an hour out, which no amount of setup can consume.
+//
+// mintDeadline's 0.7-1.3s margin is fine on a quiet machine and was being
+// eaten by descheduling under the pre-push -race gate, which runs this package
+// beside two others: TestDiskStoreServedAndReapedAgreeOnMidSecondBoundary
+// failed with "serving stopped before the ms deadline: store: expired" while
+// the store was doing exactly what its contract says. The deadline that must
+// be crossed is minted per-test AFTER the pre-deadline assertions, where a
+// slow write only makes the crossing more certain.
+func mintFaraway() time.Time {
+	return time.Now().Add(time.Hour).Truncate(time.Second).Add(300 * time.Millisecond)
+}
+
 // spinPastDeadline advances to strictly after the wall-clock deadline using
 // the same comparison the store's classification uses (After, not a
 // Before-negation): exiting on equality would let one Get/Reap sample land
@@ -76,12 +90,18 @@ func spinPastDeadline(t *testing.T, deadline time.Time) {
 func TestDiskStoreSubSecondExpiryEnforcedAtRead(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(7)
-	deadline := mintDeadline()
-	writeHolds(t, s, cid, []byte("mid-second body"), deadline.Unix(), deadline.UnixMilli())
+	body := []byte("mid-second body")
 
+	// Still servable: anchored far out so setup cannot eat the margin.
+	far := mintFaraway()
+	writeHolds(t, s, cid, body, far.Unix(), far.UnixMilli())
 	if _, err := s.Get(cid); err != nil {
 		t.Fatalf("before deadline, get = %v, want the body", err)
 	}
+
+	// Then cross a mid-second deadline.
+	deadline := mintDeadline()
+	writeHolds(t, s, cid, body, deadline.Unix(), deadline.UnixMilli())
 	spinPastDeadline(t, deadline) // crosses .expms; NOT the next second boundary
 	if _, err := s.Get(cid); err != ErrExpired {
 		t.Fatalf("after ms deadline, get err = %v, want ErrExpired", err)
@@ -94,12 +114,18 @@ func TestDiskStoreSubSecondExpiryEnforcedAtRead(t *testing.T) {
 func TestDiskStoreSubSecondReapPromptness(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(8)
-	deadline := mintDeadline()
-	writeHolds(t, s, cid, []byte("reap me mid-second"), deadline.Unix(), deadline.UnixMilli())
+	body := []byte("reap me mid-second")
 
+	// Not reapable yet: anchored far out so setup cannot eat the margin.
+	far := mintFaraway()
+	writeHolds(t, s, cid, body, far.Unix(), far.UnixMilli())
 	if n := s.Reap(time.Now()); n != 0 {
-		t.Fatalf("reaped %d before the deadline, want 0 (wall clock stepped past the minted margin?)", n)
+		t.Fatalf("reaped %d before the deadline, want 0", n)
 	}
+
+	// Then cross a mid-second deadline.
+	deadline := mintDeadline()
+	writeHolds(t, s, cid, body, deadline.Unix(), deadline.UnixMilli())
 	spinPastDeadline(t, deadline)
 	if n := s.Reap(time.Now()); n != 1 {
 		t.Fatalf("reaped %d after the ms deadline, want 1", n)
@@ -196,23 +222,25 @@ func TestDiskStorePutWritesMsRecordAndZeroDeadlineSkipsIt(t *testing.T) {
 func TestDiskStoreServedAndReapedAgreeOnMidSecondBoundary(t *testing.T) {
 	s, _ := NewDiskStore(t.TempDir())
 	cid := msCid(13)
-	// Same boundary anchor as the two tests above. The original hand-rolled
-	// now+250ms window left the pre-deadline phase no margin at all: writing
-	// the two hold records on a loaded Windows -race run can take longer than
-	// that, so Reap legitimately fired and the test reported "reap fired
-	// before the deadline: 1" while the store was behaving correctly.
-	deadline := mintDeadline()
-	writeHolds(t, s, cid, []byte("boundary body"), deadline.Unix(), deadline.UnixMilli())
+	body := []byte("boundary body")
 
-	// Reap judges the instant it is handed, so hand it one that is provably
-	// before the deadline: whether the body is still servable must not depend
-	// on how long the setup above took.
-	if n := s.Reap(deadline.Add(-time.Millisecond)); n != 0 {
+	// The pre-deadline half is anchored far out: whether the body is still
+	// servable must not depend on how long the setup took. Reap judges the
+	// instant it is handed, so it is handed one that is provably before the
+	// deadline as well.
+	far := mintFaraway()
+	writeHolds(t, s, cid, body, far.Unix(), far.UnixMilli())
+	if n := s.Reap(far.Add(-time.Millisecond)); n != 0 {
 		t.Fatalf("reap fired before the deadline: %d", n)
 	}
 	if _, err := s.Get(cid); err != nil {
 		t.Fatalf("serving stopped before the ms deadline: %v", err)
 	}
+
+	// The half that crosses the boundary re-arms with a near mid-second
+	// deadline; a slow write only makes the crossing more certain.
+	deadline := mintDeadline()
+	writeHolds(t, s, cid, body, deadline.Unix(), deadline.UnixMilli())
 	spinPastDeadline(t, deadline)
 	if _, err := s.Get(cid); err != ErrExpired {
 		t.Fatalf("serving continued past the ms deadline: %v", err)
