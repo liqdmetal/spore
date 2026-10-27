@@ -3,11 +3,15 @@ package main
 // Tests for the Monero branch of bill watch (docs/MONERO_SETTLEMENT.md §5).
 //
 // What is covered here: the guard table, the watermark rule, the request shape
-// this poller sends, the decode of a real-shaped response, and the operator's
-// subaddress map. What is NOT covered: a live monero-wallet-rpc. The response
-// fixture below is built from the v0.18.0.0 field set, not from a wallet —
-// recording a live one into this fixture is §9's open step, and until then the
-// command stays behind -xmr-unverified.
+// this poller sends, the decode of a real-shaped response, the operator's
+// subaddress map, and — against a mock that verifies Digest credentials the way
+// a server does — the auth path the live wallet requires.
+//
+// The response fixtures: the first is built from the v0.18.0.0 field set, and
+// xmrLiveShapeFixture is the key set of a populated entry captured from a live
+// v0.18.5.1 wallet on 2026-10-27 (identifying strings redacted, §9). What is
+// still NOT covered: a payment carried all the way through provisioning against
+// a live wallet, which is why the command stays behind -xmr-unverified.
 
 import (
 	"encoding/json"
@@ -19,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/icholy/digest"
 )
 
 // xmrTransferFixtureTXID is a well-formed 64-hex txid; nothing verifies it.
@@ -484,6 +490,222 @@ func TestBillWatchXMRGateRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- live-shape and Digest auth: what a real wallet actually does ---
+
+// xmrLiveTestNonce is a fixed nonce so the mock is deterministic. A real epee
+// server issues its own.
+const xmrLiveTestNonce = "dGVzdC1ub25jZQ=="
+
+// xmrLiveShapeFixtureTXID stands in for the captured txid. The values in this
+// fixture are the ones a live v0.18.5.1 wallet returned on 2026-10-27, with the
+// identifying strings (subaddress, txid) replaced — the raw capture stays
+// box-side by the redaction rule in MONERO_SETTLEMENT §9.
+const xmrLiveShapeFixtureTXID = "b41c7e0d9a2f3865c0d1e2f3a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7"
+
+// xmrLiveShapeFixture is one populated result.in[] entry in the EXACT key set a
+// live wallet emitted (keys in the wallet's own order, values redacted as noted).
+//
+// It pins two things the v0.18.0.0 source reading could not:
+//
+//   - there is no `destinations` key on an incoming entry — that field belongs to
+//     the outgoing side, even though it is declared on the shared transfer_entry
+//     struct (§3 lists it in the field set; a live entry does not carry it);
+//   - `payment_id` is PRESENT as a zeroed 8-byte id string, not omitted, so a
+//     decoder that treats a payment_id as evidence of a spore signal must compare
+//     it against zero rather than testing for emptiness.
+//
+// `type` is "in", `locked` and `double_spend_seen` are false, and the entry lands
+// on minor 0 — the wallet's primary address, which is where a payment goes when
+// no per-order subaddress was handed out.
+const xmrLiveShapeFixture = `{
+  "id": "bill",
+  "jsonrpc": "2.0",
+  "result": {
+    "in": [
+      {
+        "address": "4AseVYawZMf7mfeYqbLvKbKfXAVDZLM3c2XC8j6j12xpDvrkhMX4CQw3hUqa3i5L2se8YZ3ztgeMA5yU2DNEsP8cHF8VNDo",
+        "amount": 181978330000,
+        "amounts": [181978330000],
+        "confirmations": 30825,
+        "double_spend_seen": false,
+        "fee": 629900000,
+        "height": 3762745,
+        "locked": false,
+        "note": "",
+        "payment_id": "0000000000000000",
+        "subaddr_index": {"major": 0, "minor": 0},
+        "subaddr_indices": [{"major": 0, "minor": 0}],
+        "suggested_confirmations_threshold": 1,
+        "timestamp": 1789442539,
+        "txid": "` + xmrLiveShapeFixtureTXID + `",
+        "type": "in",
+        "unlock_time": 0
+      }
+    ]
+  }
+}`
+
+// digestMockCalls records what the mock wallet saw, so a test can prove the
+// authenticated retry replayed the request (a digest wrapper that consumes the
+// body on the first attempt is a real failure mode) and that Basic was never
+// used on this rail.
+type digestMockCalls struct {
+	Total           int
+	Unauthenticated int
+	Basic           int
+	Authenticated   int
+	AuthedMethod    string
+	AuthedParams    map[string]any
+}
+
+// newDigestWalletRPCMock stands in for the live wallet's own auth. Monero's epee
+// server advertises
+//
+//	WWW-Authenticate: Digest qop="auth",algorithm=MD5,realm="monero-rpc",nonce="…"
+//
+// and rejects everything else — including a *correct* credential sent as Basic
+// (captured 2026-10-27: one user:pass returned 401 as Basic and 200 as Digest).
+// This mock does the same, and verifies a digest response the way a server does:
+// it recomputes the response hash with its own copy of the password instead of
+// trusting any header that merely parses.
+func newDigestWalletRPCMock(t *testing.T, user, password, body string) (*httptest.Server, func() digestMockCalls) {
+	t.Helper()
+	const realm = "monero-rpc"
+	var (
+		mu    sync.Mutex
+		calls digestMockCalls
+	)
+	unauthorized := func(w http.ResponseWriter, challenge bool) {
+		if challenge {
+			w.Header().Set("WWW-Authenticate",
+				`Digest qop="auth",algorithm=MD5,realm="`+realm+`",nonce="`+xmrLiveTestNonce+`",stale=false`)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":-401,"message":"Unauthorized Access"}}`))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		calls.Total++
+		switch {
+		case auth == "":
+			calls.Unauthenticated++
+		case strings.HasPrefix(auth, "Basic "):
+			calls.Basic++
+		}
+		mu.Unlock()
+		if !strings.HasPrefix(auth, "Digest ") {
+			unauthorized(w, true)
+			return
+		}
+		cred, err := digest.ParseCredentials(auth)
+		if err != nil {
+			t.Errorf("mock wallet: undecodable digest credentials: %v", err)
+			unauthorized(w, false)
+			return
+		}
+		chal := &digest.Challenge{Realm: realm, Nonce: xmrLiveTestNonce, Algorithm: "MD5", QOP: []string{"auth"}}
+		want, err := digest.Digest(chal, digest.Options{
+			Method: r.Method, URI: r.URL.RequestURI(), Count: cred.Nc,
+			Username: user, Password: password, Cnonce: cred.Cnonce,
+		})
+		if err != nil {
+			t.Errorf("mock wallet: cannot compute the expected response: %v", err)
+			unauthorized(w, false)
+			return
+		}
+		if cred.Username != user || cred.Realm != realm || cred.Nonce != xmrLiveTestNonce || cred.Response != want.Response {
+			unauthorized(w, false)
+			return
+		}
+		// Authenticated. Record the body the retry carried: a request whose body
+		// was consumed by the first, unauthenticated attempt arrives here empty and
+		// must not read as a healthy poll.
+		var req struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		calls.Authenticated++
+		calls.AuthedMethod, calls.AuthedParams = req.Method, req.Params
+		mu.Unlock()
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() digestMockCalls {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+}
+
+// TestBillPollRPCXMRAuthenticatesWithDigest is the live-wallet auth regression.
+//
+// It exists because the rail shipped with SetBasicAuth, the way the DERO poller
+// does it, and a live v0.18.5.1 wallet answers a valid Basic header with 401 — so
+// the poll could never succeed, and every poll would fail on an auth error no
+// matter how right the credential was. Two things are asserted: the digest
+// challenge is answered with a credential the server accepts, and the request the
+// server accepts still carries the poll's body.
+func TestBillPollRPCXMRAuthenticatesWithDigest(t *testing.T) {
+	t.Run("the credential is accepted and the live-shaped entry decodes", func(t *testing.T) {
+		srv, calls := newDigestWalletRPCMock(t, "spore", "s3cret-monero", xmrLiveShapeFixture)
+		entries, highest, err := billPollRPCXMR(srv.URL, "spore:s3cret-monero", 0)
+		if err != nil {
+			t.Fatalf("a live-shaped response behind Digest auth failed: %v", err)
+		}
+		seen := calls()
+		if seen.Unauthenticated != 1 || seen.Authenticated != 1 {
+			t.Errorf("challenge answered %d unauthenticated / %d authenticated times, want 1/1 (the first request probes, the retry authenticates)", seen.Unauthenticated, seen.Authenticated)
+		}
+		if seen.Basic != 0 {
+			t.Errorf("the poller sent Basic %d time(s): a Monero wallet rejects a valid Basic header with 401, so this rail can only ever authenticate with Digest", seen.Basic)
+		}
+		if seen.AuthedMethod != "get_transfers" || seen.AuthedParams["in"] != true || seen.AuthedParams["filter_by_height"] != true {
+			t.Errorf("the authenticated retry carried %q %+v, want get_transfers with in and filter_by_height — a body consumed by the first attempt arrives empty", seen.AuthedMethod, seen.AuthedParams)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("want 1 entry from the live shape, got %d", len(entries))
+		}
+		e := entries[0]
+		if e.TxID != xmrLiveShapeFixtureTXID || e.Amount != 181978330000 || e.Height != 3762745 {
+			t.Errorf("entry = %+v", e)
+		}
+		if e.Type != "in" || e.Locked || e.DoubleSpend {
+			t.Errorf("type=%q locked=%v double_spend=%v, want a plain unspent payment", e.Type, e.Locked, e.DoubleSpend)
+		}
+		if e.SubaddrIndex.Major != 0 || e.SubaddrIndex.Minor != 0 {
+			t.Errorf("subaddr_index = %+v, want the primary address (major 0, minor 0) — where a payment lands when no per-order subaddress was handed out", e.SubaddrIndex)
+		}
+		if e.Address == "" {
+			t.Error("the live entry had no address: attribution by subaddress depends on it")
+		}
+		if highest != 3762745 {
+			t.Errorf("highest = %d, want the entry's height", highest)
+		}
+		// The live entry is billable once its subaddress is labelled.
+		plans, refusals := planXMRPayments(100000000000, 10, map[uint32]string{0: "cc4f19a2"}, nil, entries)
+		if len(refusals) != 0 || len(plans) != 1 {
+			t.Fatalf("plans=%+v refusals=%+v, want the live-shaped entry to bill", plans, refusals)
+		}
+	})
+
+	t.Run("a rejected credential is an error, never no payments", func(t *testing.T) {
+		srv, calls := newDigestWalletRPCMock(t, "spore", "s3cret-monero", xmrLiveShapeFixture)
+		_, _, err := billPollRPCXMR(srv.URL, "spore:wrong-password", 0)
+		if err == nil {
+			t.Fatal("a 401 was read as an empty result: this poller would bill nothing while looking healthy")
+		}
+		if !strings.Contains(err.Error(), "401") {
+			t.Errorf("the error should name the HTTP status, got %v", err)
+		}
+		if seen := calls(); seen.Authenticated != 0 {
+			t.Errorf("the mock authenticated %d request(s) with the wrong password", seen.Authenticated)
+		}
+	})
 }
 
 // TestBillWatchXMRKeepsTheWatermarkUnderADeferredPayment is the case that matters

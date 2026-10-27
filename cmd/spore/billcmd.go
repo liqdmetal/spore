@@ -23,9 +23,10 @@
 // Monero is a second rail on the same orchestrator, in billxmr.go: `-price
 // 2.5xmr -xmr-subaddresses FILE` bills off monero-wallet-rpc. It needs a
 // subaddress→customer map because Monero carries no sender field, and it is
-// gated behind -xmr-unverified because no live wallet round trip exists yet
-// (MONERO_SETTLEMENT §5). Everything downstream — provisioning, the token
-// merge, the onboarding record, the hook — is shared and unchanged.
+// gated behind -xmr-unverified because no live XMR payment has been carried
+// through provisioning into a receipt yet (MONERO_SETTLEMENT §5). Everything
+// downstream — provisioning, the token merge, the onboarding record, the hook —
+// is shared and unchanged.
 //
 // Re-runs are safe: progress lives in <out>/bill-state.json.
 package main
@@ -72,7 +73,8 @@ func billUsage() {
 
 watch flags:
   -rpc URL            wallet RPC endpoint (e.g. http://127.0.0.1:20209/json_rpc)
-  -rpc-login u:p      wallet RPC basic auth
+  -rpc-login u:p      wallet RPC credential: Basic on DERO, Digest on Monero
+                      (the Monero wallet refuses a valid Basic header with 401)
   -price AMOUNT       minimum payment, e.g. 25dero (atomic-exact)
   -users DIR          hosted users directory (same as `+"`mailbox host -users`"+`)
   -tokens FILE        bearer token JSON map (same as `+"`mailbox host -tokens`"+`)
@@ -85,7 +87,9 @@ watch flags:
   -dry-run            report what would happen, change nothing
 
 monero flags (only with a -price in xmr; EXPERIMENTAL, see
-MONERO_SETTLEMENT.md §5 — the poller has never spoken to a live wallet):
+MONERO_SETTLEMENT.md §5 — auth, the result.in[] shape and the decision core are
+live-verified against a v0.18.5.1 wallet, but no live payment has been carried
+through provisioning yet):
   -xmr-unverified     required to bill xmr at all; says every result is suspect
   -xmr-subaddresses F JSON map of subaddress minor index -> hosted user
                       (required: Monero carries no sender field)
@@ -196,7 +200,7 @@ func billWatch(args []string) {
 	interval := fs.Duration("interval", 30*time.Second, "poll interval")
 	once := fs.Bool("once", false, "single poll, then exit")
 	dryRun := fs.Bool("dry-run", false, "report only, change nothing")
-	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: the Monero poller is mock-verified only — treat every result as experimental")
+	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: no live XMR payment has gone through provisioning yet — treat every result as experimental")
 	xmrSubaddresses := fs.String("xmr-subaddresses", "", "JSON map of Monero subaddress minor index -> hosted user (required for -price xmr)")
 	xmrConfirmations := fs.Uint64("xmr-confirmations", 10, "confirmations a Monero payment needs before a mailbox is provisioned (0 is refused)")
 	_ = fs.Parse(args)
@@ -235,7 +239,7 @@ func billWatch(args []string) {
 			check(err)
 		}
 		xmrFloor = *xmrConfirmations
-		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — this poller has never spoken to a live monero-wallet-rpc; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
+		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — auth and the result.in[] shape are live-verified (v0.18.5.1, 2026-10-27) but no live payment has gone through provisioning; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)

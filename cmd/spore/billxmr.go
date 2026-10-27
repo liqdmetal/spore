@@ -8,10 +8,20 @@ package main
 // identified by *which subaddress was paid*, and the operator supplies the
 // mapping. That is the whole shape of this file.
 //
-// Field names below are pinned against Monero v0.18.0.0 source
+// Field names below are pinned twice over: against Monero v0.18.0.0 source
 // (COMMAND_RPC_GET_TRANSFERS::transfer_entry and the incoming
-// fill_transfer_entry) — NOT against a live wallet: no monero-wallet-rpc round
-// trip exists yet, which is why the command is gated behind -xmr-unverified.
+// fill_transfer_entry), and against a populated result.in[] entry captured from
+// a live v0.18.5.1 wallet (2026-10-27). Two things that capture settled:
+//   - the auth scheme is Digest (see xmrRPCClient) — Basic gets a 401;
+//   - an incoming entry carries address, amount, amounts, confirmations,
+//     double_spend_seen, fee, height, locked, note, payment_id, subaddr_index,
+//     subaddr_indices, suggested_confirmations_threshold, timestamp, txid,
+//     type, unlock_time — and NOT destinations, which is set for outgoing
+//     entries only.
+//
+// The command is still gated behind -xmr-unverified: what has been proven
+// against the live wallet is auth, the response shape and the decision core, not
+// a payment carried all the way through provisioning into a receipt.
 // See docs/MONERO_SETTLEMENT.md §3, §5 and §9.
 
 import (
@@ -26,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/icholy/digest"
 )
 
 // xmrTransferEntry is one entry of monero-wallet-rpc get_transfers result.in[].
@@ -72,14 +84,14 @@ type billXMRRefusal struct {
 
 // billAssetAllowed reports whether -price ASSET can be billed by this poller,
 // keeping two different operator problems apart: "there is no poller for this
-// rail" and "the poller exists but is mock-verified".
+// rail" and "the poller exists but has no live payment behind it".
 func billAssetAllowed(asset string, xmrUnverified bool) error {
 	switch asset {
 	case "dero":
 		return nil
 	case "xmr":
 		if !xmrUnverified {
-			return errors.New("bill watch: -price asset \"xmr\" is mock-verified only (there has been no live monero-wallet-rpc round trip): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
+			return errors.New("bill watch: -price asset \"xmr\" is experimental only (auth and the result.in[] shape are live-verified against a v0.18.5.1 wallet on 2026-10-27, but no live XMR payment has been carried through provisioning into a receipt): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
 		}
 		return nil
 	default:
@@ -185,8 +197,31 @@ func planXMRPayments(price, floor uint64, labels map[uint32]string, done map[str
 	return plans, refusals
 }
 
+// xmrRPCClient builds the HTTP client for monero-wallet-rpc.
+//
+// The auth scheme is the wallet's, not ours. Monero's epee server challenges
+// with `WWW-Authenticate: Digest qop="auth",algorithm=MD5,realm="monero-rpc"`
+// and answers a *valid* Basic header with 401 — confirmed against the live
+// v0.18.5.1 wallet on 2026-10-27, where one credential returned 401 as Basic and
+// 200 as Digest. The DERO rail (billPollRPC, billcmd.go) keeps SetBasicAuth,
+// because DERO's wallet speaks plain Basic; this rail cannot use it, and the
+// difference is not cosmetic. A scheme the server rejects makes every poll fail,
+// and a poller whose failure looks like an empty result bills nothing while
+// looking healthy — the failure MONERO_SETTLEMENT §5 exists to prevent.
+//
+// Deliberately the same transport internal/xmr uses: one rail should not hold
+// two opinions about how to authenticate to the same wallet.
+func xmrRPCClient(login string) *http.Client {
+	var rt http.RoundTripper = http.DefaultTransport
+	if u, p, ok := strings.Cut(login, ":"); ok {
+		rt = &digest.Transport{Username: u, Password: p}
+	}
+	return &http.Client{Transport: rt, Timeout: 30 * time.Second}
+}
+
 // billPollRPCXMR calls monero-wallet-rpc get_transfers for incoming transfers
-// and returns the entries plus the highest height seen.
+// and returns the entries plus the highest height seen. Auth is Digest (see
+// xmrRPCClient): a 401 here is returned as an error, never as "no payments".
 //
 // filter_by_height is NOT optional. v0.18.0.0 gates height filtering on it, so a
 // request that sends min_height without it re-scans every transfer the wallet
@@ -206,13 +241,7 @@ func billPollRPCXMR(rpcURL, login string, minHeight uint64) ([]xmrTransferEntry,
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if login != "" {
-		u, p, ok := strings.Cut(login, ":")
-		if ok {
-			req.SetBasicAuth(u, p)
-		}
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := xmrRPCClient(login).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

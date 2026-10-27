@@ -19,7 +19,8 @@
 // step 3) carries the full body off-chain.
 //
 // Backend methods hit the Monero wallet RPC (v2, JSON-RPC at
-// http://127.0.0.1:18082/json_rpc), which holds the keys and signs:
+// http://127.0.0.1:18083/json_rpc in this deployment — 18082 is monerod's own RPC
+// port here, so the wallet takes the next one), which holds the keys and signs:
 //
 //	get_height, get_address, transfer, get_transfers.
 package xmr
@@ -55,8 +56,9 @@ type Backend struct {
 }
 
 // NewBackend builds an XMR backend. rpcURL is the wallet RPC endpoint
-// (http://127.0.0.1:18082/json_rpc). login is optional "user:pass" for Digest
-// auth (leave empty if the wallet RPC runs with no --rpc-login).
+// (http://127.0.0.1:18083/json_rpc). login is optional "user:pass" for Digest
+// auth (leave empty if the wallet RPC runs with no --rpc-login). Digest is not a
+// preference: a real wallet answers a valid credential sent as Basic with 401.
 func NewBackend(rpcURL, login string) *Backend {
 	rt := http.DefaultTransport
 	if u, p, ok := strings.Cut(login, ":"); ok {

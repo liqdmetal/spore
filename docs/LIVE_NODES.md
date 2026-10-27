@@ -22,10 +22,19 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
   `127.0.0.1:18081`, p2p `0.0.0.0:18080`, managed by `monerod.service`
   (systemd, auto-restart + boot). **Syncing (~60% as of 2026-09-05)**; multi-hour
   to tip ~3.75M.
-- **Remaining on XMR path** (after sync reaches tip):
-  1. Create + fund a test wallet (`monero-wallet-cli`), note the seed.
-  2. Run `monero-wallet-rpc` on `127.0.0.1:18082` (behind auth / SSH tunnel).
-  3. `spore msg send/recv -chain xmr` live round-trip.
+- **Wallet RPC RUNNING — 2026-10-27.** `monero-wallet-rpc` (v0.18.5.1) is live on
+  `127.0.0.1:18083` behind auth, managed by `monero-wallet-rpc.service` as user
+  `monero`, and the wallet holds real incoming payments. Two things that cost an
+  afternoon if they are not known: the port is **18083, not 18082** (18082 is
+  `monerod`'s own RPC endpoint on this host), and the auth is **Digest** — a
+  correct `--rpc-login` sent as Basic is answered with `401`.
+- **Remaining on XMR path**:
+  1. ✅ Test wallet created and funded (seed held out-of-band; wallet readable
+     only by the `monero` user).
+  2. ✅ `monero-wallet-rpc` on `127.0.0.1:18083` behind auth.
+  3. ⬜ `spore msg send/recv -chain xmr` live round-trip.
+  4. ⬜ One real XMR payment carried through `bill watch` provisioning into a
+     receipt ([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §8 step 5).
 
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet
@@ -41,8 +50,10 @@ box.
     — the box already holds dero data. **Pruned sync recommended.**
 - **Run as its own user** (`monero`), not root, matching the derod setup.
 - **Daemon RPC** bound to `127.0.0.1:18081` (never exposed).
-- **Wallet RPC** bound to `127.0.0.1:18082` behind basic auth, or via SSH
-    tunnel like the DERO wallet — do NOT open 18082 to the internet.
+- **Wallet RPC** bound to `127.0.0.1:18083` (18082 is taken by `monerod`'s own
+    RPC) behind **Digest** auth, or via SSH tunnel like the DERO wallet — do NOT
+    expose it. A client must use a Digest transport: the wallet rejects a valid
+    credential sent as Basic.
 - **chain settings**: `--prune-blockchain`, `--data-dir /var/lib/monero`,
   `--restricted-rpc` for the daemon (no mining control).
 - **Funding + registration**: Monero needs no on-chain registration, but each
@@ -61,14 +72,16 @@ box.
 5. monero-wallet-cli --generate-from-json or monero-wallet-cli --daemon-address
      127.0.0.1:18081  (create the test wallet; keep a copy of the seed)
 6. Fund wallet with a small XMR amount (postage ~ micro-XMR per tx)
-7. monero-wallet-rpc --wallet-file /opt/monero/wallet/spore \
-     --rpc-bind-port 18082 --daemon-address 127.0.0.1:18081 \
-     --rpc-login spore:CHANGEME --password-file <...> &
+7. monero-wallet-rpc --wallet-file /opt/monero/wallet/mycelium-test \
+     --rpc-bind-port 18083 --daemon-address 127.0.0.1:18081 \
+     --rpc-login <user:pass> --password-file <...> &
+   # 18083, not 18082: monerod already holds 18082. Keep the wallet and its
+   # password file readable only by the service user, and its log at 0600.
 8. systemd units for monerod + monero-wallet-rpc (restart on boot)
 9. Verify locally on the box:
-     spore msg send -chain xmr -rpc http://127.0.0.1:18082/json_rpc \
+     spore msg send -chain xmr -rpc http://127.0.0.1:18083/json_rpc \
         -to <wallet-b-subaddr> -msg "hi"
-     spore msg recv -chain xmr -rpc http://127.0.0.1:18082/json_rpc
+     spore msg recv -chain xmr -rpc http://127.0.0.1:18083/json_rpc
 ```
 
 ### XMR note (repeat)
