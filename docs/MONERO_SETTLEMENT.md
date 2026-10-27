@@ -67,18 +67,50 @@ amount Monero can send.
 `get_transfers` returns `result.entries` with a sender-tagged incoming flag and
 that flow does no address fan-out.
 
-Monero's `get_transfers` returns **`result.in[]`** — `{txid, height, amount,
-confirmations, subaddr_index, address, note}` — and there is **no sender field at
-all**, by design. So the payer is identified by *which address was paid*:
+Monero's `get_transfers` returns **`result.in[]`**, and there is **no sender field
+at all**, by design. So the payer is identified by *which address was paid*.
+
+The entry's field set, checked against Monero **v0.18.0.0** source
+(`COMMAND_RPC_GET_TRANSFERS::transfer_entry` in
+`src/wallet/wallet_rpc_server_commands_defs.h`, and the incoming
+`fill_transfer_entry` in `src/wallet/wallet_rpc_server.cpp`): `txid`,
+`payment_id`, `height`, `timestamp`, `amount`, `amounts`, `fee`, `note`,
+`destinations`, `type`, `unlock_time`, `locked`, `subaddr_index`,
+`subaddr_indices`, `address`, `double_spend_seen`, `confirmations`,
+`suggested_confirmations_threshold`. `address` **is** set on incoming entries —
+the handler fills it from the receiving subaddress — which is what makes
+attribution-by-subaddress possible at all.
+
+Four of those fields decide whether a transfer may be billed:
+
+- **`type` is a string, and `in[]` is not exclusively payments.** The handler
+  sets `"in"` for a payment and **`"block"` for a coinbase entry**. A biller must
+  require `type == "in"` rather than trusting array membership.
+- **`locked` / `unlock_time`**: a received transfer can be not-yet-spendable. Locked
+  money is not money yet.
+- **`double_spend_seen`**: never provision against one.
+- **`confirmations`** — with `suggested_confirmations_threshold` as the wallet's own
+  hint — is what the floor in §5 reads.
+
+And a response may **omit** `in` entirely when it is empty: empty categories are
+not guaranteed to serialize as `[]` (a real report against Monero's own tracker
+shows a result whose only key was `in`). A decoder must treat a missing key as no
+transfers, never as an error.
 
 ```
 create_address   {account_index:0, label:"order:<id>", count:1}
                  -> {address, address_index:{major,minor}}
 label_address    {index:{major,minor}, label:"order:<id>"}
 get_address      / get_address_index          # map an entry back to an order
-get_transfers    {in:true, account_index:0, subaddr_indices:[…], min_height:h}
+get_transfers    {in:true, account_index:0, subaddr_indices:[…],
+                  filter_by_height:true, min_height:h, max_height:0}
 incoming_transfers                            # alternative output listing
 ```
+
+**`min_height` does nothing on its own.** v0.18.0.0 gates height filtering on
+`filter_by_height`, so a request that passes `min_height` without it silently
+re-scans every transfer the wallet has, on every poll. `internal/xmr` already
+sets it — this note exists because the sketch is what a new poller copies.
 
 Model: **one fresh subaddress per order**, its `minor` index stored against the
 order. Reconcile by that index, and keep `txid`, `subaddr_index.minor`, piconero
@@ -132,14 +164,19 @@ The caveats travel with the row, and none of them are footnotes:
 bill zero mailboxes while looking perfectly healthy. That is the whole reason
 `-price 2.5xmr` is refused: the units parse exactly, the poller does not.
 
-The XMR poller needs four things before it may be allowed:
+The XMR poller needs five things before it may be allowed:
 
-1. `result.in[]` pinned by a **captured** fixture, not by this doc (§9).
+1. `result.in[]` pinned by a **captured** fixture. The field set is now
+   source-verified (§3), but no populated entry from a real wallet has been
+   observed yet, and a response can omit `in` when it is empty (§9).
 2. A **subaddress → customer map**, operator-supplied, because Monero gives no
    sender: which `minor` index belongs to which order. Absent map = refuse.
-3. A **confirmation floor** (default 10, never 0). A provisioned mailbox cannot be
-   clawed back, and an unconfirmed transfer can be reorged away.
-4. **Hold-and-log** for a transfer whose subaddress is unlabelled — never
+3. A **confirmation floor** (default 10, never 0), read from `confirmations`. A
+   provisioned mailbox cannot be clawed back, and an unconfirmed transfer can be
+   reorged away.
+4. **The three guards from §3**: `type == "in"` (a coinbase entry in `in[]` is not
+   a payment), not `locked`/`unlock_time`, and not `double_spend_seen`.
+5. **Hold-and-log** for a transfer whose subaddress is unlabelled — never
    provision on a guess, and never silently drop money.
 
 Until a live `monero-wallet-rpc` round trip lands, gate the whole path behind
@@ -201,14 +238,27 @@ the wallet RPC on loopback.
 
 ## 9. What would falsify this document
 
-- The `result.in[]` field set in §3/§5 comes from the **official RPC reference**,
-  not from a live wallet. Step 2 exists to catch a mismatch; if a real response
-  names fields differently, the fixture and this document are both wrong and both
-  get fixed before anything bills.
+- The field set in §3 is verified against Monero **v0.18.0.0 source** (the
+  `transfer_entry` struct and the incoming `fill_transfer_entry`) plus one real
+  captured result-key list — **not** against a live populated response. No
+  `monero-wallet-rpc` was reachable when this was written: nothing runs here, the
+  node's address is redacted from this repo by design, and
+  [LIVE_NODES.md](LIVE_NODES.md) §1 still lists the wallet-RPC step as
+  outstanding. What a real capture could still change: which fields a given build
+  emits when they are empty, and whether some 0.18.x patch renamed one. Step 2 is
+  to record one real response into the fixture; if it disagrees, the fixture and
+  this document both get fixed before anything bills.
 - Multisig's experimental status and the proof caveats in §4 are the upstream
   docs' claims, cited below — they can move, and this doc should move with them.
 
-Sources read for this plan: the [Monero wallet RPC
+Sources read for this plan: Monero v0.18.0.0
+[`wallet_rpc_server_commands_defs.h`](https://raw.githubusercontent.com/monero-project/monero/v0.18.0.0/src/wallet/wallet_rpc_server_commands_defs.h)
+and
+[`wallet_rpc_server.cpp`](https://raw.githubusercontent.com/monero-project/monero/v0.18.0.0/src/wallet/wallet_rpc_server.cpp)
+for the `get_transfers` request/response and entry fields (the §3 field list and
+the `filter_by_height` trap are read off those), plus
+[Monero issue #8140](https://github.com/monero-project/monero/issues/8140) for a
+real captured result-key list; the [Monero wallet RPC
 reference](https://docs.getmonero.org/rpc-library/wallet-rpc/) and
 [CLI reference](https://docs.getmonero.org/interacting/monero-wallet-cli-reference/),
 the [multisignature guide](https://docs.getmonero.org/multisignature/), the
