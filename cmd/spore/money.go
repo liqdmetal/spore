@@ -129,13 +129,22 @@ func marshalEscrowNotice(action, hashHex, preimageHex, txid, note string, atomic
 }
 
 // assetDecimals maps a chain identifier to the decimal places of its atomic
-// unit. DERO: 100000 atomic = 1 DERO (5). EVM/Bitcoin-class chains use 18/8.
-// Unknown assets are rejected rather than guessed — money must never be
+// unit. DERO: 100000 atomic = 1 DERO (5). Monero: 1e12 piconero = 1 XMR (12),
+// the widest unit in this table. EVM/Bitcoin-class chains use 18/8. Unknown
+// assets are rejected rather than guessed — money must never be
 // unit-ambiguous.
+//
+// XMR is the reason the big.Int path below is required rather than merely
+// tidy: 2^53 piconero is 9007.199254740992 XMR, so above ~9007 XMR a uint64
+// atomic count has no exact float64, and any implementation that divides
+// through a float silently moves a different amount of money at the top of the
+// range. Monero amounts are integer piconero end to end — never decimal XMR.
 func assetDecimals(asset string) (int, error) {
 	switch strings.ToLower(asset) {
 	case "dero":
 		return 5, nil
+	case "xmr", "monero":
+		return 12, nil
 	case "evm", "eth", "evm-native":
 		return 18, nil
 	case "btc", "bitcoin":
@@ -145,7 +154,7 @@ func assetDecimals(asset string) (int, error) {
 	case "sol", "solana":
 		return 9, nil
 	default:
-		return 0, fmt.Errorf("unknown asset %q (want dero|evm|btc|ton|sol)", asset)
+		return 0, fmt.Errorf("unknown asset %q (want dero|xmr|evm|btc|ton|sol)", asset)
 	}
 }
 

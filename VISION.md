@@ -69,6 +69,14 @@ RPC). It needs **live verification against a real `monero-wallet-rpc`** — a
 pruned `monerod` is syncing (~60%) on the Hetzner node to enable that — before
 it's trusted the way DERO/EVM/Solana are.
 
+The carrier judgement above is final for *pointers*: XMR carries a knock, never
+a message. **Money is a separate question with its own plan** —
+[MONERO_SETTLEMENT.md](docs/MONERO_SETTLEMENT.md) — where `xmr` is now a
+first-class money asset (12 decimals = piconero, exact), and subaddress
+attribution, transaction-proof evidence, the `bill watch` blocker and 2-of-3
+multisig escrow are laid out in build order. A job can settle in XMR whatever
+rail carried its message.
+
 ## 4. The interconnection model — the relay fabric
 
 The stack treats **substrate as replaceable delivery, not authority**. The

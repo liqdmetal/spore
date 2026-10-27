@@ -76,7 +76,12 @@ watch flags:
 `)
 }
 
-// billEntry is the slice of the wallet RPC transfer entry bill reads.
+// billEntry is the slice of the wallet RPC transfer entry bill reads. The shape
+// is DERO's: get_transfers returns result.entries with a sender-tagged incoming
+// bool and atomic DERO amounts. Monero answers get_transfers under result.in[]
+// with integer piconero and NO sender field at all, so an XMR price cannot be
+// billed by this poller — see docs/MONERO_SETTLEMENT.md §5 for what has to be
+// built first (per-order subaddress attribution).
 type billEntry struct {
 	Height   uint64 `json:"height"`
 	TXID     string `json:"txid"`
@@ -159,7 +164,12 @@ func billWatch(args []string) {
 		check(err)
 	}
 	if asset != "dero" {
-		check(fmt.Errorf("bill watch: -price asset %q: bill matches wallet RPC amounts, which are atomic DERO; use e.g. 25dero", asset))
+		// Not a units problem: -price is compared against wallet RPC amounts, which
+		// are atomic in their own rail, so xmr would parse exactly. The blocker is
+		// attribution — the poller below reads DERO's result.entries with a
+		// sender-tagged incoming flag, while Monero returns result.in[] and names no
+		// sender, so a subaddress has to identify the payer first.
+		check(fmt.Errorf("bill watch: -price asset %q is not billable yet: the poller reads DERO's wallet-RPC shape (get_transfers -> result.entries). Monero reports result.in[] and carries no sender field, so XMR billing needs per-order subaddress attribution first (docs/MONERO_SETTLEMENT.md §5); use e.g. 25dero", asset))
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)
@@ -180,7 +190,7 @@ func billWatch(args []string) {
 		n := 0
 		for _, p := range plans {
 			if *dryRun {
-				log.Printf("DRY-RUN would provision txid=%s user=%s amount=%d atomic (%.5f dero)", p.TXID, p.User, p.Amount, float64(p.Amount)/100000)
+				log.Printf("DRY-RUN would provision txid=%s user=%s amount=%d atomic (%s %s)", p.TXID, p.User, p.Amount, formatAmount(asset, p.Amount), asset)
 				n++
 				continue
 			}
