@@ -52,6 +52,31 @@ func TestWatchStationSelfMetricsLive(t *testing.T) {
 	}
 }
 
+// waitForHeartbeats reads the station log until it holds want occurrences of
+// needle, or until limit elapses, and returns whatever the log holds then.
+//
+// This is how these smokes avoid asserting the machine's speed. They drive a
+// real process, and the pre-push gate runs them on a loaded box where build
+// plus process start can consume most of a couple of heartbeat periods — the
+// failure that produced "want >=2 self-metrics heartbeats in ~2s of 500ms
+// periods, got 1" for a station that was healthy. A station that really stops
+// heartbeating still fails; it fails on the caller's existing assertion, with
+// its log attached, instead of on a stopwatch.
+func waitForHeartbeats(t *testing.T, logPath, needle string, want int, limit time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for {
+		raw, _ := os.ReadFile(logPath)
+		if strings.Count(string(raw), needle) >= want {
+			return string(raw)
+		}
+		if time.Now().After(deadline) {
+			return string(raw)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // watchStationSelfMetricsSmoke runs one real station for a couple of
 // heartbeat periods and asserts on its log according to the render mode.
 func watchStationSelfMetricsSmoke(t *testing.T, exe string, metricsJSON bool) {
@@ -87,14 +112,13 @@ func watchStationSelfMetricsSmoke(t *testing.T, exe string, metricsJSON bool) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	}()
-	time.Sleep(2200 * time.Millisecond)
+	needle := "self-metrics at"
+	if metricsJSON {
+		needle = `{"at":`
+	}
+	logText := waitForHeartbeats(t, logPath, needle, 2, 20*time.Second)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
-	logBytes, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	logText := string(logBytes)
 	if !strings.Contains(logText, "approve: watching") {
 		t.Fatalf("station log missing startup line:\n%s", logText)
 	}
