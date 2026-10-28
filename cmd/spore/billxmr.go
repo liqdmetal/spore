@@ -19,10 +19,17 @@ package main
 //     type, unlock_time — and NOT destinations, which is set for outgoing
 //     entries only.
 //
-// The command is still gated behind -xmr-unverified: what has been proven
-// against the live wallet is auth, the response shape and the decision core, not
-// a payment carried all the way through provisioning into a receipt.
-// See docs/MONERO_SETTLEMENT.md §3, §5 and §9.
+// The command is still gated behind -xmr-unverified, and the reason is now about
+// the receipt rather than the poller. On 2026-10-27/28 the whole chain ran once
+// against the live wallet: a real payment was decoded, a second real payment was
+// refused as underpaid, a hosted mailbox was provisioned through the shipped
+// `provision` subprocess, and the receipt was written — with the wallet's own
+// get_tx_proof verifying against that receipt's bytes. What the run did NOT
+// cover: the receipt format has no proof block yet (§8 step 4); the payment
+// arrived on the wallet's primary address rather than a per-order subaddress, so
+// create_address/label_address attribution has never carried real money; and the
+// confirmation floor was satisfied rather than withheld.
+// See docs/MONERO_SETTLEMENT.md §3, §5, §8 and §9.
 
 import (
 	"bytes"
@@ -84,14 +91,14 @@ type billXMRRefusal struct {
 
 // billAssetAllowed reports whether -price ASSET can be billed by this poller,
 // keeping two different operator problems apart: "there is no poller for this
-// rail" and "the poller exists but has no live payment behind it".
+// rail" and "the poller exists but its receipt still carries no proof".
 func billAssetAllowed(asset string, xmrUnverified bool) error {
 	switch asset {
 	case "dero":
 		return nil
 	case "xmr":
 		if !xmrUnverified {
-			return errors.New("bill watch: -price asset \"xmr\" is experimental only (auth and the result.in[] shape are live-verified against a v0.18.5.1 wallet on 2026-10-27, but no live XMR payment has been carried through provisioning into a receipt): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
+			return errors.New("bill watch: -price asset \"xmr\" is experimental only (one live round trip completed on 2026-10-27/28 — payment, provisioning and receipt — but that receipt carries no proof block yet and no real payment has arrived on a per-order subaddress): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
 		}
 		return nil
 	default:

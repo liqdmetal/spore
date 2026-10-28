@@ -1,12 +1,15 @@
 # Monero settlement — XMR as Spore's money rail
 
-**Status: the amount seam ships, and the wallet integration is live-verified as
-far as auth, the response shape and the decision core.** `xmr` is a
-first-class money asset in the CLI (12 decimals, exact, tested), and `bill watch`
-now decodes a real wallet's own payments (2026-10-27, wallet RPC v0.18.5.1 — §5,
-§9). What is *not* live-verified: no XMR payment has been carried all the way
-through provisioning into a receipt, which is the narrower reason §5 still gates
-the rail behind `-xmr-unverified`.
+**Status: the whole rail has run once, end to end, against a real wallet.**
+`xmr` is a first-class money asset in the CLI (12 decimals, exact, tested), and on
+2026-10-27/28 `bill watch` decoded a live wallet's own payment, refused a second
+real payment on a real guard, provisioned a hosted mailbox from the first, wrote
+the receipt, and the wallet's own `get_tx_proof` verified against that receipt's
+bytes (§5, §8, §9 and [LIVE_NODES.md](LIVE_NODES.md) §1). What that single run did
+not settle, and what §5's gate now rests on: the receipt format has no proof block
+yet (§8 step 4), the payment arrived on the wallet's **primary address** rather
+than a per-order subaddress, and the confirmation floor was satisfied rather than
+withheld.
 
 Read with [CARRIER_MATRIX.md](CARRIER_MATRIX.md) (XMR is not a pointer carrier),
 [JOB_RECEIPT_V1.md](JOB_RECEIPT_V1.md) (what a settlement line is),
@@ -217,14 +220,20 @@ which is this section's whole subject. Nothing but a live wallet reveals it: a
 mock that accepts whatever it is handed, including the old `SetBasicAuth` code,
 stays green.
 
-The path stays gated behind `-xmr-unverified` for a narrower reason than before:
-auth, the response shape and the decision core are live-verified, but no live XMR
-payment has been carried through provisioning into a receipt. The development
-target remains an `httptest` mock in the shape of `internal/xmr/xmr_test.go`, so
-the reconciliation logic is executable on every push; live verification confirms
-the shape, not the logic — and on 2026-10-27 live verification did exactly that
-against a real wallet, including the hold-and-log guard refusing two real,
-unlabelled payments and pinning the watermark below them.
+The path stays gated behind `-xmr-unverified`, for a reason that is now about the
+receipt rather than the poller. On 2026-10-27/28 the whole chain ran once against
+the live wallet — a real payment decoded, a real second payment refused as
+underpaid, a mailbox provisioned, a receipt written, and the payment's own
+`get_tx_proof` verified against that receipt's bytes (§8 step 5, §9) — so auth,
+the decode, the guards, provisioning and the receipt are no longer the gap. What
+still is: the receipt carries no proof block (§8 step 4); the payment arrived on
+the wallet's primary address rather than a per-order subaddress, so
+`create_address`/`label_address` attribution has still never been driven by real
+money; and the confirmation floor and the `locked`/`double_spend_seen` guards have
+been satisfied or refused by fixtures, never withheld by a real wallet. The
+development target also remains an `httptest` mock in the shape of
+`internal/xmr/xmr_test.go`, so the reconciliation logic is executable on every
+push; live verification confirms the shape, not the logic.
 
 ## 6. Escrow: 2-of-3 multisig is the honest XMR escrow, not HTLC
 
@@ -262,6 +271,12 @@ daemon, not the wallet. [LIVE_NODES.md](LIVE_NODES.md) §1 has the node-side ste
 Monero has no public node API the way DERO does — prune locally and keep the
 wallet RPC on loopback.
 
+The wallet's spendable balance is **0** as of 2026-10-28: the two payments it held
+were swept out again in one outgoing transfer (0.19789049 XMR), which is also why
+the §8 step 5 run billed a payment that already existed rather than making a new
+one. Running that step again, or watching a per-order subaddress, needs funds sent
+to the wallet first.
+
 ## 8. Order of work
 
 1. ✅ **Piconero is an exact asset** — `assetDecimals`, refusal of sub-piconero,
@@ -276,12 +291,20 @@ wallet RPC on loopback.
 4. **Proof in the receipt** — an optional tx-proof block on `sign receipt`, and
    `tally -proofs` verifying instead of trusting a txid list. This is the first
    artifact that turns "claims to have paid" into "this payment exists" for XMR.
-5. **The live round trip** — subaddress → payment → `get_transfers` → provisioning
-   → receipt with a proof, recorded in LIVE_NODES §1. That single run is what
-   moves XMR from mock-verified to live-verified. **Partially done (2026-10-27):**
-   auth, the `get_transfers` decode, the guards and the watermark have now run
-   against a real wallet's real payments; provisioning a mailbox and attaching a
-   proof to the receipt have not.
+5. ✅ **The live round trip** — payment → `get_transfers` → provisioning → receipt,
+   recorded in LIVE_NODES §1. **Done 2026-10-27/28** against the live wallet: one
+   real payment (0.18197833 XMR, height 3,762,745, 30,845 confirmations) was
+   decoded, provisioned a hosted mailbox through the shipped `provision`
+   subprocess, and produced `out/<user>.receipt.json` carrying that txid, height
+   and amount — while a second real payment (0.01609008 XMR) was refused as
+   underpaid, with the reason left in `bill-state.json`. Three things this run does
+   **not** cover, each of which stays open: the payment arrived on the wallet's
+   primary address (`minor 0`) rather than a fresh per-order subaddress, so the
+   attribution path that matters most in production is still fixture-only; the
+   proof is a side artifact — §4's block on `sign receipt` is step 4, so the
+   receipt has no proof field even though the proof verifies against the receipt's
+   exact bytes; and the payment predates the run, the wallet's spendable balance
+   being 0, so no *new* payment could be made from this box.
 6. **Multisig escrow**, stagenet first (§6) — and only then any UI that says
    "escrow" over XMR.
 
@@ -298,6 +321,19 @@ wallet RPC on loopback.
   a build emits for a **locked** or `double_spend_seen` transfer (both guards are
   exercised by fixtures and by a mock, not by a real wallet), and whether some
   0.18.x patch renames one of these fields.
+- The §8 step 5 run is one wallet, one payment, one receipt. It settles that the
+  poller's decode, its underpaid guard, provisioning and the receipt are not
+  fabricated — it does not settle that the rail is safe in general. Still
+  unobserved, and each able to falsify §5: a real payment **held by the
+  confirmation floor** (the billed payment had 30,845 confirmations, so the floor
+  was satisfied and never had to withhold anything), a real **`locked`** or
+  **`double_spend_seen`** entry, and a real payment to a **fresh per-order
+  subaddress** — this one arrived on the primary address, so
+  `create_address`/`label_address` attribution has still never carried money. The
+  proof half is settled for this payment: the wallet's `get_tx_proof` verified
+  (`good: true`, `received` equal to the receipt's `amount_atomic`) against the
+  sha256 of the receipt bytes, and refused a wrong message, a tampered receipt
+  digest, a wrong txid, a flipped signature, and a malformed address.
 - The Digest-only auth in §5 is one build's behaviour. It is what epee does by
   default and it was captured directly, but a wallet started without `--rpc-login`
   needs no transport at all, and a future build could accept Basic as well. The

@@ -33,8 +33,17 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
      only by the `monero` user).
   2. ✅ `monero-wallet-rpc` on `127.0.0.1:18083` behind auth.
   3. ⬜ `spore msg send/recv -chain xmr` live round-trip.
-  4. ⬜ One real XMR payment carried through `bill watch` provisioning into a
-     receipt ([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §8 step 5).
+  4. ✅ One real XMR payment carried through `bill watch` provisioning into a
+     receipt — 2026-10-27/28 ([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §8
+     step 5). The wallet held two real payments; `bill watch` billed the larger
+     (0.18197833 XMR, height 3,762,745, 30,845 confirmations) into a provisioned
+     mailbox and a receipt, and refused the smaller (0.01609008 XMR) as
+     underpaid. Evidence on the box in `/root/spore-xmr-live/out/`:
+     `cc4f19a2.receipt.json`, the `provision`ed user dir under `users/`, and
+     `cc4f19a2.txproof.json`, whose `check_tx_proof` answers `good: true` for the
+     receipt's own sha256. What stays open: the payment landed on the wallet's
+     **primary address** (minor 0), its spendable balance was already swept to 0,
+     and the receipt carries no proof field yet (§8 step 4).
 
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet

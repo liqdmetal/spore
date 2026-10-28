@@ -9,9 +9,11 @@ package main
 //
 // The response fixtures: the first is built from the v0.18.0.0 field set, and
 // xmrLiveShapeFixture is the key set of a populated entry captured from a live
-// v0.18.5.1 wallet on 2026-10-27 (identifying strings redacted, §9). What is
-// still NOT covered: a payment carried all the way through provisioning against
-// a live wallet, which is why the command stays behind -xmr-unverified.
+// v0.18.5.1 wallet on 2026-10-27 (identifying strings redacted, §9). What these
+// tests still cannot cover, and why the command stays behind -xmr-unverified:
+// nothing here proves provisioning against a live wallet. That happened once, on
+// 2026-10-27/28, and is recorded in docs/MONERO_SETTLEMENT.md §8 step 5 rather
+// than reproduced on every push.
 
 import (
 	"encoding/json"
