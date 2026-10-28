@@ -129,7 +129,8 @@ bill address flags:
 bill reconcile flags:
   -rpc URL            wallet RPC endpoint (required)
   -rpc-login u:p      wallet RPC credential (Digest on Monero)
-  -out DIR            outbox directory holding the ledger (required)
+  -out DIR            outbox directory holding the ledger (required unless
+                      -addresses names the ledger directly)
   -addresses F        ledger path (default: OUT/subaddresses.json)
   -json               machine-readable report
 `)

@@ -61,6 +61,53 @@ func TestBillReconcileInStep(t *testing.T) {
 	}
 }
 
+// Both ways of naming the ledger have to work. `-addresses` alone used to exit 2
+// with "-rpc -out are required" — the flag it refused was one the run never read,
+// and it refused exactly the shape this command's own adopt proposal prints
+// (`bill address -addresses …`), so reconciling a ledger kept outside an outbox
+// meant inventing an -out. The default has to keep working, and the refusal for
+// "neither flag" has to survive so the message still tells an operator what to do.
+func TestBillReconcileAcceptsEitherLedgerFlag(t *testing.T) {
+	exe := buildSporeBinary(t)
+	w := newSubaddressWallet(t, 3)
+	out := filepath.Join(t.TempDir(), "out")
+	issueOne(t, exe, w, out)
+	// -out alone still finds the ledger inside the outbox.
+	logs, err := runReconcile(t, exe, w.srv.URL, out)
+	if err != nil {
+		t.Fatalf("reconcile with -out and no -addresses failed: %v\n%s", err, logs)
+	}
+	if !strings.Contains(logs, "1 entr(y/ies)") || !strings.Contains(logs, "the ledger and the wallet agree") {
+		t.Errorf("output does not show the outbox ledger agreeing:\n%s", logs)
+	}
+
+	// -addresses alone, no -out at all. The ledger is moved out of the outbox
+	// first, so the default path does not exist and the run can only be in step if
+	// -addresses is the path it read.
+	ledger := filepath.Join(t.TempDir(), "ledger-outside.json")
+	if err := os.Rename(filepath.Join(out, "subaddresses.json"), ledger); err != nil {
+		t.Fatalf("move ledger: %v", err)
+	}
+	logs, err = runSpore(t, exe, "bill", "reconcile", "-rpc", w.srv.URL, "-addresses", ledger)
+	if err != nil {
+		t.Fatalf("reconcile with -addresses and no -out was refused: %v\n%s", err, logs)
+	}
+	for _, want := range []string{"ledger-outside.json)", "1 entr(y/ies)", "in step     1", "the ledger and the wallet agree"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("output missing %q:\n%s", want, logs)
+		}
+	}
+
+	// Neither flag: still refused, and the message names the way out.
+	logs, err = runSpore(t, exe, "bill", "reconcile", "-rpc", w.srv.URL)
+	if err == nil {
+		t.Fatalf("reconcile ran with no ledger path at all:\n%s", logs)
+	}
+	if !strings.Contains(logs, "-out is required (or name the ledger with -addresses)") {
+		t.Errorf("refusal does not say how to name a ledger:\n%s", logs)
+	}
+}
+
 // The crash case: the wallet has an address the ledger never learned. Reconcile
 // must fail, name it, and print the exact command — including the order recovered
 // from the wallet's own label.

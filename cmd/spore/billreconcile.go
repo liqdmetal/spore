@@ -95,12 +95,20 @@ func billReconcile(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "wallet RPC timeout")
 	_ = fs.Parse(args)
 
-	if *rpc == "" || *out == "" {
-		fmt.Fprintln(os.Stderr, "bill reconcile: -rpc -out are required")
+	if *rpc == "" {
+		fmt.Fprintln(os.Stderr, "bill reconcile: -rpc is required")
 		os.Exit(2)
 	}
+	// Either flag can name the ledger. `-out` is only the default's parent, so
+	// demanding it beside an explicit -addresses refused a run that never read it
+	// — and -addresses is the path the adopt command this check prints tells you
+	// to edit, i.e. the one shape an operator is most likely to type.
 	ledgerPath := *addresses
 	if ledgerPath == "" {
+		if *out == "" {
+			fmt.Fprintln(os.Stderr, "bill reconcile: -out is required (or name the ledger with -addresses)")
+			os.Exit(2)
+		}
 		ledgerPath = billLedgerPath(*out)
 	}
 	ledger, err := loadBillSubaddresses(ledgerPath)
