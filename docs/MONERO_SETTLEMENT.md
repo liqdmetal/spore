@@ -164,11 +164,17 @@ server, or chain client of ours, because the *wallet* can prove its own payment:
 | `get_spend_proof` → `check_spend_proof` | the wallet made a spend for that txid; needs no destination — a sender-side "funds out" claim |
 | `get_reserve_proof` → `check_reserve_proof` | a reserve/balance statement; **not** a job payment |
 
-Bind the proof's `message` field to the **receipt digest**, so the proof is
-evidence for *this* record rather than for a payment that could be pointed at any
-of them. `tally -verified-txids` then becomes `-proofs <file>`: a real chain check,
-performed by whoever holds the transaction key, verifiable by someone holding no
-key at all.
+**Built (2026-10-27).** The proof now rides the record as an optional `tx_proof`
+block on the settlement line, and `tally -proofs -rpc URL` verifies it in a wallet
+that holds the payment. The binding is the one part this section sketched wrong:
+an earlier draft bound `message` to the *receipt digest*, which cannot work —
+attaching the proof changes that digest, so the proof would be evidence for a
+document that no longer exists. It binds instead to the record's identity **with
+every `tx_proof` removed**, a value both sides compute from the same rule
+([JOB_RECEIPT_V1.md](JOB_RECEIPT_V1.md) §7, "The `tx_proof` block"). A proof moved
+onto another receipt, or an amount edited after the proof was taken, then fails;
+and a wallet the tally cannot reach fails the run rather than counting nothing,
+because "could not ask" is not "no".
 
 The caveats travel with the row, and none of them are footnotes:
 
@@ -288,9 +294,14 @@ to the wallet first.
 3. ✅ **XMR branch in `bill watch`** behind `-xmr-unverified`: subaddress map,
    confirmation floor, hold-unattributed, mock-RPC test — and, added by step 2,
    a **Digest** transport, because Basic can never authenticate to a real wallet.
-4. **Proof in the receipt** — an optional tx-proof block on `sign receipt`, and
-   `tally -proofs` verifying instead of trusting a txid list. This is the first
-   artifact that turns "claims to have paid" into "this payment exists" for XMR.
+4. ✅ **Proof in the receipt** — the optional `tx_proof` block on `sign receipt`
+   (`-txproof txid=…,address=…,signature=…`, whose `message` the command binds to
+   that record's own identity rather than trusting the caller) and
+   `tally -proofs -rpc URL`, which verifies each line in a wallet that holds the
+   payment instead of trusting a hand-built txid list (JOB_RECEIPT_V1 §7). This
+   is the artifact that turns "claims to have paid" into "this payment exists"
+   for XMR — with §4's caveats intact: it is not evidence that the work happened,
+   nor that the funds are still spendable.
 5. ✅ **The live round trip** — payment → `get_transfers` → provisioning → receipt,
    recorded in LIVE_NODES §1. **Done 2026-10-27/28** against the live wallet: one
    real payment (0.18197833 XMR, height 3,762,745, 30,845 confirmations) was
@@ -333,7 +344,9 @@ to the wallet first.
   proof half is settled for this payment: the wallet's `get_tx_proof` verified
   (`good: true`, `received` equal to the receipt's `amount_atomic`) against the
   sha256 of the receipt bytes, and refused a wrong message, a tampered receipt
-  digest, a wrong txid, a flipped signature, and a malformed address.
+  digest, a wrong txid, a flipped signature, and a malformed address. That proof
+  now has a home in the record itself (§8 step 4, JOB_RECEIPT_V1 §7), so the
+  artifact no longer has to sit beside the receipt to be evidence.
 - The Digest-only auth in §5 is one build's behaviour. It is what epee does by
   default and it was captured directly, but a wallet started without `--rpc-login`
   needs no transport at all, and a future build could accept Basic as well. The

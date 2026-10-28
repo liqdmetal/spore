@@ -150,8 +150,22 @@ func (r *SpendRecord) Validate() error {
 	if len(r.Settlement) == 0 {
 		return errors.New("jobreceipt: at least one settlement line is required")
 	}
+	// A spend receipt may carry chain evidence as well: the client's own row is
+	// still worth proving, and the binding is the same one (§7, ProofMessage).
+	var binding string
+	for _, s := range r.Settlement {
+		if s.TxProof == nil {
+			continue
+		}
+		b, err := ProofMessage(r)
+		if err != nil {
+			return err
+		}
+		binding = b
+		break
+	}
 	for i, s := range r.Settlement {
-		if err := checkSettlementLine(fmt.Sprintf("settlement[%d]", i), s, false); err != nil {
+		if err := checkSettlementLine(fmt.Sprintf("settlement[%d]", i), s, false, binding); err != nil {
 			return err
 		}
 	}

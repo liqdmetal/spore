@@ -48,6 +48,14 @@ const MaxSignal = 8
 // (off-chain body keyed by this signal) — see package doc.
 var ErrPayloadTooBig = errors.New("xmr: payload does not fit 8-byte payment id; ride off-chain rendezvous")
 
+// ErrProofRejected marks a check_tx_proof call the WALLET answered with a
+// rejection: an address that does not decode, a signature that is not a
+// signature, a proof for a different transaction. That is a verdict about the
+// proof. A transport failure is not, and callers must not collapse the two —
+// "could not ask" is not "no", and a receipt checked against an unreachable
+// wallet has been checked by nobody.
+var ErrProofRejected = errors.New("xmr: the wallet rejected this transaction proof")
+
 // Backend implements chain.Chain over the Monero wallet RPC.
 type Backend struct {
 	rpc    string
@@ -76,6 +84,16 @@ type rpcReq struct {
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params"`
 }
+
+// rpcError is the wallet's own error answer, as opposed to a transport failure.
+// The distinction is what lets a caller treat "the wallet says no" as a verdict
+// while treating an unreachable wallet as a failure to check anything.
+type rpcError struct {
+	method string
+	msg    string
+}
+
+func (e *rpcError) Error() string { return "xmr rpc " + e.method + ": " + e.msg }
 
 func (b *Backend) call(ctx context.Context, method string, params, out interface{}) error {
 	body, _ := json.Marshal(rpcReq{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
@@ -107,7 +125,7 @@ func (b *Backend) call(ctx context.Context, method string, params, out interface
 		return err
 	}
 	if r.Error != nil {
-		return fmt.Errorf("xmr rpc %s: %s", method, r.Error.Message)
+		return &rpcError{method: method, msg: r.Error.Message}
 	}
 	if out != nil && len(r.Result) > 0 && string(r.Result) != "null" {
 		return json.Unmarshal(r.Result, out)
@@ -243,4 +261,41 @@ func (b *Backend) ListIncoming(ctx context.Context, minHeight uint64) ([]chain.I
 func validKind(b byte) bool {
 	// kinds mirror whisper: 0x01 text, 0x02 pointer.
 	return b == 0x01 || b == 0x02
+}
+
+// TxProofCheck is what check_tx_proof answers (docs/MONERO_SETTLEMENT.md §4):
+// whether the proof verifies, what it says was received at that address, and how
+// deeply confirmed the payment is.
+type TxProofCheck struct {
+	Good          bool   `json:"good"`
+	Received      uint64 `json:"received"`
+	InPool        bool   `json:"in_pool"`
+	Confirmations uint64 `json:"confirmations"`
+}
+
+// CheckTxProof asks a wallet to verify a get_tx_proof signature: that this txid
+// paid this address, and that the message was the one signed. The wallet must
+// hold the payment — that is the whole shape of the thing: no explorer, no chain
+// client of spore's, just the wallet that received the money.
+//
+// A wallet that answers with an error returns ErrProofRejected, so a caller can
+// call that a failed proof; anything else (an unreachable endpoint, a proxy, a
+// timeout) comes back as-is and must be treated as a failure to check.
+func CheckTxProof(ctx context.Context, rpcURL, login, txid, address, message, signature string) (*TxProofCheck, error) {
+	b := NewBackend(rpcURL, login)
+	var out TxProofCheck
+	err := b.call(ctx, "check_tx_proof", map[string]any{
+		"txid":      txid,
+		"address":   address,
+		"message":   message,
+		"signature": signature,
+	}, &out)
+	if err != nil {
+		var re *rpcError
+		if errors.As(err, &re) {
+			return nil, fmt.Errorf("%w: %s", ErrProofRejected, re.msg)
+		}
+		return nil, err
+	}
+	return &out, nil
 }

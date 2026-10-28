@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/liqdmetal/spore/internal/attest"
 	"github.com/liqdmetal/spore/internal/jobreceipt"
+	"github.com/liqdmetal/spore/internal/xmr"
 )
 
 // sign receipt — emit, sign and verify the receipt specified in
@@ -66,7 +68,10 @@ func receiptUsage() {
         [-settlement ...] [-deliverable label=before,digest=sha256:HEX,bytes=N]
         [-client-accepted [-client-rating 1..5] [-client-note TEXT]]
         [-work-order ID] [-thread HEX] [-supersedes sha256:HEX]
-        (emit the canonical record; the file's SHA-256 is its receipt id)
+        [-txproof txid=HEX,address=ADDR,signature=SIG[,scheme=monero-tx-proof-v1]]
+        (emit the canonical record; the file's SHA-256 is its receipt id. A
+         -txproof attaches the chain's OWN evidence to the settlement line that
+         cites that txid, and create — not you — binds it to this record)
 
   spore sign receipt sign -role client|provider -identity F -file F [-out SIG]
         (sign with the role's FIXED statement; refuses an identity that is not
@@ -84,10 +89,13 @@ func receiptUsage() {
          settlement time then txid; every input must carry a valid signature
          unless -allow-unsigned is given)
 
-  spore sign receipt tally -dir D [-provider-pub HEX] [-verified-txids FILE] [-json]
+  spore sign receipt tally -dir D [-provider-pub HEX] [-json]
+        [-verified-txids FILE | -proofs -rpc URL [-rpc-login u:p]]
         (§8 view: dual-signed receipts only, one count per client/provider PAIR,
          mean over rated pairs with the rated-client count, oldest and newest
-         shown, no weighting of any kind)
+         shown, no weighting of any kind. -proofs verifies each line's tx proof
+         in the wallet that holds the payment, so the evidence is CHECKED rather
+         than a txid list you built by hand)
 
   spore sign receipt verify -file F -sigs A.sig,B.sig [-required both|client|provider]
         (verify the signatures AND that each one carries its role's statement;
@@ -109,6 +117,8 @@ func receiptCreate(args []string) {
 	finished := fs.String("finished-at", "", "RFC 3339 UTC (required)")
 	var settlements receiptList
 	fs.Var(&settlements, "settlement", "rail=…,network=…,asset=…,amount=…,txid=…,settled=… (repeatable, at least one)")
+	var txProofs receiptList
+	fs.Var(&txProofs, "txproof", "txid=…,address=…,signature=…[,scheme=monero-tx-proof-v1] (repeatable; the chain's own evidence, bound to THIS record)")
 	var deliverables receiptList
 	fs.Var(&deliverables, "deliverable", "label=…,digest=sha256:…,bytes=N (repeatable)")
 	accepted := fs.Bool("client-accepted", false, "record that the client accepted the work")
@@ -204,6 +214,58 @@ func receiptCreate(args []string) {
 		rec.Links = &jobreceipt.Links{WorkOrderID: *workOrder, ThreadSession: *thread}
 	}
 
+	// Proofs are attached last, and the message is computed HERE rather than
+	// taken from the caller. A proof is only evidence if it is about this
+	// record, and a caller who could name the message could bind a real chain
+	// proof to a receipt it does not describe (jobreceipt.ProofMessage).
+	if len(txProofs) > 0 {
+		binding, err := jobreceipt.ProofMessage(rec)
+		check(err)
+		for i, spec := range txProofs {
+			kv, err := receiptKV(spec)
+			if err != nil {
+				check(fmt.Errorf("sign receipt create: -txproof #%d: %w", i+1, err))
+			}
+			for k := range kv {
+				switch k {
+				case "txid", "address", "signature", "scheme":
+				default:
+					check(fmt.Errorf("sign receipt create: -txproof #%d has unknown key %q (want txid, address, signature, scheme)", i+1, k))
+				}
+			}
+			for _, k := range []string{"txid", "address", "signature"} {
+				if kv[k] == "" {
+					check(fmt.Errorf("sign receipt create: -txproof #%d is missing %s=", i+1, k))
+				}
+			}
+			scheme := kv["scheme"]
+			if scheme == "" {
+				scheme = jobreceipt.SchemeMoneroTxProofV1
+			}
+			at := -1
+			for j := range rec.Settlement {
+				if rec.Settlement[j].TxID == kv["txid"] {
+					if at >= 0 {
+						check(fmt.Errorf("sign receipt create: -txproof #%d cites txid %s, which two settlement lines claim", i+1, kv["txid"]))
+					}
+					at = j
+				}
+			}
+			if at < 0 {
+				check(fmt.Errorf("sign receipt create: -txproof #%d cites txid %s, which no -settlement line carries — a proof answers for a payment this record already claims", i+1, kv["txid"]))
+			}
+			if rec.Settlement[at].TxProof != nil {
+				check(fmt.Errorf("sign receipt create: -txproof #%d is a second proof for the same settlement line", i+1))
+			}
+			rec.Settlement[at].TxProof = &jobreceipt.TxProof{
+				Scheme:    scheme,
+				Address:   kv["address"],
+				Message:   binding,
+				Signature: kv["signature"],
+			}
+		}
+	}
+
 	body, err := rec.Encode()
 	check(err)
 	if err := os.WriteFile(*out, body, 0o600); err != nil {
@@ -220,6 +282,26 @@ func receiptCreate(args []string) {
 		fmt.Printf("client      (none — coverage: %s, not a reputation entry)\n", rec.Coverage)
 	}
 	fmt.Printf("settlement  %d line(s)\n", len(rec.Settlement))
+	proofs := 0
+	for _, s := range rec.Settlement {
+		if s.TxProof != nil {
+			proofs++
+		}
+	}
+	if proofs > 0 {
+		fmt.Printf("tx proofs   %d settlement line(s) carry the chain's own evidence, bound to this record\n", proofs)
+	} else if receiptHasXMRLine(rec) {
+		// The binding must be known BEFORE the final record exists, because
+		// attaching a proof changes the file. So it is printed here: this is the
+		// exact message the wallet has to sign.
+		if binding, err := jobreceipt.ProofMessage(rec); err == nil {
+			fmt.Printf("tx proof    none attached: the chain's evidence is optional and §7 keeps its\n")
+			fmt.Printf("            caveat without it. To embed it, ask the receiving wallet for\n")
+			fmt.Printf("            get_tx_proof with this message, then re-run create with\n")
+			fmt.Printf("            -txproof txid=…,address=…,signature=…\n")
+			fmt.Printf("            message:  %s\n", binding)
+		}
+	}
 	fmt.Println()
 	fmt.Printf("next: spore sign receipt sign -role provider -identity provider.key -file %s\n", *out)
 	if rec.Parties.ClientPub != "" {
@@ -534,11 +616,20 @@ func receiptTally(args []string) {
 	dir := fs.String("dir", "", "directory holding job receipts (required)")
 	providerFilter := fs.String("provider-pub", "", "only this provider (exit 1 when it has no admissible receipt)")
 	verifiedTxids := fs.String("verified-txids", "", "file of txids YOU confirmed on-chain; only receipts citing one count")
+	proofs := fs.Bool("proofs", false, "require a chain tx proof on every settlement line and VERIFY it in a wallet (needs -rpc), instead of trusting a txid list")
+	rpcURL := fs.String("rpc", "", "with -proofs: the wallet RPC holding the payments, e.g. http://127.0.0.1:18083/json_rpc")
+	rpcLogin := fs.String("rpc-login", "", "with -proofs: wallet RPC credential user:pass (Digest on Monero)")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	_ = fs.Parse(args)
 
 	if *dir == "" {
 		check(errors.New("sign receipt tally: -dir is required"))
+	}
+	if *proofs && *verifiedTxids != "" {
+		check(errors.New("sign receipt tally: -proofs and -verified-txids are two answers to the same question; pass one"))
+	}
+	if *proofs && *rpcURL == "" {
+		check(errors.New("sign receipt tally: -proofs needs -rpc: a tx proof is verified by a wallet that holds the payment (docs/MONERO_SETTLEMENT.md §4), and spore queries no chain of its own"))
 	}
 
 	verified := map[string]bool{}
@@ -562,8 +653,10 @@ func receiptTally(args []string) {
 	check(err)
 
 	var admitted []jobreceipt.TallyEntry
-	skipOrder := []string{"spend receipt", "not a receipt", "provider-only", "missing a signature", "no txid"}
+	skipOrder := []string{"spend receipt", "not a receipt", "provider-only", "missing a signature", "no txid",
+		"no tx proof", "proof rejected by the wallet", "proof did not verify", "proof amount mismatch"}
 	skips := map[string]int{}
+	proofLines := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -608,19 +701,34 @@ func receiptTally(args []string) {
 			}
 		}
 
-		paid := false
-		for _, s := range rec.Settlement {
-			if s.TxID == "" {
+		if *proofs {
+			n, bucket, err := verifyTxProofs(rec, *rpcURL, *rpcLogin)
+			if err != nil {
+				// Could not ask is not an answer: a wallet nobody can reach
+				// leaves every receipt unchecked, and counting them anyway — or
+				// reporting zero — would be the same lie in two directions.
+				check(fmt.Errorf("%s: %w", path, err))
+			}
+			if bucket != "" {
+				skips[bucket]++
 				continue
 			}
-			if !haveList || verified[strings.ToLower(s.TxID)] {
-				paid = true
-				break
+			proofLines += n
+		} else {
+			paid := false
+			for _, s := range rec.Settlement {
+				if s.TxID == "" {
+					continue
+				}
+				if !haveList || verified[strings.ToLower(s.TxID)] {
+					paid = true
+					break
+				}
 			}
-		}
-		if !paid {
-			skips["no txid"]++
-			continue
+			if !paid {
+				skips["no txid"]++
+				continue
+			}
 		}
 
 		admitted = append(admitted, jobreceipt.TallyEntry{Record: rec, ReceiptID: jobreceipt.ID(body)})
@@ -654,10 +762,12 @@ func receiptTally(args []string) {
 			OldestReceipt string  `json:"oldest_receipt"`
 			NewestReceipt string  `json:"newest_receipt"`
 		}
+		payment := paymentCheckLabel(*proofs, haveList, proofLines)
 		out := struct {
 			Tallies []jsonTally    `json:"tallies"`
 			Skipped map[string]int `json:"skipped"`
-		}{Skipped: skips}
+			Payment string         `json:"payment"`
+		}{Skipped: skips, Payment: payment}
 		for _, t := range tallies {
 			out.Tallies = append(out.Tallies, jsonTally{
 				ProviderPub: t.ProviderPub, Records: t.Records, Pairs: t.Pairs,
@@ -691,10 +801,12 @@ func receiptTally(args []string) {
 			fmt.Printf("rating      mean %.2f over %d rated client(s) of %d pair(s)\n", t.Mean, t.Rated, t.Pairs)
 		}
 		fmt.Printf("window      %s .. %s\n", t.Oldest, t.Newest)
-		if haveList {
+		if *proofs {
+			fmt.Printf("payment     every settlement line's tx proof verified in the wallet (%d line(s): good, and received == amount_atomic)\n", proofLines)
+		} else if haveList {
 			fmt.Printf("payment     every pair cites a txid you listed as confirmed\n")
 		} else {
-			fmt.Printf("payment     cites at least one txid; NOT chain-checked (pass -verified-txids to require that)\n")
+			fmt.Printf("payment     cites at least one txid; NOT chain-checked (pass -verified-txids or -proofs to require evidence)\n")
 		}
 	}
 	if len(skips) > 0 {
@@ -702,6 +814,76 @@ func receiptTally(args []string) {
 	}
 	fmt.Println("\none receipt per client counts; there is no weighting, decay or promoted tier.")
 	fmt.Println("each counted pair cost a real payment and a distinct key — a price, not a proof.")
+}
+
+// verifyTxProofs checks one receipt's proof blocks in a wallet, line by line,
+// and reports how many verified. A non-empty bucket names the reason the
+// receipt does not count; a non-nil error means the check could not be performed
+// at all, which is not the same answer as a failed proof and must not be
+// reported as one.
+//
+// The rules are §7's, made concrete. A proof must verify (good), and what the
+// chain says was received must equal the amount_atomic the record claims: a
+// valid proof for a different sum is evidence of a DIFFERENT payment, which is
+// exactly the substitution this check exists to catch. Note the check is one
+// wallet's answer, so a receipt whose payment that wallet never saw cannot be
+// counted here — the wallet must hold the payment (docs/MONERO_SETTLEMENT.md §4).
+func verifyTxProofs(rec *jobreceipt.Record, rpcURL, login string) (int, string, error) {
+	checked := 0
+	for _, s := range rec.Settlement {
+		p := s.TxProof
+		if p == nil {
+			return 0, "no tx proof", nil
+		}
+		amount, err := strconv.ParseUint(s.AmountAtomic, 10, 64)
+		if err != nil {
+			return 0, "proof amount mismatch", nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		chk, err := xmr.CheckTxProof(ctx, rpcURL, login, s.TxID, p.Address, p.Message, p.Signature)
+		cancel()
+		if err != nil {
+			if errors.Is(err, xmr.ErrProofRejected) {
+				return 0, "proof rejected by the wallet", nil
+			}
+			return 0, "", err
+		}
+		if !chk.Good {
+			return 0, "proof did not verify", nil
+		}
+		if chk.Received != amount {
+			return 0, "proof amount mismatch", nil
+		}
+		checked++
+	}
+	return checked, "", nil
+}
+
+// paymentCheckLabel names, for machine readers, what the payment column meant.
+func paymentCheckLabel(proofs, haveList bool, proofLines int) string {
+	switch {
+	case proofs:
+		return fmt.Sprintf("chain-proofs-verified-in-wallet:%d", proofLines)
+	case haveList:
+		return "txids-listed-by-viewer"
+	}
+	return "unchecked-cites-txid"
+}
+
+// receiptHasXMRLine reports whether a record settles on the one rail that can
+// produce a tx proof today, so the create hint is printed where it can be acted
+// on rather than on every DERO receipt.
+func receiptHasXMRLine(rec *jobreceipt.Record) bool {
+	rail, ok := jobreceipt.SchemeRail(jobreceipt.SchemeMoneroTxProofV1)
+	if !ok {
+		return false
+	}
+	for _, s := range rec.Settlement {
+		if s.Rail == rail {
+			return true
+		}
+	}
+	return false
 }
 
 func describeSkips(order []string, skips map[string]int) string {

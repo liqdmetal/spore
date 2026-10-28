@@ -64,6 +64,13 @@ byte-identical files. That makes canonical form part of the protocol:
 The record's identity is not a field: `receipt_id = sha256:` over the canonical
 bytes. A verifier computes it; a signer must not be trusted to report it.
 
+A settlement line may carry an optional `tx_proof` (§7). It is **additive in
+v1**: a record without one is byte-for-byte the record it always was, and every
+existing vector is unchanged. A reader built before the block existed rejects a
+record carrying one, because unknown fields are refused in a v1 reader — that is
+the cost of strict parsing, paid deliberately. The alternative (a version bump)
+was declined: nothing already emitted changes meaning.
+
 ## 3. Kind A — attested job receipt
 
 ```json
@@ -341,6 +348,65 @@ on-chain.
 | Who the parties legally are | no — that is the out-of-band pin | no |
 | A rating is fair | no | no |
 
+### The `tx_proof` block, and the binding that makes it evidence
+
+§7 says the money moved *only as far as the cited txid verifies on-chain*. A
+viewer can establish that by hand, and §8's `-verified-txids` is exactly that
+list. A record can also carry the chain's own answer:
+
+```json
+"settlement": [{
+  "rail": "xmr",
+  "network": "monero-mainnet",
+  "asset": "xmr",
+  "amount_atomic": "181978330000",
+  "txid": "c712…",
+  "settled_at": "2026-10-27T15:29:00Z",
+  "tx_proof": {
+    "scheme": "monero-tx-proof-v1",
+    "address": "4Ase…",
+    "message": "spore.job-receipt/v1 tx-proof 9d0b…",
+    "signature": "InProofV2…"
+  }
+}]
+```
+
+`scheme` names the chain and the check — v1 defines one, `monero-tx-proof-v1`: a
+Monero `get_tx_proof` signature, verified with `check_tx_proof` in a wallet that
+holds the payment ([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §4). `address` is
+what the chain proved a payment *to*; `signature` is the artifact. `message` is
+the binding, and it is the field that turns the rest from decoration into
+evidence.
+
+The binding **cannot be the receipt id**, because attaching a proof changes the
+receipt id: the proof would be about a document that no longer exists. It is the
+record's identity with every `tx_proof` block removed:
+
+```
+message = "spore.job-receipt/v1 tx-proof " + sha256(canonical(record minus tx_proof))
+```
+
+Both sides compute that from one rule, and canonical sorting makes the bytes
+identical, which buys three properties: a proof moved onto another record does
+not verify, an amount edited after the proof was taken does not verify, and a
+verifier needs no state beyond the record itself. `create` computes the message
+and refuses to take it from the caller — `-txproof` attaches a signature to the
+settlement line that already cites that txid.
+
+One consequence is worth stating, because it looks like a bug when you meet it.
+For a record carrying **no** proof, the digest inside the message *is* the receipt
+id, and `create` prints the same hex twice. Attach the proof and the two diverge:
+the receipt id moves, the binding does not. The proof is therefore always about
+the record as it stood before the evidence was added — the only version both
+parties can compute without coordinating, and the reason the message cannot be
+the receipt id.
+
+Producing one is a two-step, because the message must exist before the final file
+does: run `create` without `-txproof` (it prints the message to ask the wallet
+for), have the wallet that received the payment sign it, then re-run `create`
+with the same flags plus `-txproof`. Nothing about a receipt without a proof
+changes, and nothing in the protocol requires one.
+
 Two honesty notes that belong in any UI built on this. First, dual-signed means
 the *pair* agreed; a confident liar with two keys and a real payment still
 produces a valid receipt, so receipts raise the cost of faking a history rather
@@ -368,7 +434,8 @@ published with it:
    proof.
 
 ```
-spore sign receipt tally -dir receipts/ [-provider-pub HEX] [-verified-txids checked.txt] [-json]
+spore sign receipt tally -dir receipts/ [-provider-pub HEX] [-json]
+                    [-verified-txids checked.txt | -proofs -rpc URL [-rpc-login u:p]]
 ```
 
 The command applies those rules and nothing else: only dual-signed attested
@@ -385,7 +452,14 @@ no chain client and will not pretend to, so by default a receipt counts when it
 *cites* a txid and the line says `NOT chain-checked`. Point `-verified-txids` at
 the list your own explorer check produced and only receipts citing one of those
 hash values count; that is the difference between "claims to have paid" and
-"this payment exists", and only the second is evidence. **Sybil**: distinct
+"this payment exists", and only the second is evidence. `-proofs` is the same
+move with the checking done for you: every settlement line must carry a
+`tx_proof`, and each one is verified in a wallet that holds the payment —
+`check_tx_proof` must answer `good`, and its `received` must equal the line's
+`amount_atomic`. It needs `-rpc`, it is mutually exclusive with `-verified-txids`
+(they are two answers to one question), and a wallet nobody can reach **fails
+the tally** rather than counting nothing: could not ask is not no. What a proof
+does not establish is in §7's table and MONERO_SETTLEMENT §4. **Sybil**: distinct
 clients are distinct *keys*, and keys are free — the movement is a price, not a
 proof, exactly as §8.6 says.
 
@@ -435,9 +509,10 @@ no period; they are never filled in from the settlement dates.
 
 ## 11. Acceptance tests
 
-Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
-4, 6, 7, 8, 9**. Still unbuilt, because the feature they test does not exist yet:
-**5** (front-end policy) and **10** (a `supersedes`-walking aggregator).
+Pinned by `internal/jobreceipt`, `cmd/spore/receipt_cmd_test.go` and
+`cmd/spore/receipt_txproof_test.go`: **1, 2, 3, 4, 6, 7, 8, 9, 11**. Still
+unbuilt, because the feature they test does not exist yet: **5** (front-end
+policy) and **10** (a `supersedes`-walking aggregator).
 
 1. **Round trip, no state.** Two signatures verify with `spore sign receipt
    verify` (and with `sign sheet`) on a machine holding only the file, the
@@ -465,6 +540,15 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
 10. **Supersede.** A corrected record counts once, at its head, and the earlier
     record still verifies. *(`supersedes` is emitted; no chain-walking
     aggregator exists yet)*
+11. **Tx-proof binding.** A proof attached by `create` is bound to *its own*
+    record: it fails when the amount is edited afterwards, when the block is
+    pasted onto another record, and when `message` is paraphrased, and a proof
+    whose scheme names another rail is refused outright. `tally -proofs` counts a
+    pair only when the wallet answers `good` with `received` equal to
+    `amount_atomic`, and refuses a proof the wallet rejects, a proof for another
+    amount, a receipt with no proof, a `-txproof` citing a txid no settlement
+    line claims, and an unreachable wallet — which fails the run instead of
+    producing a tally.
 
 ## 12. Open items
 
@@ -483,8 +567,13 @@ Pinned by `internal/jobreceipt` and `cmd/spore/receipt_cmd_test.go`: **1, 2, 3,
   corrected record and the one it corrects overstates that pair's activity
   (its rating still comes from the newest record). Deduplicating a chain needs a
   `supersedes` index, which nothing builds yet.
-- **No chain client.** `tally -verified-txids` trusts a list you produced; spore
-  does not query a chain itself.
+- **No explorer, and one proof scheme.** `tally -verified-txids` still trusts a
+  list you produced. `tally -proofs` removes that trust for Monero by asking a
+  wallet that holds the payment (`check_tx_proof`) — not a chain client, and v1
+  defines no proof scheme for any other rail, so a receipt settling elsewhere
+  cannot be counted by `-proofs` at all. A proof is also narrower than it looks:
+  it does not establish that the work happened, that the funds are still
+  spendable, or who the parties are (MONERO_SETTLEMENT §4).
 - **One vector exists** ([job-receipt-v1.vector.json](job-receipt-v1.vector.json),
   exercised by `cmd/spore/jobreceipt_test.go` and reproduced byte for byte by
   `create`). A cross-language set — the same record printed by a second

@@ -46,7 +46,27 @@ const (
 	// Role names for command surfaces and error messages.
 	RoleClient   = "client"
 	RoleProvider = "provider"
+
+	// SchemeMoneroTxProofV1 is the only tx-proof scheme v1 defines: a Monero
+	// get_tx_proof signature, verifiable with check_tx_proof in any wallet that
+	// holds the payment (docs/MONERO_SETTLEMENT.md §4).
+	SchemeMoneroTxProofV1 = "monero-tx-proof-v1"
+
+	// ProofPrefix begins the message a tx proof must be about; the rest is the
+	// record's identity with its proofs stripped (ProofMessage).
+	ProofPrefix = "spore.job-receipt/v1 tx-proof "
 )
+
+// schemeRail maps a proof scheme to the rail it can be evidence on. A proof
+// names the chain that produced it, so a line citing a different rail cannot
+// carry it: a Monero proof is not evidence about a DERO payment.
+var schemeRail = map[string]string{SchemeMoneroTxProofV1: "xmr"}
+
+// SchemeRail reports the rail a proof scheme belongs to.
+func SchemeRail(scheme string) (string, bool) {
+	rail, ok := schemeRail[scheme]
+	return rail, ok
+}
 
 // Record is one job receipt. Field order here is irrelevant to the artifact —
 // Canonical sorts keys — but the tags are the wire names and must not drift.
@@ -90,6 +110,82 @@ type Settlement struct {
 	// where an absent txid is exactly what makes the row self-declared.
 	TxID      string `json:"txid,omitempty"`
 	SettledAt string `json:"settled_at"`
+	// TxProof is OPTIONAL evidence that this payment exists on-chain — the
+	// chain's own answer rather than the payer's claim. Absent is the default
+	// and costs nothing: §7's table then applies unchanged ("only as far as the
+	// cited txid verifies on-chain") and it is the VIEWER who has to find that
+	// out. Present, it is bound to this record's identity (ProofMessage), so it
+	// cannot be moved to another record or kept after an amount was edited.
+	TxProof *TxProof `json:"tx_proof,omitempty"`
+}
+
+// TxProof is one chain proof, bound to the record it sits in. Deliberately not
+// a free-form blob: the scheme says which chain and how to check it, the address
+// is what the chain proved a payment TO, and message/signature are the artifact
+// itself. What it proves is narrow — this txid paid that address, for this
+// record's sake — and the caveats in MONERO_SETTLEMENT §4 (no proof that the
+// work happened, or that the funds are still spendable, or who the parties are)
+// travel with every row that carries one.
+type TxProof struct {
+	Scheme    string `json:"scheme"`
+	Address   string `json:"address"`
+	Message   string `json:"message"`
+	Signature string `json:"signature"`
+}
+
+// ProofMessage is the exact message a tx proof must be about: this record's
+// identity with every tx_proof block removed.
+//
+// The circularity is real, and this is the way out of it. A proof cannot be
+// bound to the digest of the document that CONTAINS it, because attaching the
+// block changes that digest — the binding would be false the moment it became
+// true. Binding to the proof-less record is stable instead: a signer computes it
+// before attaching anything, a verifier recomputes it by stripping the blocks and
+// re-printing canonically (Canonical sorts every key, so both sides get identical
+// bytes), and a proof carried to another record, or taken before an amount was
+// changed, simply does not match.
+//
+// v is a *Record or a *SpendRecord; both carry a "settlement" array.
+func ProofMessage(v any) (string, error) {
+	pre, err := canonicalWithoutProofs(v)
+	if err != nil {
+		return "", err
+	}
+	return ProofPrefix + ID(pre), nil
+}
+
+func canonicalWithoutProofs(v any) ([]byte, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var generic any
+	if err := dec.Decode(&generic); err != nil {
+		return nil, err
+	}
+	top, ok := generic.(map[string]any)
+	if !ok {
+		return nil, errors.New("jobreceipt: record is not a JSON object")
+	}
+	// Drop the proof from every line, so the message depends only on the facts
+	// the proof is evidence FOR.
+	if lines, ok := top["settlement"].([]any); ok {
+		for _, line := range lines {
+			if m, ok := line.(map[string]any); ok {
+				delete(m, "tx_proof")
+			}
+		}
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(generic); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 type Deliverable struct {
@@ -233,10 +329,24 @@ func (r *Record) Validate() error {
 	if len(r.Settlement) == 0 {
 		return errors.New("jobreceipt: at least one settlement line is required")
 	}
+	// Every tx_proof must be about THIS record. The binding is computed once,
+	// over the record with its proofs stripped, so a proof lifted from another
+	// receipt — or taken before an amount was edited — fails here rather than
+	// passing as evidence.
+	var binding string
+	for _, s := range r.Settlement {
+		if s.TxProof != nil {
+			binding, err = ProofMessage(r)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
 	for i, s := range r.Settlement {
 		// An attested receipt always cites the payment: without a txid there is
 		// nothing for the provider's signature to be about.
-		if err := checkSettlementLine(fmt.Sprintf("settlement[%d]", i), s, true); err != nil {
+		if err := checkSettlementLine(fmt.Sprintf("settlement[%d]", i), s, true, binding); err != nil {
 			return err
 		}
 	}
@@ -268,8 +378,9 @@ func (r *Record) Validate() error {
 
 // checkSettlementLine validates one money row. requireTx is true for the
 // attested kind (the payment is what the provider attests to) and false for a
-// spend receipt, where a self-declared bookkeeping row may cite none.
-func checkSettlementLine(where string, s Settlement, requireTx bool) error {
+// spend receipt, where a self-declared bookkeeping row may cite none. binding is
+// the record's ProofMessage, or "" when no line carries a proof.
+func checkSettlementLine(where string, s Settlement, requireTx bool, binding string) error {
 	for name, v := range map[string]string{"rail": s.Rail, "network": s.Network, "asset": s.Asset} {
 		if v == "" {
 			return fmt.Errorf("jobreceipt: %s.%s is required", where, name)
@@ -287,6 +398,27 @@ func checkSettlementLine(where string, s Settlement, requireTx bool) error {
 	}
 	if _, err := checkStamp(where+".settled_at", s.SettledAt); err != nil {
 		return err
+	}
+	if p := s.TxProof; p != nil {
+		if s.TxID == "" {
+			return fmt.Errorf("jobreceipt: %s carries a tx_proof but no txid — a proof of nothing is not evidence", where)
+		}
+		rail, known := SchemeRail(p.Scheme)
+		if !known {
+			return fmt.Errorf("jobreceipt: %s.tx_proof.scheme %q is not defined (v1 defines %q)", where, p.Scheme, SchemeMoneroTxProofV1)
+		}
+		if rail != s.Rail {
+			return fmt.Errorf("jobreceipt: %s.tx_proof.scheme %q is a %s proof, but the line settles on rail %q", where, p.Scheme, rail, s.Rail)
+		}
+		if p.Address == "" {
+			return fmt.Errorf("jobreceipt: %s.tx_proof.address is required (a proof answers for a payment TO an address)", where)
+		}
+		if p.Signature == "" {
+			return fmt.Errorf("jobreceipt: %s.tx_proof.signature is required", where)
+		}
+		if p.Message != binding {
+			return fmt.Errorf("jobreceipt: %s.tx_proof.message is not this record's binding — a proof must be about THIS record (§7); want %q", where, binding)
+		}
 	}
 	return nil
 }
