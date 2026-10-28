@@ -37,13 +37,21 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
      receipt — 2026-10-27/28 ([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §8
      step 5). The wallet held two real payments; `bill watch` billed the larger
      (0.18197833 XMR, height 3,762,745, 30,845 confirmations) into a provisioned
-     mailbox and a receipt, and refused the smaller (0.01609008 XMR) as
+     mailbox and a     receipt, and refused the smaller (0.01609008 XMR) as
      underpaid. Evidence on the box in `/root/spore-xmr-live/out/`:
      `cc4f19a2.receipt.json`, the `provision`ed user dir under `users/`, and
      `cc4f19a2.txproof.json`, whose `check_tx_proof` answers `good: true` for the
-     receipt's own sha256. What stays open: the payment landed on the wallet's
-     **primary address** (minor 0), its spendable balance was already swept to 0,
-     and the receipt carries no proof field yet (§8 step 4).
+     receipt's own sha256.
+  5. ✅ **The receipt carries its own evidence** — 2026-10-28, same wallet. A
+     fresh run of the provisioning path wrote a receipt with a `tx_proof` block
+     the poller had taken at provisioning time: the message was recomputed from
+     the receipt's own fields with an independent tool, the live wallet answered
+     `good: true` / `received: 181978330000`, and the same proof against the
+     receipt with its amount raised by one piconero answered `good: false`. What
+     stays open: the payment landed on the wallet's **primary address** (minor 0)
+     and its spendable balance was already swept to 0, so nothing new could be
+     sent; the proof's failure arms (a wallet that will not sign, a proof for
+     another amount) are still mock-only.
 
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet

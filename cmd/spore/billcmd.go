@@ -23,11 +23,14 @@
 // Monero is a second rail on the same orchestrator, in billxmr.go: `-price
 // 2.5xmr -xmr-subaddresses FILE` bills off monero-wallet-rpc. It needs a
 // subaddress→customer map because Monero carries no sender field, and it is
-// gated behind -xmr-unverified because the receipt carries no proof block yet
-// and no real payment has arrived on a per-order subaddress (MONERO_SETTLEMENT
-// §5, §8 steps 4-5) — the whole chain has run once against the live wallet in
-// the meantime (2026-10-27/28). Everything downstream — provisioning, the token
-// merge, the onboarding record, the hook — is shared and unchanged.
+// gated behind -xmr-unverified because no real payment has arrived on a per-order
+// subaddress yet (MONERO_SETTLEMENT §5, §8 step 5) — the whole chain has run once
+// against the live wallet in the meantime (2026-10-27/28). On that rail the
+// outbox receipt carries the receiving wallet's get_tx_proof over a claim bound
+// to the receipt itself, verified by that wallet before the record is written, so
+// the evidence travels in the record rather than beside it (§8 step 4).
+// Everything downstream — provisioning, the token merge, the onboarding record,
+// the hook — is shared and unchanged.
 //
 // Re-runs are safe: progress lives in <out>/bill-state.json.
 package main
@@ -88,9 +91,10 @@ watch flags:
   -dry-run            report what would happen, change nothing
 
 monero flags (only with a -price in xmr; EXPERIMENTAL, see
-MONERO_SETTLEMENT.md §5 — one live payment has now been carried through
-provisioning into a receipt against a v0.18.5.1 wallet, but that receipt still
-carries no proof block):
+MONERO_SETTLEMENT.md §5 — one live payment has been carried through provisioning
+into a receipt against a v0.18.5.1 wallet, and that receipt now carries the
+wallet's own tx proof, but no real payment has arrived on a per-order
+subaddress):
   -xmr-unverified     required to bill xmr at all; says every result is suspect
   -xmr-subaddresses F JSON map of subaddress minor index -> hosted user
                       (required: Monero carries no sender field)
@@ -128,6 +132,10 @@ type paymentPlan struct {
 	Height uint64
 	Amount uint64
 	User   string
+	// Address is the receiving address the wallet reported for this transfer.
+	// Empty on the DERO rail, which decodes no address; on Monero it is what a
+	// tx proof answers for, and the poller refuses to bill without it.
+	Address string
 }
 
 var billUserNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,15}$`)
@@ -201,7 +209,7 @@ func billWatch(args []string) {
 	interval := fs.Duration("interval", 30*time.Second, "poll interval")
 	once := fs.Bool("once", false, "single poll, then exit")
 	dryRun := fs.Bool("dry-run", false, "report only, change nothing")
-	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: the receipt carries no proof block yet and no real payment has arrived on a per-order subaddress — treat every result as experimental")
+	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: no real payment has arrived on a per-order subaddress — treat every result as experimental")
 	xmrSubaddresses := fs.String("xmr-subaddresses", "", "JSON map of Monero subaddress minor index -> hosted user (required for -price xmr)")
 	xmrConfirmations := fs.Uint64("xmr-confirmations", 10, "confirmations a Monero payment needs before a mailbox is provisioned (0 is refused)")
 	_ = fs.Parse(args)
@@ -240,7 +248,7 @@ func billWatch(args []string) {
 			check(err)
 		}
 		xmrFloor = *xmrConfirmations
-		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — one live round trip completed 2026-10-27/28 (payment, provisioning, receipt), but the receipt carries no proof block yet; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
+		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — one live round trip completed 2026-10-27/28 (payment, provisioning and a receipt carrying the wallet's own tx proof), but no real payment has arrived on a per-order subaddress; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)
@@ -302,7 +310,20 @@ func billWatch(args []string) {
 				deferred = append(deferred, p.Height)
 				continue
 			}
-			if err := billProvision(*users, *tokens, *batchDir, *out, p, *relayTokens, *hook); err != nil {
+			// The evidence is taken here, after the batch check and before the
+			// record exists, because the wallet has to sign the claim the receipt
+			// will make and only then can the record be written with it (§8 step 4).
+			var ev billEvidence
+			if asset == "xmr" {
+				ev = billXMRProvePayment(*rpc, *rpcLogin, asset, p)
+				if ev.Proof == nil {
+					// Paid money, provisioned mailbox, no evidence: the one combination
+					// that must shout. The receipt records the reason too, because the
+					// log is the first thing to scroll away.
+					log.Printf("txid=%s user=%s: NO CHAIN PROOF ATTACHED: %s — provisioning anyway, and %s.receipt.json records this", p.TXID, p.User, ev.Err, p.User)
+				}
+			}
+			if err := billProvision(*users, *tokens, *batchDir, *out, asset, p, ev, *relayTokens, *hook); err != nil {
 				log.Printf("txid=%s user=%s: provision failed: %v", p.TXID, p.User, err)
 				continue
 			}
@@ -388,15 +409,25 @@ func billPollRPC(rpcURL, login string, minHeight uint64) ([]billEntry, uint64, e
 	return entries, maxH, nil
 }
 
+// billMailbox is the public mailbox URL a paid account is provisioned at. It is
+// one function because the URL is part of the claim a receipt's tx proof binds,
+// and two spellings of it would make the proof and the record disagree.
+func billMailbox(user string) string {
+	return "https://mail.sporem3.io/u/" + user
+}
+
 // billProvision runs the shipped `spore provision` subprocess (same binary),
 // merges the user into the relay forward-token map, files the onboarding
-// record into the outbox, and runs the delivery hook.
-func billProvision(usersDir, tokensFile, batchDir, outDir string, p paymentPlan, relayTokens, hook string) error {
+// record into the outbox, and runs the delivery hook. asset and ev travel into
+// the outbox receipt: a record that cites a payment without saying which rail it
+// was on (atomic units of what?) or without the chain's own evidence is a claim
+// the operator cannot check later.
+func billProvision(usersDir, tokensFile, batchDir, outDir, asset string, p paymentPlan, ev billEvidence, relayTokens, hook string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve self: %w", err)
 	}
-	mailbox := "https://mail.sporem3.io/u/" + p.User
+	mailbox := billMailbox(p.User)
 	cmd := exec.Command(self, "provision",
 		"-users", usersDir, "-name", p.User,
 		"-tokens", tokensFile,
@@ -429,10 +460,7 @@ func billProvision(usersDir, tokensFile, batchDir, outDir string, p paymentPlan,
 	if err != nil {
 		return err
 	}
-	receipt := map[string]any{
-		"txid": p.TXID, "height": p.Height, "amount_atomic": p.Amount,
-		"user": p.User, "mailbox": mailbox, "provisioned_at": time.Now().UTC().Format(time.RFC3339),
-	}
+	receipt := billReceiptRecord(asset, p, mailbox, time.Now().UTC().Format(time.RFC3339), ev)
 	rb, _ := json.MarshalIndent(receipt, "", "  ")
 	_ = os.WriteFile(filepath.Join(outDir, p.User+".onboarding.json"), onboard, 0o600)
 	_ = os.WriteFile(filepath.Join(outDir, p.User+".receipt.json"), append(rb, '\n'), 0o600)
@@ -451,6 +479,28 @@ func billProvision(usersDir, tokensFile, batchDir, outDir string, p paymentPlan,
 		}
 	}
 	return nil
+}
+
+// billReceiptRecord is the outbox record for one billed payment: what was paid,
+// who it was for, and — on the Monero rail — the wallet's own proof of that
+// payment, or the reason there is none.
+//
+// It is its own function because it is the artifact. Key names follow
+// JOB_RECEIPT_V1's settlement line (txid, amount_atomic) and its tx_proof block,
+// so one reader can follow both documents, and asset travels with the amount
+// because atomic units mean nothing without the rail they are denominated in.
+func billReceiptRecord(asset string, p paymentPlan, mailbox, provisionedAt string, ev billEvidence) map[string]any {
+	rec := map[string]any{
+		"asset": asset, "txid": p.TXID, "height": p.Height, "amount_atomic": p.Amount,
+		"user": p.User, "mailbox": mailbox, "provisioned_at": provisionedAt,
+	}
+	if ev.Proof != nil {
+		rec["tx_proof"] = ev.Proof
+	}
+	if ev.Err != "" {
+		rec["tx_proof_error"] = ev.Err
+	}
+	return rec
 }
 
 // billReadToken returns the user's bearer token from the tokens map.

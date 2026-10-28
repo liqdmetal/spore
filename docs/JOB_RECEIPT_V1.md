@@ -407,6 +407,20 @@ for), have the wallet that received the payment sign it, then re-run `create`
 with the same flags plus `-txproof`. Nothing about a receipt without a proof
 changes, and nothing in the protocol requires one.
 
+The billing rail uses the same block under its own binding. `bill watch` writes
+`<user>.receipt.json`, which is not a job receipt — no settlement array, no
+receipt id — and it cannot sign a file it has not written yet, because that file
+carries `provisioned_at` and only exists after the mailbox does. Its proof is
+about a **claim** instead: `asset`, `txid`, `height`, `amount_atomic`, `user`,
+`mailbox`, canonically printed and digested under
+`spore.bill-receipt/v1 tx-proof `. Each of those fields is in the receipt, so a
+reader recomputes the binding from the file in front of them; the poller has the
+wallet check the proof back before writing anything, and a wallet that will not
+produce one leaves `tx_proof_error` where the proof would have been
+([MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §4, §8 step 4). Same block, same
+scheme, different document — and `tally` does not read bill receipts, because
+they are invoice records rather than reputation.
+
 Two honesty notes that belong in any UI built on this. First, dual-signed means
 the *pair* agreed; a confident liar with two keys and a real payment still
 produces a valid receipt, so receipts raise the cost of faking a history rather

@@ -5,11 +5,14 @@
 2026-10-27/28 `bill watch` decoded a live wallet's own payment, refused a second
 real payment on a real guard, provisioned a hosted mailbox from the first, wrote
 the receipt, and the wallet's own `get_tx_proof` verified against that receipt's
-bytes (§5, §8, §9 and [LIVE_NODES.md](LIVE_NODES.md) §1). What that single run did
-not settle, and what §5's gate now rests on: the receipt format has no proof block
-yet (§8 step 4), the payment arrived on the wallet's **primary address** rather
-than a per-order subaddress, and the confirmation floor was satisfied rather than
-withheld.
+bytes (§5, §8, §9 and [LIVE_NODES.md](LIVE_NODES.md) §1). Since 2026-10-28 that
+receipt has stopped merely citing the payment: `bill watch` takes the receiving
+wallet's proof at provisioning time, makes the wallet verify it, and writes it
+into `<user>.receipt.json` — and re-running the live path confirmed it, a
+receipt whose recomputed binding the wallet answers `good: true` for (§4, §8 step
+4). What the run still leaves open, and what §5's gate now rests on: the payment
+arrived on the wallet's **primary address** rather than a per-order subaddress,
+and the confirmation floor was satisfied rather than withheld.
 
 Read with [CARRIER_MATRIX.md](CARRIER_MATRIX.md) (XMR is not a pointer carrier),
 [JOB_RECEIPT_V1.md](JOB_RECEIPT_V1.md) (what a settlement line is),
@@ -176,6 +179,32 @@ onto another receipt, or an amount edited after the proof was taken, then fails;
 and a wallet the tally cannot reach fails the run rather than counting nothing,
 because "could not ask" is not "no".
 
+**Built for the billing rail too (2026-10-28).** The outbox receipt `bill watch`
+writes carries the same `tx_proof` block, but nobody hands it in and nobody has to
+keep a second file: the poller asks the receiving wallet for `get_tx_proof`, has
+that wallet `check_tx_proof` it back, and only then writes the record. Two
+departures from the job-receipt form, both forced:
+
+- **It binds a claim, not a file.** The receipt records `provisioned_at`, which
+  does not exist until the mailbox is provisioned, so there is no file to sign
+  before the evidence arrives. The message is `spore.bill-receipt/v1 tx-proof `
+  plus the sha256 of the canonical `{asset, txid, height, amount_atomic, user,
+  mailbox}`. Every one of those fields is in the receipt, so a reader recomputes
+  the binding from the record alone — checked with an independent recomputation,
+  not just our own code.
+- **A failure is written down.** A wallet that will not sign, or that proves a
+  different sum, does not stop the customer's mailbox (the money arrived) and does
+  not silently produce an unevidenced record: `tx_proof_error` takes the proof's
+  place and the poller shouts. A proof for a different amount is refused
+  deliberately — the wallet is answering honestly about a payment that is not the
+  one being billed.
+
+Re-running the live path on 2026-10-28 shows both halves: the receipt for the
+0.18197833 XMR payment carries `monero-tx-proof-v1` with a message recomputed from
+its own fields, the wallet answers `good: true` and `received: 181978330000`, and
+the same proof against a receipt whose amount was raised by one piconero is
+answered `good: false`.
+
 The caveats travel with the row, and none of them are footnotes:
 
 - A valid proof is **not** proof the work happened, and (per the official docs)
@@ -226,18 +255,20 @@ which is this section's whole subject. Nothing but a live wallet reveals it: a
 mock that accepts whatever it is handed, including the old `SetBasicAuth` code,
 stays green.
 
-The path stays gated behind `-xmr-unverified`, for a reason that is now about the
-receipt rather than the poller. On 2026-10-27/28 the whole chain ran once against
-the live wallet — a real payment decoded, a real second payment refused as
-underpaid, a mailbox provisioned, a receipt written, and the payment's own
-`get_tx_proof` verified against that receipt's bytes (§8 step 5, §9) — so auth,
-the decode, the guards, provisioning and the receipt are no longer the gap. What
-still is: the receipt carries no proof block (§8 step 4); the payment arrived on
-the wallet's primary address rather than a per-order subaddress, so
-`create_address`/`label_address` attribution has still never been driven by real
-money; and the confirmation floor and the `locked`/`double_spend_seen` guards have
-been satisfied or refused by fixtures, never withheld by a real wallet. The
-development target also remains an `httptest` mock in the shape of
+The path stays gated behind `-xmr-unverified` because of what a real wallet has
+never had to do. On 2026-10-27/28 the whole chain ran once against the live wallet
+— a real payment decoded, a real second payment refused as underpaid, a mailbox
+provisioned, a receipt written, and the payment's own `get_tx_proof` verified
+against that receipt's bytes (§8 step 5, §9) — and on 2026-10-28 that receipt
+gained the wallet's proof of the payment it bills, attached at provisioning time
+(§4). So auth, the decode, the guards, provisioning and the evidence are no longer
+the gap. What still is: the payment arrived on the wallet's primary address rather
+than a per-order subaddress, so `create_address`/`label_address` attribution has
+never been driven by real money; the confirmation floor and the
+`locked`/`double_spend_seen` guards have been satisfied or refused by fixtures,
+never withheld by a real wallet; and the failure arms of the proof step — a wallet
+that will not sign, a proof for another amount — have only been exercised by a
+mock. The development target also remains an `httptest` mock in the shape of
 `internal/xmr/xmr_test.go`, so the reconciliation logic is executable on every
 push; live verification confirms the shape, not the logic.
 
@@ -301,7 +332,11 @@ to the wallet first.
    payment instead of trusting a hand-built txid list (JOB_RECEIPT_V1 §7). This
    is the artifact that turns "claims to have paid" into "this payment exists"
    for XMR — with §4's caveats intact: it is not evidence that the work happened,
-   nor that the funds are still spendable.
+   nor that the funds are still spendable. **The billing rail was completed the
+   same way on 2026-10-28**: `bill watch` attaches the same block to its own
+   outbox receipt at provisioning time, so no one hands a proof in and no proof
+   sits beside the record — the poller signs a claim bound to the receipt, has
+   the wallet check it back, and writes it (or writes why there is none).
 5. ✅ **The live round trip** — payment → `get_transfers` → provisioning → receipt,
    recorded in LIVE_NODES §1. **Done 2026-10-27/28** against the live wallet: one
    real payment (0.18197833 XMR, height 3,762,745, 30,845 confirmations) was
@@ -346,7 +381,12 @@ to the wallet first.
   sha256 of the receipt bytes, and refused a wrong message, a tampered receipt
   digest, a wrong txid, a flipped signature, and a malformed address. That proof
   now has a home in the record itself (§8 step 4, JOB_RECEIPT_V1 §7), so the
-  artifact no longer has to sit beside the receipt to be evidence.
+  artifact no longer has to sit beside the receipt to be evidence — for job
+  receipts, and, since 2026-10-28, for the outbox receipts `bill watch` writes.
+  The binding for those was checked the same way against the live wallet: the
+  message recomputed from the receipt's own fields, `check_tx_proof` answered
+  `good: true` / `received: 181978330000`, and the identical proof against a
+  receipt whose amount was raised by one piconero answered `good: false`.
 - The Digest-only auth in §5 is one build's behaviour. It is what epee does by
   default and it was captured directly, but a wallet started without `--rpc-login`
   needs no transport at all, and a future build could accept Basic as well. The

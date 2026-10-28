@@ -299,3 +299,38 @@ func CheckTxProof(ctx context.Context, rpcURL, login, txid, address, message, si
 	}
 	return &out, nil
 }
+
+// GetTxProof asks the wallet that holds a payment to sign the chain's own
+// statement about it: that this txid paid this address, and that message is the
+// text signed. The pair (signature, message) is exactly what CheckTxProof
+// verifies later, so the message belongs to the caller — and a caller that binds
+// it to anything mutable has produced a proof of nothing in particular.
+//
+// A wallet that refuses (a txid it does not hold, an address that is not its
+// own) comes back as ErrProofRejected; a wallet that cannot be reached does not,
+// because the two answers mean different things to whoever is deciding whether a
+// payment is evidenced.
+func GetTxProof(ctx context.Context, rpcURL, login, txid, address, message string) (string, error) {
+	b := NewBackend(rpcURL, login)
+	var out struct {
+		Signature string `json:"signature"`
+	}
+	err := b.call(ctx, "get_tx_proof", map[string]any{
+		"txid":    txid,
+		"address": address,
+		"message": message,
+	}, &out)
+	if err != nil {
+		var re *rpcError
+		if errors.As(err, &re) {
+			return "", fmt.Errorf("%w: %s", ErrProofRejected, re.msg)
+		}
+		return "", err
+	}
+	// A proof with no signature is not a proof, and an empty string here would
+	// travel into a record that looks evidenced and verifies against nothing.
+	if out.Signature == "" {
+		return "", errors.New("xmr: the wallet answered get_tx_proof with no signature")
+	}
+	return out.Signature, nil
+}

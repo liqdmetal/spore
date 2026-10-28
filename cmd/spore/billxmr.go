@@ -19,16 +19,19 @@ package main
 //     type, unlock_time — and NOT destinations, which is set for outgoing
 //     entries only.
 //
-// The command is still gated behind -xmr-unverified, and the reason is now about
-// the receipt rather than the poller. On 2026-10-27/28 the whole chain ran once
-// against the live wallet: a real payment was decoded, a second real payment was
-// refused as underpaid, a hosted mailbox was provisioned through the shipped
-// `provision` subprocess, and the receipt was written — with the wallet's own
-// get_tx_proof verifying against that receipt's bytes. What the run did NOT
-// cover: the receipt format has no proof block yet (§8 step 4); the payment
-// arrived on the wallet's primary address rather than a per-order subaddress, so
+// The command is still gated behind -xmr-unverified, and what is left is no
+// longer the receipt. On 2026-10-27/28 the whole chain ran once against the live
+// wallet: a real payment was decoded, a second real payment was refused as
+// underpaid, a hosted mailbox was provisioned through the shipped `provision`
+// subprocess, and the receipt was written. The outbox receipt then cited the
+// txid; since 2026-10-28 it also carries the chain's own evidence — the
+// receiving wallet's get_tx_proof over a message bound to that receipt's claim,
+// verified by the same wallet before the record is written (billXMRProvePayment).
+// What the run did NOT cover, and what the gate rests on now: the payment arrived
+// on the wallet's primary address rather than a per-order subaddress, so
 // create_address/label_address attribution has never carried real money; and the
-// confirmation floor was satisfied rather than withheld.
+// confirmation floor and the locked/double_spend_seen guards have been satisfied
+// or refused by fixtures, never withheld by a real wallet.
 // See docs/MONERO_SETTLEMENT.md §3, §5, §8 and §9.
 
 import (
@@ -45,6 +48,9 @@ import (
 	"time"
 
 	"github.com/icholy/digest"
+
+	"github.com/liqdmetal/spore/internal/jobreceipt"
+	"github.com/liqdmetal/spore/internal/xmr"
 )
 
 // xmrTransferEntry is one entry of monero-wallet-rpc get_transfers result.in[].
@@ -98,7 +104,7 @@ func billAssetAllowed(asset string, xmrUnverified bool) error {
 		return nil
 	case "xmr":
 		if !xmrUnverified {
-			return errors.New("bill watch: -price asset \"xmr\" is experimental only (one live round trip completed on 2026-10-27/28 — payment, provisioning and receipt — but that receipt carries no proof block yet and no real payment has arrived on a per-order subaddress): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
+			return errors.New("bill watch: -price asset \"xmr\" is experimental only (one live round trip completed on 2026-10-27/28 — payment, provisioning and a receipt carrying the wallet's own tx proof — but no real payment has arrived on a per-order subaddress): pass -xmr-unverified to use it anyway and treat every result as experimental — docs/MONERO_SETTLEMENT.md §5")
 		}
 		return nil
 	default:
@@ -199,7 +205,7 @@ func planXMRPayments(price, floor uint64, labels map[uint32]string, done map[str
 			refuse(fmt.Sprintf("underpaid: %s xmr against a %s xmr price", formatAmount("xmr", e.Amount), formatAmount("xmr", price)), false)
 			continue
 		}
-		plans = append(plans, paymentPlan{TXID: e.TxID, Height: e.Height, Amount: e.Amount, User: user})
+		plans = append(plans, paymentPlan{TXID: e.TxID, Height: e.Height, Amount: e.Amount, User: user, Address: e.Address})
 	}
 	return plans, refusals
 }
@@ -299,4 +305,117 @@ func xmrRefusalSummary(refusals []billXMRRefusal) map[string]string {
 		byTx[r.TXID] = r.Reason
 	}
 	return byTx
+}
+
+// ── the outbox record's evidence ────────────────────────────────────────────
+//
+// A bill receipt that only cites a txid is a claim: the reader has to go and
+// check it. On this rail the wallet that received the money can do better,
+// because get_tx_proof is that wallet signing its own statement about the
+// payment. So the proof is taken at provisioning time and written INTO the
+// record, which is what MONERO_SETTLEMENT §4 calls the receipt evidence, applied
+// to the outbox receipt instead of a job receipt.
+
+// billProofPrefix begins the message a bill receipt's proof is about. What
+// follows is the digest of a bill CLAIM, not of the receipt file.
+//
+// The circularity is the one JOB_RECEIPT_V1 §7 had to design around, in a
+// sharper form: the receipt records provisioned_at, which does not exist until
+// the mailbox is provisioned, and the wallet has to sign before any of it can be
+// written. Binding to the file would be impossible. Binding to the claim is
+// stable, checkable by anyone holding the receipt, and still fails if the txid,
+// amount, customer or receiving address is edited afterwards.
+const billProofPrefix = "spore.bill-receipt/v1 tx-proof "
+
+// billClaim is everything a bill receipt asserts about the payment, and the only
+// thing its proof is about. Amounts stay decimal atomic units: no float ever
+// touches a piconero count (MONERO_SETTLEMENT §2).
+type billClaim struct {
+	Asset        string `json:"asset"`
+	TXID         string `json:"txid"`
+	Height       uint64 `json:"height"`
+	AmountAtomic uint64 `json:"amount_atomic"`
+	User         string `json:"user"`
+	Mailbox      string `json:"mailbox"`
+}
+
+// billProofMessage renders the exact message a bill receipt's proof must be
+// about: the claim in canonical form (sorted keys at every depth, no struct
+// order — jobreceipt.Canonical), digested. Two pollers billing the same payment
+// produce the same message; a receipt whose amount was edited no longer matches.
+func billProofMessage(c billClaim) (string, error) {
+	raw, err := jobreceipt.Canonical(c)
+	if err != nil {
+		return "", err
+	}
+	return billProofPrefix + jobreceipt.ID(raw), nil
+}
+
+// billEvidence is the chain's own answer about a payment, or the reason there is
+// none. Exactly one field is set: a record must never carry a proof AND a
+// complaint that it has none.
+type billEvidence struct {
+	// Proof is the wallet's signature over this claim, verified by that same
+	// wallet before it was accepted.
+	Proof *jobreceipt.TxProof
+	// Err is why no proof could be attached. It is written into the receipt so an
+	// unevidenced record says so, rather than looking like one that never tried.
+	Err string
+}
+
+// billXMRProvePayment makes the receiving wallet produce AND verify the proof
+// that will sit in this payment's outbox record.
+//
+// Both halves are load-bearing. Signing alone trusts the wallet to have bound
+// what it signed; checking back is the wallet answering whether that proof
+// verifies for this payment, and it costs one more RPC. A proof that fails here
+// is never written: a record carrying evidence nobody can verify is worse than a
+// record that says plainly why it has none.
+//
+// A failure here does not stop provisioning. The money arrived, and a customer
+// who paid should get their mailbox even if this wallet build cannot make
+// proofs — the receipt then carries tx_proof_error instead of tx_proof and the
+// poller says so at the top of its voice. What must never happen is a receipt
+// that silently looks evidential.
+func billXMRProvePayment(rpcURL, login, asset string, p paymentPlan) billEvidence {
+	if p.Address == "" {
+		return billEvidence{Err: "the wallet named no receiving address for this transfer, and a proof answers for a payment TO an address"}
+	}
+	claim := billClaim{
+		Asset: asset, TXID: p.TXID, Height: p.Height,
+		AmountAtomic: p.Amount, User: p.User, Mailbox: billMailbox(p.User),
+	}
+	msg, err := billProofMessage(claim)
+	if err != nil {
+		return billEvidence{Err: fmt.Sprintf("bind the claim: %v", err)}
+	}
+	// internal/xmr's client carries no timeout of its own, and this poller is a
+	// daemon: a wallet that accepts a connection and then says nothing would stop
+	// billing for every customer, not just this one.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sig, err := xmr.GetTxProof(ctx, rpcURL, login, p.TXID, p.Address, msg)
+	if err != nil {
+		return billEvidence{Err: err.Error()}
+	}
+	chk, err := xmr.CheckTxProof(ctx, rpcURL, login, p.TXID, p.Address, msg, sig)
+	if err != nil {
+		return billEvidence{Err: fmt.Sprintf("the wallet would not check back the proof it just made: %v", err)}
+	}
+	if !chk.Good {
+		return billEvidence{Err: "the wallet made a proof it then reported as not verifying"}
+	}
+	// The proof answers for whatever the chain actually paid to that address. If
+	// that is not the amount this poller is about to bill, the proof is evidence
+	// for a different payment, and writing it here would make the receipt lie in
+	// the one field the whole record exists to get right.
+	if chk.Received != p.Amount {
+		return billEvidence{Err: fmt.Sprintf("the proof covers %s %s at that address, not the %s %s this bill claims", formatAmount(asset, chk.Received), asset, formatAmount(asset, p.Amount), asset)}
+	}
+	return billEvidence{Proof: &jobreceipt.TxProof{
+		Scheme:    jobreceipt.SchemeMoneroTxProofV1,
+		Address:   p.Address,
+		Message:   msg,
+		Signature: sig,
+	}}
 }
