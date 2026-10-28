@@ -203,6 +203,12 @@ agreement would then look the same, and the unrecorded address would be found by
 the customer whose payment got held rather than by the operator who could still
 have recorded it.
 
+Live, 2026-10-28: against the Hetzner wallet the check found three addresses the
+wallet held and no ledger recorded (minors 1–3, orders recovered from their
+labels), the same wallet went to `in step` once they were adopted, an unbacked
+ledger entry was reported in the other direction, and an unreachable wallet said
+it could not check. [LIVE_NODES.md](LIVE_NODES.md) §1 has the transcript paths.
+
 Two rules that are not style:
 
 - **Never reuse a subaddress across orders.** Reuse is exactly what makes the

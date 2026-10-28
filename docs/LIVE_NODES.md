@@ -52,6 +52,27 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
      and its spendable balance was already swept to 0, so nothing new could be
      sent; the proof's failure arms (a wallet that will not sign, a proof for
      another amount) are still mock-only.
+- **Startup drift check live-verified — 2026-10-28.** `bill watch` compares the
+  issued-address ledger with the wallet once, before the first poll, and the run
+  against this wallet (v0.18.5.1, `127.0.0.1:18083`, Digest) found **real drift**
+  rather than a staged one: the wallet holds four addresses (minor 0 primary,
+  `order:ord-live-1`, `probe:shape`, `order:ord-live-2`) and
+  `/root/spore-xmr-live/out/subaddresses.json` does not exist — the earlier live
+  rehearsals issued subaddresses before the ledger did, so three of them are
+  money waiting to arrive with no name on it. The check named all three with the
+  exact adopt command, recovered each order id from the wallet's own label, and
+  then billed anyway. Adopting them into a scratch ledger flipped the same wallet
+  to `4 wallet address(es) in step with the ledger`; a ledger entry at a minor
+  the wallet does not have logged the worse direction (`a payment to it would
+  never arrive and never be reported`); a wallet that does not answer logged
+  `could NOT check … this is not "in step"`. Binary and evidence are on the box
+  (`/root/spore-xmr-live/spore`, `/tmp/drift/`), built from `3d61d53`.
+  **Still open on purpose:** the box's real ledger was left unwritten. Those
+  addresses were issued for test orders under the single hosted user, and the
+  one-customer-one-address rule (correctly) refuses to adopt a second address for
+  `cc4f19a2`, so recording them needs the operator's decision about which
+  customer each one pays for — which is exactly what `bill reconcile` refuses to
+  guess.
 
 ### Why a node is needed
 Monero has no public-API node like DERO's. The XMR backend talks to a **wallet
