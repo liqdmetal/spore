@@ -130,12 +130,28 @@ echo "pass 2: $PATCH_FEE"
 echo "tree:   HEAD $sha (committed state; the working tree is not used)"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/spore-release-rehearsal.XXXXXX")
+# Cleanup must never decide the verdict. The status captured on entry is what the
+# script exits with, whatever removing the tree does: on Windows a handle can sit
+# on the scratch tree for a moment after the Go tests that ran inside it finish,
+# and `rm -rf` then fails with "Device or resource busy". From a trap that failure
+# *becomes* the exit status — it once turned a GREEN rehearsal into exit 1 and got
+# a push rejected for a reason that had nothing to do with the tree being
+# rehearsed. So retry briefly, then leave the tree and say where it is.
 cleanup() {
+  local status=$?
   if ((KEEP)); then
     echo "scratch tree kept: $tmp"
-  else
-    rm -rf "$tmp"
+    return "$status"
   fi
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if rm -rf "$tmp" 2>/dev/null; then
+      return "$status"
+    fi
+    sleep 0.5
+  done
+  echo "note: a handle kept the scratch tree at $tmp; left it there (cleanup never fails the run)" >&2
+  return "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
