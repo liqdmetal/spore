@@ -35,6 +35,20 @@
 # green run still exits 0. A gate needs >= 3 prior samples before its
 # median is trusted; gate labels are compared across quick and full modes.
 #
+# Only one run may be in flight per checkout: the script takes an exclusive
+# lock (a directory, .gate-run.lock, gitignored) and a second run waits its
+# turn, saying who it is waiting for. Two suites at once is not hypothetical —
+# the timing log shows one starting at 04:30:35 while an earlier run was still
+# fuzzing — and it is what makes `go build ./...` / `go vet ./...` read as
+# 4-5x slow, because both are CPU-bound and both run first, so they absorb
+# whatever else the box is doing: a warm `go build ./...` takes 1.5s on an
+# idle machine and 15.4s with every core busy (measured 2026-10-28). The lock
+# cannot help against load from outside spore; it stops spore from being that
+# load for itself. A run that dies uncleanly leaves the lock behind, so each
+# gate touches a beat file and a beat older than GATE_LOCK_STALE_MIN (default
+# 15 minutes; the longest single gate is ~6) is taken over rather than
+# wedging pushes. GATE_LOCK=off skips the wait entirely.
+#
 # The -race gate needs cgo, and cgo needs a C compiler. Where PATH has none the
 # gate looks for a Windows mingw-w64 install itself (MSYS2 ucrt64/mingw64,
 # scoop, TDM-GCC, MinGW) instead of dying with go's "requires cgo" line, which
@@ -107,6 +121,80 @@ else
 fi
 GATE_SLOW_RATIO="${GATE_SLOW_RATIO:-2.0}"
 
+# ---- one run at a time -----------------------------------------------------
+# mkdir is atomic on NTFS and POSIX alike, which makes a directory a lock that
+# needs no flock(1). The stale-beat rule exists because a hard-killed run (a
+# scheduled task stopped mid-flight, a closed window) would otherwise block
+# every later push until somebody found the directory.
+LOCK_DIR="$SPORE_DIR/.gate-run.lock"
+GATE_LOCK_STALE_MIN="${GATE_LOCK_STALE_MIN:-15}"
+LOCK_HELD=0
+
+# lock_beat stamps the CURRENT time into the beat file. It must be a timestamp,
+# not an empty touch: an empty file reads as age 0 from the epoch, which looks
+# like a lock abandoned 30 million minutes ago — the first version of this did
+# exactly that and a waiting run "took over" a live lock (caught by test,
+# 2026-10-28).
+lock_beat() {
+  [ "$LOCK_HELD" -eq 1 ] || return 0
+  date +%s > "$LOCK_DIR/beat" 2>/dev/null || true
+  return 0
+}
+
+release_lock() {
+  [ "$LOCK_HELD" -eq 1 ] || return 0
+  # Only remove the lock while it still names this process: a run that had its
+  # lock taken over as stale must not delete the new owner's directory on exit.
+  if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '')" = "$$" ]; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+  fi
+  LOCK_HELD=0
+}
+
+acquire_lock() {
+  [ "${GATE_LOCK:-on}" = "off" ] && return 0
+  local waited=0 last_beat beat_age v f
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    last_beat=0
+    for f in beat started; do
+      v=$(cat "$LOCK_DIR/$f" 2>/dev/null || true)
+      case "$v" in ''|*[!0-9]*) continue ;; esac
+      last_beat=$v
+      break
+    done
+    # No stamp yet: either the owner is between mkdir and its first write (the
+    # window is microseconds) or the directory was never finished. The
+    # directory's own mtime covers both — mkdir sets it — so a fresh one waits
+    # and an abandoned empty one still ages out instead of wedging pushes.
+    if [ "$last_beat" -eq 0 ]; then
+      last_beat=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+      case "$last_beat" in ''|*[!0-9]*) last_beat=0 ;; esac
+    fi
+    beat_age=$(( $(date +%s) - last_beat ))
+    if [ "$beat_age" -gt $(( GATE_LOCK_STALE_MIN * 60 )) ]; then
+      echo "gates: taking over a stale run lock ($(( beat_age / 60 ))m since its last gate finished)"
+      rm -rf "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    if [ "$waited" -eq 0 ]; then
+      echo "gates: another run is in progress (pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?'), started $(cat "$LOCK_DIR/started_at" 2>/dev/null || echo '?'))"
+      echo "gates: waiting — two suites at once is what makes build/vet read as 4-5x slow"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  # started goes first: it is the stamp a waiter falls back to when beat is
+  # still empty, so writing it last would leave a window of "no stamp at all".
+  printf '%s\n' "$(date +%s)" > "$LOCK_DIR/started"
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$LOCK_DIR/started_at"
+  : > "$LOCK_DIR/beat"
+  LOCK_HELD=1
+  trap release_lock EXIT
+  trap 'release_lock; exit 130' INT
+  trap 'release_lock; exit 143' TERM
+}
+
 csv_init() {
   [ -n "$CSV_PATH" ] || return 0
   # Header when the file is missing OR empty (a zero-byte file is not a log).
@@ -128,10 +216,12 @@ TIMINGS=""
 run_gate() {
   label=$1; shift
   printf -- '-- %s ...\n' "$label"
+  lock_beat
   t0=$(now_ms)
   rc=0
   "$@" || rc=$?
   dt=$(( $(now_ms) - t0 ))
+  lock_beat
   TIMINGS="${TIMINGS}${dt} ${label}
 "
   printf -- '-- %s — %s\n' "$label" "$(fmt_ms "$dt")"
@@ -368,6 +458,8 @@ if [ -n "$CSV_PATH" ] && [ -f "$CSV_PATH" ]; then
   PRE_ROWS=$(( $(wc -l < "$CSV_PATH") ))
 fi
 
+acquire_lock
+
 run_gate 'credential guard' check_cred_guard
 
 run_gate gofmt check_gofmt
@@ -554,17 +646,23 @@ if [ -n "$CSV_PATH" ] && [ "$PRE_ROWS" -ge 2 ]; then
       }
     }')
 
-  checked=0; flagged=0
+  checked=0; flagged=0; MIN_RATIO=""; MIN_GATE=""
   while read -r dt label; do
     [ -n "$label" ] || continue
     med=$(printf '%s\n' "$HIST" | awk -F'\t' -v g="$label" '$2 == g {print $1; exit}')
     [ -n "$med" ] || continue
     checked=$((checked + 1))
+    ratio=$(awk -v d="$dt" -v m="$med" 'BEGIN { printf "%.2f", d / m }')
+    # The least-inflated gate is the run's floor: contention pads every gate,
+    # a real regression pads one. Keep the floor so the summary can tell the
+    # two apart instead of blaming the gate that happened to be CPU-bound.
+    if [ -z "$MIN_RATIO" ] || awk -v a="$ratio" -v b="$MIN_RATIO" 'BEGIN { exit !(a < b) }'; then
+      MIN_RATIO=$ratio; MIN_GATE=$label
+    fi
     if awk -v d="$dt" -v m="$med" -v r="$GATE_SLOW_RATIO" 'BEGIN { exit !(d > m * r) }'; then
       flagged=$((flagged + 1))
       printf '  SLOW: %s — %s vs median %s (%.2fx baseline)\n' \
-        "$label" "$(fmt_ms "$dt")" "$(fmt_ms "$med")" \
-        "$(awk -v d="$dt" -v m="$med" 'BEGIN { printf "%.2f", d / m }')"
+        "$label" "$(fmt_ms "$dt")" "$(fmt_ms "$med")" "$ratio"
     fi
   done <<TIMINGS
 $TIMINGS
@@ -572,6 +670,13 @@ TIMINGS
 
   if [ "$flagged" -gt 0 ]; then
     echo "slow-gate check: $flagged gate(s) anomalously slow for this machine (see SLOW above)"
+    # A busy box is not a regression. When even the cheapest gate — the one no
+    # source change can touch — ran well over its median (measured 2026-10-28:
+    # a warm `go build ./...` is 1.5s idle and 15.4s with every core busy),
+    # every gate in the run is padded and SLOW says nothing about the code.
+    if awk -v m="$MIN_RATIO" 'BEGIN { exit !(m >= 1.5) }'; then
+      echo "  above: the whole run was inflated ($MIN_GATE, the least affected gate, was ${MIN_RATIO}x its median) — this reads as a busy machine, not a slower gate"
+    fi
   elif [ "$checked" -gt 0 ]; then
     echo "slow-gate check: no anomalies ($checked gate(s) vs history)"
   else

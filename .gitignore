@@ -68,6 +68,9 @@ Thumbs.db
 # local gate-latency log (scripts/gates.sh)
 .gate-timings.csv
 
+# one-at-a-time run lock (scripts/gates.sh); a directory, not a file
+.gate-run.lock/
+
 # detached-push wrapper + transcript (scripts/push-detached.sh)
 .push-detached/
 
