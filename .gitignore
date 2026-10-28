@@ -68,5 +68,8 @@ Thumbs.db
 # local gate-latency log (scripts/gates.sh)
 .gate-timings.csv
 
+# detached-push wrapper + transcript (scripts/push-detached.sh)
+.push-detached/
+
 # local fuzz-soak state, ledger and raw logs (scripts/fuzz-soak.sh)
 .fuzz-soak/
