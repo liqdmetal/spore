@@ -64,7 +64,7 @@
 # that the chain is Base Sepolia, that the keys are funded, or that the CLI's own
 # burn has this shape — scripts/anvil_e2e.sh drives the real `chain.Watch` burn
 # for that, on the same gate run.
-set -euo pipefail
+set -eEuo pipefail
 
 RPC="https://sepolia.base.org"
 SPORE=""
@@ -118,6 +118,42 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+
+# A bare `set -e` exit says nothing: the script stops with the failing command's
+# status and no words. That is how this gate failed once — "sepolia rehearsal
+# self-check — 1.0s", then silence, after it had already printed `ok: chain id
+# … up` — which is indistinguishable from a broken harness and impossible to
+# diagnose after the fact. Its failures are the kind nobody can reproduce on
+# demand, so the one thing it must never do is die quietly. `-E` (errtrace) is
+# on the `set` line above so this trap also fires for commands inside functions
+# and command substitutions, which is where the silent exit came from.
+#
+# Commands an `if`/`||`/`&&` is testing never reach the trap, so the expected
+# failures (every `refused …` case) stay quiet.
+on_err() {
+  local status=$1 line=$2 cmd=$3
+  # A `return 3` for "anvil not found" is a deliberate status whose message the
+  # caller already printed; reporting it as an unguarded failure would train the
+  # reader to ignore this trap on the one run where it matters.
+  case "$cmd" in
+    return\ * | exit\ *) return 0 ;;
+  esac
+  printf '\nsepolia_rehearsal: FAILED (exit %s) at %s:%s\n  command: %s\n' \
+    "$status" "${BASH_SOURCE[0]}" "$line" "$cmd" >&2
+  if [[ -n "${ANVIL_PID:-}" ]] && ! kill -0 "$ANVIL_PID" 2>/dev/null; then
+    printf '  the throwaway anvil (pid %s) had already gone — its log tail:\n' "$ANVIL_PID" >&2
+    if [[ -s "${ROOT:-}/anvil.log" ]]; then
+      tail -n 20 "$ROOT/anvil.log" | sed 's/^/    /' >&2
+    else
+      # --silent anvil that never started logs nothing; say that rather than
+      # printing a header over an empty tail and looking like a broken message.
+      printf '    (%s/anvil.log is empty or missing — a --silent anvil that never started logs nothing)\n' "${ROOT:-}" >&2
+    fi
+  else
+    printf '  the command was not in a checked condition: this is an unguarded step, not a refused check\n' >&2
+  fi
+}
+trap 'on_err "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 step() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mok:\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
@@ -280,19 +316,26 @@ self_check() {
   MB2=0x2222222222222222222222222222222222222222    # a second mailbox, burned to as well
   MB3=0x4444444444444444444444444444444444444444    # a mailbox nothing ever touched
   OTHER=0x3333333333333333333333333333333333333333  # a recipient that never burned
+  # `|| true` on the substitution, so a grep that finds nothing reaches the
+  # `fail` below with a sentence instead of exiting under `set -e` with nothing.
   SEL=$(grep -oE '^BURN_SEL="0x[0-9a-fA-F]+"' "$REPO_ROOT/scripts/evm-burn-txid.sh" \
-    | head -1 | sed 's/.*"\(0x[0-9a-fA-F]*\)"/\1/')
+    | head -1 | sed 's/.*"\(0x[0-9a-fA-F]*\)"/\1/' || true)
   [[ -n "$SEL" ]] || fail "could not read BURN_SEL out of scripts/evm-burn-txid.sh"
   NOT_SEL=0x69783d77   # deliver(address,bytes) — any non-burn selector would do
 
   # The bound transaction stands in for the delivery: the scan starts at its
   # block, so the recovery step has to read a real block number back off the RPC.
   BOUND_TX=$(send_tx "$A" "$MB" "${NOT_SEL}$(addr_word "$B")$(seq_word 0)")
-  BOUND_BLOCK=$(deliver_block_of "$BOUND_TX")
-  [[ -n "$BOUND_BLOCK" ]] || fail "could not read the bounding transaction's block back from the RPC"
+  # The RPC call failing and the tx having no block yet are different faults, so
+  # they are named separately: curl dying is "the call failed", a null
+  # blockNumber is "anvil did not mine it". Both used to be a silent exit.
+  BOUND_BLOCK=$(deliver_block_of "$BOUND_TX") \
+    || fail "the RPC call for the bounding transaction's block failed ($BOUND_TX at $RPC)"
+  [[ -n "$BOUND_BLOCK" ]] || fail "the bounding transaction $BOUND_TX has no block on $RPC yet (null blockNumber)"
   BURN_TX=$(send_tx "$B" "$MB" "${SEL}$(addr_word "$B")$(seq_word 0)")
-  BURN_BLOCK_HEX=$(deliver_block_of "$BURN_TX")
-  [[ -n "$BURN_BLOCK_HEX" ]] || fail "could not read the burn transaction's block back from the RPC"
+  BURN_BLOCK_HEX=$(deliver_block_of "$BURN_TX") \
+    || fail "the RPC call for the burn transaction's block failed ($BURN_TX at $RPC)"
+  [[ -n "$BURN_BLOCK_HEX" ]] || fail "the burn transaction $BURN_TX has no block on $RPC yet (null blockNumber)"
   ok "bound tx $BOUND_TX (block $BOUND_BLOCK); burn-shaped tx $BURN_TX (block $BURN_BLOCK_HEX)"
 
   # Sent AFTER the real burn, so a near miss that matched would be the last line
@@ -310,7 +353,7 @@ self_check() {
   [[ "$N" -eq 1 ]] || fail "the reader found $N burns in the window; the fixture put exactly one there — a near miss matched"
   [[ "$(printf '%s' "$RAW" | awk '{print $1}')" == "$BURN_TX" ]] || fail "the reader named $(printf '%s' "$RAW" | awk '{print $1}') instead of the fixture burn ($BURN_TX)"
   [[ "$(printf '%s' "$RAW" | awk '{print $2}')" == 0 ]] || fail "the reader reports seq $(printf '%s' "$RAW" | awk '{print $2}'), expected 0"
-  [[ "$(printf '%s' "$RAW" | awk '{print $3}')" == "$(hex_to_dec "$BURN_BLOCK_HEX")" ]] || fail "the reader reports block $(printf '%s' "$RAW" | awk '{print $3}'), expected $(( BURN_BLOCK )) — the deliver-block bound was misread"
+  [[ "$(printf '%s' "$RAW" | awk '{print $3}')" == "$(hex_to_dec "$BURN_BLOCK_HEX")" ]] || fail "the reader reports block $(printf '%s' "$RAW" | awk '{print $3}'), expected $(hex_to_dec "$BURN_BLOCK_HEX") — the deliver-block bound was misread"
   ok "exactly one burn: $BURN_TX, seq 0, block $(hex_to_dec "$BURN_BLOCK_HEX") — all four near misses excluded"
 
   recover_burn "$RPC" "$MB" "$B" "$BOUND_BLOCK" >/dev/null || fail "the recovery step rejected the burn the reader just confirmed"
@@ -330,7 +373,7 @@ self_check() {
 
   step "self-check: the receipt line the funded run prints"
   LINE=$(receipt_lines "$MB" "$BOUND_TX" "2026-01-01" "$BOUND_TX" "$BURN_TX")
-  N=$(printf '%s\n' "$LINE" | grep -c .)
+  N=$(printf '%s\n' "$LINE" | grep -c . || true)
   [[ "$N" -eq 2 ]] || fail "the receipt step printed $N lines, expected the two §3 STATUS rows"
   grep -qF "$BURN_TX" <<<"$LINE" || fail "the printed receipt line does not name the recovered burn txid"
   grep -qF "$BOUND_TX" <<<"$LINE" || fail "the printed receipt line does not name the deliver txid"
@@ -345,9 +388,15 @@ self_check() {
 }
 
 if [[ "$SELF_CHECK" -eq 1 ]]; then
-  RC=0
-  self_check || RC=$?
-  exit "$RC"
+  # Called directly, NOT as `self_check || RC=$?`. A function whose status is
+  # being tested runs with both errexit and the ERR trap suppressed for its whole
+  # body, so a failing step inside it could exit 1 having printed nothing — which
+  # is exactly the shape the pre-push gate saw ("— 1.0s", then silence). The two
+  # statuses self_check returns on purpose (3 = anvil missing, and `fail`'s 1)
+  # already carry their own messages, so letting errexit end the run here loses
+  # nothing and makes an unguarded failure loud.
+  self_check
+  exit 0
 fi
 
 # ---------------- preflight ----------------
@@ -554,7 +603,8 @@ step "burn: recover the txid from the chain (nothing logs it)"
 # rather than guessing and 2 rather than swallowing an RPC error, so an unfound
 # burn is a failed rehearsal — never a receipt line that quietly falls back to
 # describing the burn's absence.
-DELIVER_BLOCK=$(deliver_block_of "$DELIVER_TX")
+DELIVER_BLOCK=$(deliver_block_of "$DELIVER_TX") \
+  || fail "the RPC call for the deliver transaction's block failed ($DELIVER_TX at $RPC)"
 [[ -n "$DELIVER_BLOCK" ]] || DELIVER_BLOCK="$HEAD"
 BURN_RC=0
 BURN_HIT=$(recover_burn "$RPC" "$CONTRACT" "$ADDR_B" "$DELIVER_BLOCK") || BURN_RC=$?
