@@ -168,3 +168,94 @@ func TestCreateAddressDisagreementNamesBothAddresses(t *testing.T) {
 		t.Errorf("both addresses should be named (abbreviated), got %v", err)
 	}
 }
+
+// get_address is the reconciliation source, and it has the same shape habit as
+// create_address: v0.18.5.1 answers with address OBJECTS carrying a bare
+// address_index, a label and a used flag. A decoder that expected strings would
+// report an empty wallet — and an empty wallet reads as "nothing to reconcile",
+// which is the one wrong answer that looks like agreement.
+func TestGetAddressesReadsTheLiveShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method != "get_address" || req.Params["account_index"] != float64(0) {
+			t.Errorf("asked for %q %+v, want get_address on account 0", req.Method, req.Params)
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"address":"8PRIMARY","addresses":[
+			{"address":"8PRIMARY","address_index":0,"label":"Primary account","used":true},
+			{"address":"8ORDERED","address_index":1,"label":"order:ord-1","used":false}]}}`))
+	}))
+	defer srv.Close()
+
+	addrs, err := GetAddresses(context.Background(), srv.URL, "", 0)
+	if err != nil {
+		t.Fatalf("GetAddresses: %v", err)
+	}
+	if len(addrs) != 2 {
+		t.Fatalf("got %d addresses, want 2", len(addrs))
+	}
+	if addrs[0].Index != 0 || addrs[0].Address != "8PRIMARY" || !addrs[0].Used || addrs[0].Label != "Primary account" {
+		t.Errorf("primary misread: %+v", addrs[0])
+	}
+	if addrs[1].Index != 1 || addrs[1].Address != "8ORDERED" || addrs[1].Used || addrs[1].Label != "order:ord-1" {
+		t.Errorf("subaddress misread: %+v", addrs[1])
+	}
+}
+
+// The other element shape: bare strings, where the array position is the index.
+func TestGetAddressesReadsBareStringElements(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"address":"8A","addresses":["8A","8B","8C"]}}`))
+	}))
+	defer srv.Close()
+
+	addrs, err := GetAddresses(context.Background(), srv.URL, "", 0)
+	if err != nil {
+		t.Fatalf("GetAddresses: %v", err)
+	}
+	if len(addrs) != 3 || addrs[2].Index != 2 || addrs[2].Address != "8C" {
+		t.Errorf("position is not the index: %+v", addrs)
+	}
+}
+
+// A missing address_index falls back to the position: dropping the entry instead
+// would hide an address from every reconciliation.
+func TestGetAddressesFallsBackToPosition(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"address":"8A","addresses":[
+			{"address":"8A"},{"address":"8B","label":"order:ord-2"}]}}`))
+	}))
+	defer srv.Close()
+
+	addrs, err := GetAddresses(context.Background(), srv.URL, "", 0)
+	if err != nil {
+		t.Fatalf("GetAddresses: %v", err)
+	}
+	if len(addrs) != 2 || addrs[1].Index != 1 || addrs[1].Label != "order:ord-2" {
+		t.Errorf("missing index should fall back to position: %+v", addrs)
+	}
+}
+
+// An empty or shapeless answer is a failure to check, never "no addresses": a
+// wallet with zero addresses would make every ledger entry look correct.
+func TestGetAddressesRefusesAnEmptyAnswer(t *testing.T) {
+	for name, body := range map[string]string{
+		"no addresses":   `{"jsonrpc":"2.0","id":1,"result":{"address":"8A"}}`,
+		"empty array":    `{"jsonrpc":"2.0","id":1,"result":{"address":"8A","addresses":[]}}`,
+		"index no addr":  `{"jsonrpc":"2.0","id":1,"result":{"addresses":[{"address":"","address_index":1}]}}`,
+		"not an address": `{"jsonrpc":"2.0","id":1,"result":{"address":"8A","addresses":[42]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			if addrs, err := GetAddresses(context.Background(), srv.URL, "", 0); err == nil {
+				t.Errorf("accepted %s: %+v", name, addrs)
+			}
+		})
+	}
+}

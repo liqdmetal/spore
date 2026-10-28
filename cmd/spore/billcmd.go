@@ -67,10 +67,12 @@ func billcmd(args []string) {
 		billWatch(args[1:])
 	case "address":
 		billAddress(args[1:])
+	case "reconcile":
+		billReconcile(args[1:])
 	case "-h", "--help", "help":
 		billUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "bill: unknown subcommand %q (want watch)\n", args[0])
+		fmt.Fprintf(os.Stderr, "bill: unknown subcommand %q (want watch, address or reconcile)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -78,8 +80,9 @@ func billcmd(args []string) {
 func billUsage() {
 	fmt.Fprint(os.Stderr, `spore bill — hosted mailbox billing orchestrator
 
-  watch    poll a wallet RPC and provision paid mailboxes
-  address  issue one fresh Monero subaddress for one order, and record it
+  watch      poll a wallet RPC and provision paid mailboxes
+  address    issue one fresh Monero subaddress for one order, and record it
+  reconcile  diff the issued-address ledger against the wallet (exit 1 on drift)
 
 watch flags:
   -rpc URL            wallet RPC endpoint (e.g. http://127.0.0.1:20209/json_rpc)
@@ -108,12 +111,27 @@ subaddress):
                       hosted user, merged with the ledger (conflicts refused)
   -xmr-confirmations N confirmations before provisioning (default 10; 0 refused)
 
+on the Monero rail, `+"`watch`"+` also compares the issued-address ledger with
+the wallet once at startup, so an address nothing labels is reported before a
+payment lands on it. Drift is a warning, not a failure: `+"`bill reconcile`"+` is
+the same check on demand, with exit 1.
+
 bill address flags:
   -rpc URL            wallet RPC endpoint (required)
   -rpc-login u:p      wallet RPC credential (Digest on Monero)
-  -out DIR            outbox directory `+"`bill watch`"+` uses; the ledger lands here (required)
+  -out DIR            outbox directory `+"`bill watch`"+` uses; the ledger lands here
+  -addresses F        ledger path (default: OUT/subaddresses.json)
   -user NAME          hosted mailbox the address pays for (required)
   -order ID           your order reference, recorded against the address
+  -adopt N            record subaddress N, which the wallet already has (recovery;
+                      `+"`bill reconcile`"+` prints the exact command)
+
+bill reconcile flags:
+  -rpc URL            wallet RPC endpoint (required)
+  -rpc-login u:p      wallet RPC credential (Digest on Monero)
+  -out DIR            outbox directory holding the ledger (required)
+  -addresses F        ledger path (default: OUT/subaddresses.json)
+  -json               machine-readable report
 `)
 }
 
@@ -284,6 +302,11 @@ func billWatch(args []string) {
 		}
 		xmrFloor = *xmrConfirmations
 		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — one live round trip completed 2026-10-27/28 (payment, provisioning and a receipt carrying the wallet's own tx proof), but no real payment has arrived on a per-order subaddress; %d subaddresses labelled from %s, floor %d confirmations", len(xmrLabels), ledgerPath, xmrFloor)
+		// A ledger that disagrees with the wallet is silent until a payment lands
+		// on the address nobody recorded, at which point the poller holds it as
+		// unlabelled and looks healthy doing it. So the disagreement is reported
+		// here, at startup, while there is still time to record the address.
+		reportBillStartupDrift(*rpc, *rpcLogin, ledgerPath, xmrLabels, issued)
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)

@@ -451,3 +451,81 @@ func shortAddr(addr string) string {
 	}
 	return addr[:6] + "…" + addr[len(addr)-4:]
 }
+
+// WalletAddress is one address a wallet holds: the address, the minor index that
+// names it in every other call, the wallet's own label, and whether anything has
+// ever been received there.
+type WalletAddress struct {
+	Index   uint32
+	Address string
+	Label   string
+	Used    bool
+}
+
+// GetAddresses lists one account's addresses. This is the reconciliation source:
+// it is the only call that says which indices the wallet actually has, and it
+// returns the label create_address was given, so an address spore made but never
+// recorded can still be found — and named — instead of sitting unlabelled.
+//
+// Two element shapes are read, as with create_address: v0.18.5.1 returns objects
+// (`{address, address_index, label, used}`, captured 2026-10-28) and a build may
+// return bare strings, in which case the array position is the index. The list is
+// required to be non-empty: an account with no addresses is not a state this
+// wallet has ever been in, and treating it as one would let a broken wallet read
+// as "everything matches".
+func GetAddresses(ctx context.Context, rpcURL, login string, accountIndex uint32) ([]WalletAddress, error) {
+	b := NewBackend(rpcURL, login)
+	var out struct {
+		Address     string            `json:"address"`
+		Addresses   []json.RawMessage `json:"addresses"`
+		AddrIndices []uint32          `json:"address_indices"` // not sent by v0.18.5.1; accepted when present
+	}
+	if err := b.call(ctx, "get_address", map[string]any{"account_index": accountIndex}, &out); err != nil {
+		return nil, err
+	}
+	list := make([]WalletAddress, 0, len(out.Addresses))
+	for i, raw := range out.Addresses {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			continue
+		}
+		pos := uint32(i)
+		switch trimmed[0] {
+		case '"':
+			var addr string
+			if err := json.Unmarshal(trimmed, &addr); err != nil {
+				return nil, fmt.Errorf("xmr: get_address element %d: %w", i, err)
+			}
+			list = append(list, WalletAddress{Index: pos, Address: addr})
+		case '{':
+			var e struct {
+				Address      string          `json:"address"`
+				AddressIndex json.RawMessage `json:"address_index"`
+				Label        string          `json:"label"`
+				Used         bool            `json:"used"`
+			}
+			if err := json.Unmarshal(trimmed, &e); err != nil {
+				return nil, fmt.Errorf("xmr: get_address element %d: %w", i, err)
+			}
+			// The array is ordered by index, so its position is the fallback when a
+			// build omits address_index — which is exactly how a missing field would
+			// otherwise drop an address out of a reconciliation.
+			_, minor, err := parseSubaddressIndex(e.AddressIndex, []uint32{pos}, accountIndex)
+			if err != nil {
+				return nil, err
+			}
+			list = append(list, WalletAddress{Index: minor, Address: e.Address, Label: e.Label, Used: e.Used})
+		default:
+			return nil, fmt.Errorf("xmr: get_address element %d is neither an address nor an address object: %s", i, string(trimmed))
+		}
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("xmr: the wallet reported no addresses on account %d — refusing to reconcile against an empty answer", accountIndex)
+	}
+	for i, a := range list {
+		if a.Address == "" {
+			return nil, fmt.Errorf("xmr: get_address element %d has an index but no address", i)
+		}
+	}
+	return list, nil
+}

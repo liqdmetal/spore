@@ -76,6 +76,9 @@ func newBillProofWallet(t *testing.T, received uint64, good bool) *billProofWall
 		w.mu.Unlock()
 
 		switch req.Method {
+		case "get_address":
+			// The startup drift check `bill watch` makes before it polls.
+			_, _ = rw.Write([]byte(xmrAddressesFixture))
 		case "get_transfers":
 			_, _ = rw.Write([]byte(xmrTransfersFixture))
 		case "get_tx_proof":

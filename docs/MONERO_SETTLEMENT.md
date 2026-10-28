@@ -165,7 +165,9 @@ than a file somebody edited; `-xmr-subaddresses` still merges in for a wallet
 labelled by hand, and the two disagreeing is refused rather than resolved.
 
 ```
-spore bill address -rpc URL [-rpc-login u:p] -out DIR -user NAME [-order ID]
+spore bill address   -rpc URL [-rpc-login u:p] -out DIR -user NAME [-order ID]
+spore bill address   -rpc URL -out DIR -user NAME -adopt N   # record one the wallet already has
+spore bill reconcile -rpc URL [-rpc-login u:p] -out DIR [-json]  # exit 1 on drift
 ```
 
 Issuance is where the rules become checks: a customer who already owns an
@@ -173,8 +175,33 @@ address, or an order that already has one, is refused **before** the wallet is
 called, because an address the ledger never learned is money nobody can
 attribute. The one hole that remains is honest and worth knowing: a crash
 between the wallet call and the ledger write leaves a labelled-but-unrecorded
-address, which is why the wallet is told `order:<id>` — the label is how an
-operator finds it again.
+address, which is why the wallet is told `order:<id>`.
+
+`spore bill reconcile` is that lookup. It diffs the ledger against the wallet's
+own `get_address` and prints every address the wallet has that the ledger does
+not know — with the `bill address -adopt N -user NAME` command that records it,
+taking the order from the wallet's label — and the worse direction too: a ledger
+entry the wallet does not back, or an entry naming a different address than the
+wallet holds at that index, whose payments would never arrive and would never be
+reported. It exits non-zero on any drift so a cron can watch it, and it is
+read-only: adoption stays a decision about which customer an address belongs to,
+because a tool that guessed would attribute money to the wrong place.
+
+The account's own address (minor 0) is reported but never proposed: every wallet
+has one, no order is issued on it, and drift that can never be fixed is noise
+that teaches an operator to ignore the check.
+
+`bill watch` makes the same comparison itself, once, at startup — before the
+first payment that could land on an unrecorded address. It logs each unlabelled
+wallet address with the `bill address -adopt` command that records it, and each
+ledger entry the wallet does not back, then bills. Drift is not a reason to stop
+the poller: a wallet that will not answer `get_address` is already reported by
+every poll, and taking billing down because the check that watches billing is
+unhappy would make the check the outage. What it must not do is stay quiet about
+having failed — `could NOT check … this is not "in step"` — because silence and
+agreement would then look the same, and the unrecorded address would be found by
+the customer whose payment got held rather than by the operator who could still
+have recorded it.
 
 Two rules that are not style:
 
@@ -431,6 +458,13 @@ and **corrected the document**: the live wallet answers a bare `address_index`, 
 carries more than the one address a count-1 request asked for (refused, but only
 by fixture), and whether `label_address` is ever needed once `create_address`
 has taken a label.
+- The reconcile path has now met the live wallet, and it met the case it was
+  written for: the box's ledger named one address while the wallet held four, so
+  `bill reconcile` reported two the ledger did not know (one left by a run whose
+  ledger write failed, one by a hand-made probe), printed an adopt command for
+  each, exited 1, and after adopting one reported two in step with one still
+  drifted. Not observed: a live ledger entry the wallet cannot back, and a live
+  address mismatch at a matching index — both are fixture-only so far.
 - The Digest-only auth in §5 is one build's behaviour. It is what epee does by
   default and it was captured directly, but a wallet started without `--rpc-login`
   needs no transport at all, and a future build could accept Basic as well. The

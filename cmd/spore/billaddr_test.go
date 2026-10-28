@@ -20,22 +20,38 @@ import (
 	"testing"
 )
 
-// subaddressWallet answers the two calls this feature involves: it issues
-// addresses from a counter (the way a wallet does, minor indices only ever
-// increase) and serves one incoming payment on the first one it gave out.
+// subaddressHeld is one address the mock wallet holds.
+type subaddressHeld struct {
+	Address string
+	Label   string
+	Used    bool
+}
+
+// subaddressWallet answers the calls this path involves: create_address issues
+// from a counter (the way a wallet does, minor indices only ever increase),
+// get_address reports what the wallet holds — labels and used flags included, in
+// the v0.18.5.1 object shape — and get_transfers serves one incoming payment on
+// the first address issued.
 type subaddressWallet struct {
 	srv *httptest.Server
 
 	mu        sync.Mutex
 	nextMinor uint32
-	issued    []map[string]any // params of every create_address
-	polls     int              // get_transfers calls
-	address   string
+	issued    []map[string]any          // params of every create_address
+	polls     int                       // get_transfers calls
+	held      map[uint32]subaddressHeld // every address the wallet has, by minor
 }
 
 func newSubaddressWallet(t *testing.T, firstMinor uint32) *subaddressWallet {
 	t.Helper()
-	w := &subaddressWallet{nextMinor: firstMinor, address: "8SUBISSUEDtestaddress0000000000001"}
+	w := &subaddressWallet{
+		nextMinor: firstMinor,
+		held: map[uint32]subaddressHeld{
+			// Every real account has minor 0, and a reconcile must not report the
+			// account's own address as money nobody recorded.
+			0: {Address: "8SUBPRIMARYaccountaddress000000000000000000000001", Label: "Primary account", Used: true},
+		},
+	}
 	w.srv = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Method string         `json:"method"`
@@ -52,9 +68,33 @@ func newSubaddressWallet(t *testing.T, firstMinor uint32) *subaddressWallet {
 			w.issued = append(w.issued, req.Params)
 			minor := w.nextMinor
 			w.nextMinor++
+			label, _ := req.Params["label"].(string)
+			addr := fmt.Sprintf("8SUBISSUEDtestaddress%013d", minor)
+			w.held[minor] = subaddressHeld{Address: addr, Label: label}
 			_, _ = rw.Write([]byte(fmt.Sprintf(
-				`{"jsonrpc":"2.0","id":1,"result":{"address":"8SUBISSUEDtestaddress%013d","address_index":{"major":0,"minor":%d}}}`,
-				minor, minor)))
+				`{"jsonrpc":"2.0","id":1,"result":{"address":%q,"address_index":%d,"address_indices":[%d],"addresses":[%q]}}`,
+				addr, minor, minor, addr)))
+		case "get_address":
+			minors := make([]uint32, 0, len(w.held))
+			for m := range w.held {
+				minors = append(minors, m)
+			}
+			sortUints(minors)
+			entries := make([]map[string]any, 0, len(minors))
+			for _, m := range minors {
+				e := w.held[m]
+				entries = append(entries, map[string]any{
+					"address": e.Address, "address_index": m, "label": e.Label, "used": e.Used,
+				})
+			}
+			body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{
+				"address": w.held[0].Address, "addresses": entries,
+			}})
+			if err != nil {
+				t.Errorf("mock wallet: %v", err)
+				return
+			}
+			_, _ = rw.Write(body)
 		case "get_transfers":
 			w.polls++
 			// The payment lands on the first address issued (minor 3 in these
@@ -66,6 +106,17 @@ func newSubaddressWallet(t *testing.T, firstMinor uint32) *subaddressWallet {
 	}))
 	t.Cleanup(w.srv.Close)
 	return w
+}
+
+// seedWalletAddress gives the mock wallet an address the ledger never learned:
+// the crash-between-call-and-write case `bill reconcile` exists to find.
+func (w *subaddressWallet) seedWalletAddress(minor uint32, label string, used bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.held[minor] = subaddressHeld{Address: fmt.Sprintf("8SUBSEEDEDaddress%017d", minor), Label: label, Used: used}
+	if minor >= w.nextMinor {
+		w.nextMinor = minor + 1
+	}
 }
 
 func (w *subaddressWallet) stats() (issued []map[string]any, polls int) {
@@ -173,6 +224,12 @@ func TestBillWatchBillsFromTheIssuedLedger(t *testing.T) {
 	}
 	if !strings.Contains(logs, "1 subaddresses labelled from "+billLedgerPath(out)) {
 		t.Errorf("the poller should say which ledger it attributed from:\n%s", logs)
+	}
+	// The startup check runs on every poll start, so it must be quiet when the
+	// ledger and the wallet agree — otherwise operators learn to ignore it and the
+	// one real drift goes unread.
+	if !strings.Contains(logs, "in step with the ledger") {
+		t.Errorf("the poller should confirm the ledger is in step at startup:\n%s", logs)
 	}
 	if _, polls := w.stats(); polls == 0 {
 		t.Error("the poller never asked the wallet for transfers")

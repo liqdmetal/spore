@@ -65,6 +65,24 @@ const xmrTransfersFixture = `{
   }
 }`
 
+// xmrAddressesFixture is a get_address result in the v0.18.5.1 object shape. It
+// describes the wallet xmrTransfersFixture pays: the account's own address at
+// minor 0, and the receiving address at minor 3 under the label `bill address`
+// writes. `bill watch` reads this once at startup to compare the issued-address
+// ledger against the wallet, so a mock that cannot answer would leave every watch
+// test logging an unanswered question instead of agreement.
+const xmrAddressesFixture = `{
+  "id": "bill",
+  "jsonrpc": "2.0",
+  "result": {
+    "address": "8AUJprimaryaccountaddress00000000000000",
+    "addresses": [
+      {"address": "8AUJprimaryaccountaddress00000000000000", "address_index": {"major": 0, "minor": 0}, "label": "Primary account", "used": false},
+      {"address": "8AUJdGVzdHN1YmFkZHJlc3MxMjM0NTY3ODkw", "address_index": {"major": 0, "minor": 3}, "label": "order:ord-41", "used": true}
+    ]
+  }
+}`
+
 // newWalletRPCMock stands in for a wallet RPC (Monero's or DERO's). It records
 // the request it was sent so a test can assert the shape the poller puts on the
 // wire.
@@ -83,6 +101,13 @@ func newWalletRPCMock(t *testing.T, body string, status int) (*httptest.Server, 
 		mu.Lock()
 		seen = map[string]any{"method": req.Method, "params": req.Params}
 		mu.Unlock()
+		if req.Method == "get_address" {
+			// The startup drift check, which `bill watch` makes before it polls.
+			// It is answered here rather than from the caller's body because the
+			// two methods answer different questions.
+			_, _ = w.Write([]byte(xmrAddressesFixture))
+			return
+		}
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"error":{"message":"unauthorized"}}`))

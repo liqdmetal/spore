@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/xmr"
@@ -214,13 +215,15 @@ func billAddress(args []string) {
 	rpc := fs.String("rpc", "", "wallet RPC endpoint, e.g. http://127.0.0.1:18083/json_rpc")
 	rpcLogin := fs.String("rpc-login", "", "wallet RPC credential: Digest on Monero")
 	out := fs.String("out", "", "outbox directory `bill watch` uses (the ledger lands here)")
+	addresses := fs.String("addresses", "", "ledger path (default: OUT/subaddresses.json)")
 	user := fs.String("user", "", "hosted mailbox this address pays for")
 	order := fs.String("order", "", "your order reference, recorded against the address")
+	adopt := fs.Int("adopt", -1, "record an address the wallet already has, by minor index (recovery; see `bill reconcile`)")
 	timeout := fs.Duration("timeout", 30*time.Second, "wallet RPC timeout")
 	_ = fs.Parse(args)
 
-	if *rpc == "" || *out == "" || *user == "" {
-		fmt.Fprintln(os.Stderr, "bill address: -rpc -out -user are required")
+	if *rpc == "" || *user == "" || (*out == "" && *addresses == "") {
+		fmt.Fprintln(os.Stderr, "bill address: -rpc -user and one of -out/-addresses are required")
 		os.Exit(2)
 	}
 	if !billUserNameRe.MatchString(*user) {
@@ -230,21 +233,20 @@ func billAddress(args []string) {
 		check(fmt.Errorf("bill address: -order %q must be 1-64 characters of [A-Za-z0-9._:-], starting with a letter or digit", *order))
 	}
 
-	if err := os.MkdirAll(*out, 0o700); err != nil {
-		check(err)
+	ledgerPath := *addresses
+	if ledgerPath == "" {
+		ledgerPath = billLedgerPath(*out)
+		if err := os.MkdirAll(*out, 0o700); err != nil {
+			check(err)
+		}
 	}
-	ledgerPath := billLedgerPath(*out)
+	if *adopt >= 0 {
+		billAdopt(*rpc, *rpcLogin, ledgerPath, *user, *order, uint32(*adopt), *timeout)
+		return
+	}
 	ledger, err := loadBillSubaddresses(ledgerPath)
 	check(err)
-	for _, minor := range sortedMinors(ledger) {
-		e := ledger[minor]
-		if e.User == *user {
-			check(fmt.Errorf("bill address: %q already owns subaddress %d (%s); one customer, one address — never reuse across orders (MONERO_SETTLEMENT §3)", *user, minor, orderOrDash(e.Order)))
-		}
-		if *order != "" && e.Order == *order {
-			check(fmt.Errorf("bill address: order %q already has subaddress %d for %q; issue once per order rather than once per attempt", *order, minor, e.User))
-		}
-	}
+	check(billCheckIssued(ledger, *user, *order))
 
 	label := "user:" + *user
 	if *order != "" {
@@ -279,6 +281,94 @@ func billAddress(args []string) {
 	fmt.Println()
 	fmt.Println("Give the subaddress to the payer. `bill watch -out` reads the ledger itself,")
 	fmt.Println("so there is no map to edit — and do not hand the same address to a second order.")
+}
+
+// billAdopt records an address the wallet already has.
+//
+// It exists for one situation: create_address succeeded and the ledger write did
+// not — a crash, a full disk, a killed process — so the wallet owns an address
+// spore never learned and a payment to it would be held forever. `bill reconcile`
+// finds those and prints this command; the wallet's own label supplies the order,
+// which is why issuance writes one to the wallet and not only to the ledger.
+func billAdopt(rpcURL, login, ledgerPath, user, order string, minor uint32, timeout time.Duration) {
+	ledger, err := loadBillSubaddresses(ledgerPath)
+	check(err)
+	if prev, clash := ledger[minor]; clash {
+		check(fmt.Errorf("bill address: the ledger already records subaddress %d for %q (%s); nothing to adopt — a payment there is already attributable", minor, prev.User, orderOrDash(prev.Order)))
+	}
+	check(billCheckIssued(ledger, user, order))
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	addrs, err := xmr.GetAddresses(ctx, rpcURL, login, 0)
+	check(err)
+	var found *xmr.WalletAddress
+	for i := range addrs {
+		if addrs[i].Index == minor {
+			found = &addrs[i]
+			break
+		}
+	}
+	if found == nil {
+		indices := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			indices = append(indices, strconv.FormatUint(uint64(a.Index), 10))
+		}
+		check(fmt.Errorf("bill address: the wallet has no subaddress %d on account 0 (it has %s); nothing to adopt", minor, strings.Join(indices, ", ")))
+	}
+	// The wallet label is the only record of what an unrecorded address was for.
+	// If the operator disagrees with it, refuse rather than pick: reconcile
+	// matches on the label, so the two must say the same thing.
+	if walletOrder, ok := orderFromLabel(found.Label); ok {
+		if order != "" && order != walletOrder {
+			check(fmt.Errorf("bill address: the wallet labels subaddress %d %q, but -order says %q; they have to agree or reconcile will never match this entry", minor, found.Label, order))
+		}
+		order = walletOrder
+	}
+
+	ledger[minor] = billSubaddress{
+		Address:  found.Address,
+		User:     user,
+		Order:    order,
+		IssuedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	check(saveBillSubaddresses(ledgerPath, ledger))
+
+	fmt.Printf("adopted     %s\n", found.Address)
+	fmt.Printf("minor       %d (account 0)\n", minor)
+	fmt.Printf("order       %s\n", orderOrDash(order))
+	if found.Label != "" {
+		fmt.Printf("label       %s (the wallet's own)\n", found.Label)
+	}
+	fmt.Printf("pays for    %s\n", user)
+	fmt.Printf("ledger      %s\n", ledgerPath)
+	fmt.Println()
+	fmt.Println("A payment to this address is now attributable. `bill reconcile` should be in step.")
+}
+
+// billCheckIssued refuses a user or order that already owns an address.
+func billCheckIssued(ledger map[uint32]billSubaddress, user, order string) error {
+	for _, minor := range sortedMinors(ledger) {
+		e := ledger[minor]
+		if e.User == user {
+			return fmt.Errorf("bill address: %q already owns subaddress %d (%s); one customer, one address — never reuse across orders (MONERO_SETTLEMENT §3)", user, minor, orderOrDash(e.Order))
+		}
+		if order != "" && e.Order == order {
+			return fmt.Errorf("bill address: order %q already has subaddress %d for %q; issue once per order rather than once per attempt", order, minor, e.User)
+		}
+	}
+	return nil
+}
+
+// orderFromLabel reads an order id back out of a wallet label written as
+// "order:<id>". A label in any other form is not an order, and guessing one
+// would invent a reference the operator never chose.
+func orderFromLabel(label string) (string, bool) {
+	rest, ok := strings.CutPrefix(label, "order:")
+	if !ok || !reBillOrder.MatchString(rest) {
+		return "", false
+	}
+	return rest, true
 }
 
 func orderOrDash(order string) string {
