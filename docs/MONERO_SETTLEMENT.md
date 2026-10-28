@@ -125,7 +125,8 @@ transfers, never as an error.
 
 ```
 create_address   {account_index:0, label:"order:<id>", count:1}
-                 -> {address, address_index:{major,minor}}
+                 -> {address, address_index:<minor>,
+                     address_indices:[<minor>], addresses:[<address>]}
 label_address    {index:{major,minor}, label:"order:<id>"}
 get_address      / get_address_index          # map an entry back to an order
 get_transfers    {in:true, account_index:0, subaddr_indices:[…],
@@ -138,9 +139,42 @@ incoming_transfers                            # alternative output listing
 re-scans every transfer the wallet has, on every poll. `internal/xmr` already
 sets it — this note exists because the sketch is what a new poller copies.
 
+**`create_address` does not answer with the index object this document first
+sketched.** A v0.18.5.1 wallet returns `"address_index": 2` — a bare minor index —
+beside `address_indices: [2]` and `addresses: ["8…"]`, while the request struct in
+the source tree models `{major, minor}`. The first live run of `spore bill
+address` failed on exactly that, after the wallet had already made the address;
+`internal/xmr` now accepts both shapes and cross-checks the arrays, so a wallet
+answering about a different request is refused rather than recorded.
+
+`get_address` has the same habit: its `addresses` array holds **objects**
+(`{address, address_index, label, used}`), not strings. That is the shape to
+reconcile a ledger against a wallet with — label and index both come back, which
+is how an address created before the ledger learned about it is found again.
+
 Model: **one fresh subaddress per order**, its `minor` index stored against the
 order. Reconcile by that index, and keep `txid`, `subaddr_index.minor`, piconero
 amount, height and confirmations.
+
+`spore bill address` is that model with the hand-written step removed. One
+`create_address` call (count 1, label `order:<id>`), one ledger entry in
+`<out>/subaddresses.json` naming the order and the mailbox it pays for, written
+before the address is handed out. `bill watch` reads that ledger from its own
+`-out`, so attribution is a lookup in the system that issued the address rather
+than a file somebody edited; `-xmr-subaddresses` still merges in for a wallet
+labelled by hand, and the two disagreeing is refused rather than resolved.
+
+```
+spore bill address -rpc URL [-rpc-login u:p] -out DIR -user NAME [-order ID]
+```
+
+Issuance is where the rules become checks: a customer who already owns an
+address, or an order that already has one, is refused **before** the wallet is
+called, because an address the ledger never learned is money nobody can
+attribute. The one hole that remains is honest and worth knowing: a crash
+between the wallet call and the ledger write leaves a labelled-but-unrecorded
+address, which is why the wallet is told `order:<id>` — the label is how an
+operator finds it again.
 
 Two rules that are not style:
 
@@ -231,8 +265,11 @@ The XMR poller needs five things before it may be allowed:
    in §3 and the fixture in `cmd/spore/billxmr_test.go` is shaped from it. A
    response can still omit `in` when it is empty, and a missing key is no
    transfers rather than an error.
-2. A **subaddress → customer map**, operator-supplied, because Monero gives no
-   sender: which `minor` index belongs to which order. Absent map = refuse.
+2. ✅ **A subaddress → customer ledger**, because Monero gives no sender: which
+   `minor` index belongs to which order. `spore bill address` writes it at
+   issuance (`<out>/subaddresses.json`), a hand-written `-xmr-subaddresses` file
+   still merges into it, and no ledger plus no map is a refusal rather than a
+   poller that holds every payment it sees.
 3. A **confirmation floor** (default 10, never 0), read from `confirmations`. A
    provisioned mailbox cannot be clawed back, and an unconfirmed transfer can be
    reorged away.
@@ -322,7 +359,8 @@ to the wallet first.
    one wallet, two real incoming payments, no code changed by it beyond the §3
    correction. This is what falsified `destinations` on the incoming side, and it
    is the step that caught the auth scheme.
-3. ✅ **XMR branch in `bill watch`** behind `-xmr-unverified`: subaddress map,
+3. ✅ **XMR branch in `bill watch`** behind `-xmr-unverified`: per-order
+   subaddresses (issued by `spore bill address`, ledger read back from `-out`),
    confirmation floor, hold-unattributed, mock-RPC test — and, added by step 2,
    a **Digest** transport, because Basic can never authenticate to a real wallet.
 4. ✅ **Proof in the receipt** — the optional `tx_proof` block on `sign receipt`
@@ -387,6 +425,12 @@ to the wallet first.
   message recomputed from the receipt's own fields, `check_tx_proof` answered
   `good: true` / `received: 181978330000`, and the identical proof against a
   receipt whose amount was raised by one piconero answered `good: false`.
+- The `create_address` / `get_address` shapes in §3 were captured on 2026-10-28
+and **corrected the document**: the live wallet answers a bare `address_index`, not the`{major, minor}` object the source struct suggests. That capture is why
+`internal/xmr` reads both. Still unobserved: a build whose `addresses` array
+carries more than the one address a count-1 request asked for (refused, but only
+by fixture), and whether `label_address` is ever needed once `create_address`
+has taken a label.
 - The Digest-only auth in §5 is one build's behaviour. It is what epee does by
   default and it was captured directly, but a wallet started without `--rpc-login`
   needs no transport at all, and a future build could accept Basic as well. The

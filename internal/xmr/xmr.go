@@ -26,6 +26,7 @@
 package xmr
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -333,4 +334,120 @@ func GetTxProof(ctx context.Context, rpcURL, login, txid, address, message strin
 		return "", errors.New("xmr: the wallet answered get_tx_proof with no signature")
 	}
 	return out.Signature, nil
+}
+
+// CreatedAddress is one subaddress as monero-wallet-rpc reports it: the address
+// itself and the (major, minor) index that names it in every other call.
+type CreatedAddress struct {
+	Address string `json:"address"`
+	Index   struct {
+		Major uint32 `json:"major"`
+		Minor uint32 `json:"minor"`
+	} `json:"address_index"`
+}
+
+// createAddressResponse is the create_address result as a wallet actually sends
+// it. Two shapes exist in the wild and the field that differs is the important
+// one:
+//
+//   - v0.18.5.1 (captured live, 2026-10-28) answers `"address_index": 2` — a
+//     bare minor index — beside `address_indices: [2]` and `addresses: ["8…"]`;
+//   - the struct in the source tree models a `{major, minor}` object.
+//
+// Decoding straight into a struct picks one of these and fails loudly on the
+// other, which is what happened the first time this was run against the real
+// wallet. So both are accepted here, and the side arrays are used as a
+// cross-check rather than ignored.
+type createAddressResponse struct {
+	Address        string          `json:"address"`
+	AddressIndex   json.RawMessage `json:"address_index"`
+	Addresses      []string        `json:"addresses"`
+	AddressIndexes []uint32        `json:"address_indices"`
+}
+
+// CreateAddress asks the wallet for ONE fresh subaddress under accountIndex,
+// carrying label, and returns it with its index.
+//
+// Exactly one, because the count is not a parameter: MONERO_SETTLEMENT §3 says
+// never reuse an address across orders and never pre-generate in bulk (a wallet
+// does not scan arbitrarily far ahead, so addresses made far from their order can
+// go unseen). A caller that wants two addresses makes two calls, and the second
+// one is a decision rather than a bulk loop.
+//
+// Label is worth setting at the wallet as well as in spore's own ledger: it is
+// what tells a human reading `monero-wallet-cli` which order an address belongs
+// to when the ledger and the wallet disagree.
+func CreateAddress(ctx context.Context, rpcURL, login string, accountIndex uint32, label string) (*CreatedAddress, error) {
+	b := NewBackend(rpcURL, login)
+	var out createAddressResponse
+	err := b.call(ctx, "create_address", map[string]any{
+		"account_index": accountIndex,
+		"label":         label,
+		"count":         1,
+	}, &out)
+	if err != nil {
+		return nil, err
+	}
+	if out.Address == "" {
+		return nil, errors.New("xmr: the wallet answered create_address with no address")
+	}
+	// count is 1, so anything else is a wallet doing something we did not ask
+	// for — and a caller would record the first address while a second one sat
+	// unrecorded on the wallet.
+	if len(out.Addresses) > 1 || len(out.AddressIndexes) > 1 {
+		return nil, fmt.Errorf("xmr: the wallet returned %d address(es) for a count-1 request", len(out.Addresses))
+	}
+	if len(out.Addresses) == 1 && out.Addresses[0] != out.Address {
+		return nil, fmt.Errorf("xmr: the wallet's address (%s) and addresses[0] (%s) disagree — this answer is about a different request", shortAddr(out.Address), shortAddr(out.Addresses[0]))
+	}
+	major, minor, err := parseSubaddressIndex(out.AddressIndex, out.AddressIndexes, accountIndex)
+	if err != nil {
+		return nil, err
+	}
+	if len(out.AddressIndexes) == 1 && out.AddressIndexes[0] != minor {
+		return nil, fmt.Errorf("xmr: the wallet's address_index (%d) and address_indices[0] (%d) disagree", minor, out.AddressIndexes[0])
+	}
+	var addr CreatedAddress
+	addr.Address = out.Address
+	addr.Index.Major = major
+	addr.Index.Minor = minor
+	return &addr, nil
+}
+
+// parseSubaddressIndex reads `address_index` in either shape (see
+// createAddressResponse) and falls back to `address_indices` when the field is
+// absent. A bare number names only the minor, so the account is the one that was
+// asked for — which is all the caller can know, and all it needs: the poller
+// bills account 0.
+func parseSubaddressIndex(raw json.RawMessage, indices []uint32, accountIndex uint32) (major, minor uint32, err error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+		if trimmed[0] == '{' {
+			var obj struct {
+				Major uint32 `json:"major"`
+				Minor uint32 `json:"minor"`
+			}
+			if err := json.Unmarshal(trimmed, &obj); err != nil {
+				return 0, 0, fmt.Errorf("xmr: create_address address_index: %w", err)
+			}
+			return obj.Major, obj.Minor, nil
+		}
+		var n uint32
+		if err := json.Unmarshal(trimmed, &n); err != nil {
+			return 0, 0, fmt.Errorf("xmr: create_address address_index is neither an index nor a {major,minor} object: %s", string(trimmed))
+		}
+		return accountIndex, n, nil
+	}
+	if len(indices) == 1 {
+		return accountIndex, indices[0], nil
+	}
+	return 0, 0, errors.New("xmr: the wallet answered create_address with no subaddress index — the address it made cannot be named in any later call")
+}
+
+// shortAddr keeps an address out of a full log line while still naming it.
+func shortAddr(addr string) string {
+	if len(addr) <= 12 {
+		return addr
+	}
+	return addr[:6] + "…" + addr[len(addr)-4:]
 }

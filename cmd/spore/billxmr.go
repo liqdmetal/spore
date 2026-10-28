@@ -108,18 +108,20 @@ func billAssetAllowed(asset string, xmrUnverified bool) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("bill watch: -price asset %q is not billable: the DERO poller reads get_transfers -> result.entries (sender-tagged), and Monero answers result.in[] and names no sender, so XMR billing needs per-order subaddress attribution via -xmr-subaddresses; use e.g. 25dero or 2.5xmr", asset)
+		return fmt.Errorf("bill watch: -price asset %q is not billable: the DERO poller reads get_transfers -> result.entries (sender-tagged), and Monero answers result.in[] and names no sender, so XMR billing needs per-order subaddress attribution (issue one with `spore bill address`); use e.g. 25dero or 2.5xmr", asset)
 	}
 }
 
-// loadXMRSubaddresses reads the operator's subaddress → customer map: a JSON
+// loadXMRSubaddresses reads a hand-written subaddress → customer map: a JSON
 // object of subaddress minor index → hosted username, e.g. {"3":"cc4f19a2"}.
 //
-// It is required for XMR billing because Monero carries no sender, so the
-// receiving subaddress is the only thing that identifies who paid. Values must
-// be valid hosted usernames and must be unique: two indices mapping to the same
-// customer would make the money hard to attribute rather than doubly paid, and
-// the mailbox provision step would collide on one directory.
+// It is no longer the way an operator labels an address — `spore bill address`
+// (billaddr.go) both issues the address and records it, so the two cannot
+// disagree — but it still merges into the ledger for a wallet whose addresses
+// were labelled by hand before that existed. Values must be valid hosted
+// usernames and must be unique: two indices mapping to the same customer would
+// make the money hard to attribute rather than doubly paid, and the provision
+// step would collide on one directory.
 func loadXMRSubaddresses(path string) (map[uint32]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -194,7 +196,7 @@ func planXMRPayments(price, floor uint64, labels map[uint32]string, done map[str
 		}
 		user, labelled := labels[e.SubaddrIndex.Minor]
 		if !labelled {
-			refuse(fmt.Sprintf("subaddress minor=%d is unlabelled (%s); add it to -xmr-subaddresses", e.SubaddrIndex.Minor, shortOrDash(e.Address)), true)
+			refuse(fmt.Sprintf("subaddress minor=%d is unlabelled (%s); issue addresses with `spore bill address` (or add it to -xmr-subaddresses)", e.SubaddrIndex.Minor, shortOrDash(e.Address)), true)
 			continue
 		}
 		if e.Confirmations < floor {

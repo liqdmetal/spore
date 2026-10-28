@@ -477,7 +477,9 @@ func TestBillWatchXMRGateRefusals(t *testing.T) {
 		want string
 	}{
 		{"xmr without -xmr-unverified", append(base(), "-xmr-subaddresses", labels), "-xmr-unverified"},
-		{"xmr without the label map", append(base(), "-xmr-unverified"), "-xmr-subaddresses is required"},
+		// No ledger and no map: nothing could ever be attributed, so the poller
+		// says which command issues an address rather than polling into a void.
+		{"xmr with nothing labelled", append(base(), "-xmr-unverified"), "spore bill address"},
 		{"zero confirmations", append(base(), "-xmr-unverified", "-xmr-subaddresses", labels, "-xmr-confirmations", "0"), "-xmr-confirmations 0 is refused"},
 		{"a rail with no poller", append(base(), "-price", "5evm", "-xmr-unverified"), "not billable"},
 	}

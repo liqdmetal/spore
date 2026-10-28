@@ -21,11 +21,14 @@
 // wallet never returns again is not a hold, it is a lost payment).
 //
 // Monero is a second rail on the same orchestrator, in billxmr.go: `-price
-// 2.5xmr -xmr-subaddresses FILE` bills off monero-wallet-rpc. It needs a
-// subaddress→customer map because Monero carries no sender field, and it is
-// gated behind -xmr-unverified because no real payment has arrived on a per-order
-// subaddress yet (MONERO_SETTLEMENT §5, §8 step 5) — the whole chain has run once
-// against the live wallet in the meantime (2026-10-27/28). On that rail the
+// 2.5xmr` bills off monero-wallet-rpc. Monero carries no sender field, so the
+// payer is identified by the address that was paid — one fresh subaddress per
+// order, issued by `spore bill address` (billaddr.go) and read back from the
+// ledger it writes, with an optional -xmr-subaddresses file merged in for a
+// wallet labelled before that existed. The rail is gated behind -xmr-unverified
+// because no real payment has arrived on a per-order subaddress yet
+// (MONERO_SETTLEMENT §5, §8 step 5) — the whole chain has run once against the
+// live wallet in the meantime (2026-10-27/28). On that rail the
 // outbox receipt carries the receiving wallet's get_tx_proof over a claim bound
 // to the receipt itself, verified by that wallet before the record is written, so
 // the evidence travels in the record rather than beside it (§8 step 4).
@@ -62,6 +65,8 @@ func billcmd(args []string) {
 	switch args[0] {
 	case "watch":
 		billWatch(args[1:])
+	case "address":
+		billAddress(args[1:])
 	case "-h", "--help", "help":
 		billUsage()
 	default:
@@ -73,7 +78,8 @@ func billcmd(args []string) {
 func billUsage() {
 	fmt.Fprint(os.Stderr, `spore bill — hosted mailbox billing orchestrator
 
-  watch  poll a wallet RPC and provision paid mailboxes
+  watch    poll a wallet RPC and provision paid mailboxes
+  address  issue one fresh Monero subaddress for one order, and record it
 
 watch flags:
   -rpc URL            wallet RPC endpoint (e.g. http://127.0.0.1:20209/json_rpc)
@@ -96,9 +102,18 @@ into a receipt against a v0.18.5.1 wallet, and that receipt now carries the
 wallet's own tx proof, but no real payment has arrived on a per-order
 subaddress):
   -xmr-unverified     required to bill xmr at all; says every result is suspect
-  -xmr-subaddresses F JSON map of subaddress minor index -> hosted user
-                      (required: Monero carries no sender field)
+  -addresses F        issued-address ledger (default: OUT/subaddresses.json,
+                      written by `+"`spore bill address`"+`)
+  -xmr-subaddresses F optional hand-written map of subaddress minor index ->
+                      hosted user, merged with the ledger (conflicts refused)
   -xmr-confirmations N confirmations before provisioning (default 10; 0 refused)
+
+bill address flags:
+  -rpc URL            wallet RPC endpoint (required)
+  -rpc-login u:p      wallet RPC credential (Digest on Monero)
+  -out DIR            outbox directory `+"`bill watch`"+` uses; the ledger lands here (required)
+  -user NAME          hosted mailbox the address pays for (required)
+  -order ID           your order reference, recorded against the address
 `)
 }
 
@@ -210,7 +225,8 @@ func billWatch(args []string) {
 	once := fs.Bool("once", false, "single poll, then exit")
 	dryRun := fs.Bool("dry-run", false, "report only, change nothing")
 	xmrUnverified := fs.Bool("xmr-unverified", false, "bill -price xmr: no real payment has arrived on a per-order subaddress — treat every result as experimental")
-	xmrSubaddresses := fs.String("xmr-subaddresses", "", "JSON map of Monero subaddress minor index -> hosted user (required for -price xmr)")
+	xmrSubaddresses := fs.String("xmr-subaddresses", "", "optional hand-written JSON map of Monero subaddress minor index -> hosted user; merged with the issued-address ledger")
+	addresses := fs.String("addresses", "", "issued-address ledger written by `spore bill address` (default: OUT/subaddresses.json)")
 	xmrConfirmations := fs.Uint64("xmr-confirmations", 10, "confirmations a Monero payment needs before a mailbox is provisioned (0 is refused)")
 	_ = fs.Parse(args)
 
@@ -237,18 +253,37 @@ func billWatch(args []string) {
 		xmrFloor  uint64
 	)
 	if asset == "xmr" {
-		if *xmrSubaddresses == "" {
-			check(errors.New("bill watch: -xmr-subaddresses is required for -price xmr: Monero carries no sender field, so the receiving subaddress is the only thing that identifies who paid (docs/MONERO_SETTLEMENT.md §3)"))
+		// Attribution comes from the ledger `spore bill address` writes, because
+		// issuing the address and recording the order are one step that cannot
+		// disagree with itself. A hand-written map still merges in, for a wallet
+		// whose addresses were labelled before the ledger existed.
+		ledgerPath := *addresses
+		if ledgerPath == "" {
+			ledgerPath = billLedgerPath(*out)
+		}
+		issued, err := loadBillSubaddresses(ledgerPath)
+		if err != nil {
+			check(err)
+		}
+		var legacy map[uint32]string
+		if *xmrSubaddresses != "" {
+			legacy, err = loadXMRSubaddresses(*xmrSubaddresses)
+			if err != nil {
+				check(err)
+			}
+		}
+		xmrLabels, err = mergeBillLabels(issued, legacy, *xmrSubaddresses)
+		if err != nil {
+			check(err)
+		}
+		if len(xmrLabels) == 0 {
+			check(fmt.Errorf("%w: issue one with `spore bill address -out %s -user NAME -order ID`, or pass -xmr-subaddresses FILE (docs/MONERO_SETTLEMENT.md §3)", errNoLedgerSource, *out))
 		}
 		if *xmrConfirmations == 0 {
 			check(errors.New("bill watch: -xmr-confirmations 0 is refused: a provisioned mailbox cannot be clawed back, and an unconfirmed payment can be reorged away (docs/MONERO_SETTLEMENT.md §5)"))
 		}
-		xmrLabels, err = loadXMRSubaddresses(*xmrSubaddresses)
-		if err != nil {
-			check(err)
-		}
 		xmrFloor = *xmrConfirmations
-		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — one live round trip completed 2026-10-27/28 (payment, provisioning and a receipt carrying the wallet's own tx proof), but no real payment has arrived on a per-order subaddress; %d subaddresses labelled, floor %d confirmations", len(xmrLabels), xmrFloor)
+		log.Printf("bill watch: XMR MODE IS EXPERIMENTAL — one live round trip completed 2026-10-27/28 (payment, provisioning and a receipt carrying the wallet's own tx proof), but no real payment has arrived on a per-order subaddress; %d subaddresses labelled from %s, floor %d confirmations", len(xmrLabels), ledgerPath, xmrFloor)
 	}
 	if err := os.MkdirAll(*out, 0o700); err != nil {
 		check(err)
