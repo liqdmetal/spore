@@ -12,7 +12,9 @@
 #
 # Both are one-command fixes that nobody runs because nothing asks them to.
 # This script runs both, verifies both, and exits non-zero naming the exact
-# command to run when one is still wrong.
+# command to run when one is still wrong. It also reports a credential store
+# holding two GitHub accounts: the guard can only refuse a push then, so the
+# duplicate is caught here, at arm-time, rather than at push-time.
 #
 #   scripts/setup.sh          install anything missing, then verify
 #   scripts/setup.sh --check  verify only — changes nothing, safe in CI
@@ -30,7 +32,10 @@ case "${1:-}" in
   ""|--install) ;;
   --check) MODE=check ;;
   -h|--help)
-    sed -n '2,22p' "$SELF_DIR/setup.sh" | sed 's/^# \{0,1\}//'
+    # Print the header block only: strip the shebang, drop the leading "# "
+    # from each comment, and stop at the first line of code — so growing the
+    # header can never spill the script body into --help.
+    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF_DIR/setup.sh"
     exit 0
     ;;
   *)
@@ -106,6 +111,35 @@ else
   warn "credential guard NOT armed — a credential-store ambiguity will hang this
   clone's pushes instead of failing them.
   fix: scripts/git-credential-guard.sh --install"
+fi
+
+# ---- 2b. credential store: one account per host ----------------------------
+# Arming the guard does not make the store unambiguous. GCM keys its store by
+# username, not identity, so a second entry — often the same token stored under
+# a different name — makes every username-less query (every `git push`) raise
+# an account picker, which the guard then refuses. Reporting it here means the
+# duplicate is found while arming a clone instead of on a push. GCM is optional
+# on a given machine (CI has none), so an absent, silent or unreadable store is
+# skipped rather than failed; a bounded call keeps a slow keychain from hanging
+# setup the way it used to hang pushes.
+if command -v git-credential-manager >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    gh_accounts="$(timeout 10 git-credential-manager github list 2>/dev/null || true)"
+  else
+    gh_accounts="$(git-credential-manager github list 2>/dev/null || true)"
+  fi
+  gh_count=$(printf '%s\n' "$gh_accounts" | grep -c . || true)
+  [ -n "$gh_count" ] || gh_count=0
+  if [ "$gh_count" -gt 1 ]; then
+    warn "credential store holds $gh_count GitHub accounts: $(printf '%s' "$gh_accounts" | tr '\n' ' ' || true)
+  Every username-less push asks for a credential with no username, GCM answers
+  with an account picker no terminal can answer, and the guard above refuses.
+  Two names are usually one identity — drop the duplicate and keep the one you
+  authenticate as. See README 'Keep exactly one account per host'.
+  fix: git-credential-manager github logout <account-to-drop>"
+  elif [ "$gh_count" -eq 1 ]; then
+    say "credential store: 1 GitHub account ($gh_accounts)"
+  fi
 fi
 
 # ---- 3. verdict ------------------------------------------------------------

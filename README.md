@@ -325,7 +325,9 @@ login:
 git-credential-manager github list     # expect one line per host
 ```
 
-More than one line means a duplicate. Drop the redundant name, keeping the one
+`scripts/setup.sh --check` runs the same query and refuses to call the clone
+ready while two accounts are stored, so arming a clone catches the duplicate
+before a push does. More than one line means a duplicate. Drop the redundant name, keeping the one
 you actually authenticate as (the guard's refusal names both, so a push tells
 you the same thing), then confirm the plain path works with no account named
 and no token in the URL:
