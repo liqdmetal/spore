@@ -307,7 +307,14 @@ cat > "$HOOKS/pre-push" <<'HOOK_EOF_9x'
 #
 #   1. NO REF LINES. git writes the push's refs to the hook on stdin; if that
 #      list is empty the push range is unknown and lefthook has nothing to
-#      compute a diff from. Upstream also exits 0 here. We abort.
+#      compute a diff from. Upstream also exits 0 here. We abort — unless the
+#      emptiness is provably a no-op push (`git push` on a tree already at its
+#      upstream), which is allowed with a note. The proof is that every branch
+#      sits exactly on its upstream and the current branch has one: a branch
+#      ahead of its upstream is the shape a stdin-eating consumer leaves
+#      behind, since git would have written a ref line for it.
+#      (Real case, 2026-10-30: a plain `git push` with nothing to send aborted
+#      with a bypass warning instead of saying "Everything up-to-date".)
 #   2. SKIPPED GATES ON A REAL PUSH. lefthook prints
 #        gates (skip) no matching push files
 #      and exits 0 when the diff range comes back empty (dropped/consumed refs,
@@ -539,7 +546,37 @@ refuse_skip()
   exit 1
 }
 
+# Empty stdin means git had zero refs to update — `git push` on a synced tree.
+# It is also what a consumer upstream of this file would leave after eating the
+# lines, so prove the clone has nothing in flight instead of taking it on
+# faith: every branch that tracks an upstream must sit exactly on it, and the
+# current branch must have an upstream at all (a detached HEAD or an unpushed
+# branch cannot be proven empty). A branch ahead of its upstream is precisely
+# the eaten-lines shape — git would have written a ref line for it — so that
+# stays a refusal. Without this, a plain `git push` on an up-to-date tree
+# aborted with a gate-bypass warning for a push that carried nothing.
 if repo_uses_lefthook && [ "$ref_lines" -eq 0 ]; then
+  noop_proven=""
+  if git symbolic-ref --quiet HEAD >/dev/null 2>&1 \
+     && git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1
+  then
+    noop_proven=1
+    while read -r _b _u
+    do
+      [ -n "$_u" ] || continue
+      if [ "$(git rev-parse --verify "$_b" 2>/dev/null)" != "$(git rev-parse --verify "$_u" 2>/dev/null)" ]; then
+        noop_proven=""
+        break
+      fi
+    done <<NOOP_EOF
+$(git for-each-ref --format='%(refname:short) %(upstream:short)' refs/heads 2>/dev/null)
+NOOP_EOF
+  fi
+  if [ -n "$noop_proven" ]; then
+    echo "pre-push: note: gates skipped — git reported nothing to push and every" >&2
+    echo "  branch sits on its upstream, so no commit is arriving." >&2
+    exit 0
+  fi
   refuse_skip "stdin carried no ref lines, so the push range is unknown"
 fi
 

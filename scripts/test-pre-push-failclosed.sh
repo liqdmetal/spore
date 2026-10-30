@@ -20,7 +20,9 @@
 #
 # Empty-range guards (added after a gate-bypassing push on 2026-10-26):
 #   * a GATED repo whose stdin carries no ref lines ABORTS — the push range is
-#     unknown, and upstream lefthook exits 0 there without running anything;
+#     unknown, and upstream lefthook exits 0 there without running anything —
+#     unless it is provably a no-op push (every branch on its upstream), which
+#     is allowed so a plain `git push` with nothing to send succeeds;
 #   * a gated repo where lefthook reports "no matching push files" while
 #     commits are arriving ABORTS — the skip can never read as a pass again;
 #   * the same skip on a deletion-only push (all-zero local sha) is allowed —
@@ -34,6 +36,12 @@
 # scenarios pin the boundary with real repositories — the rewrite shape is
 # allowed, while an empty commit stacked on top and a rewrite that changes file
 # content are both still refused.
+#
+# No-op pushes (added after a plain `git push` on a synced tree aborted on
+# 2026-10-30): the two scenarios below build a real clone with a real upstream.
+# Synced is allowed on the strength of the branch-equals-upstream proof; a
+# branch ahead of its upstream while stdin is empty is the shape a consumer
+# that ate the ref lines leaves behind, so it still aborts.
 #
 # The stub lefthook binaries used by those scenarios exercise the exact
 # summary line lefthook 1.12.4 prints on its skip path, without needing a
@@ -289,6 +297,50 @@ run_repo() {
 run_repo "message-only rewrite (same tree, replaced commit) is allowed" 0 rewrite
 run_repo "empty commit stacked on top still aborts" 1 stacked
 run_repo "rewrite that changes file content still aborts" 1 content
+
+# 16-17: the no-op push boundary. `git push` on a tree already at its upstream
+# writes no ref lines at all, and that shape used to abort as an unknown range —
+# a plain push with nothing to send failed with a bypass warning. These build a
+# real clone with a real upstream so the proof (every branch sits on its
+# upstream) has something to check, and the ahead case pins the other half: a
+# ref line git would have written but that something ate still refuses.
+printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/lefthook-pass"
+chmod +x "$STUB_DIR/lefthook-pass"
+run_noop() {
+  name="$1"; want="$2"; mode="$3"
+  s="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+  mkdir -p "$s/home"
+  if ! ( cd "$s" || exit 1
+    git init -q --bare remote.git 2>/dev/null
+    git init -q work 2>/dev/null && cd work || exit 1
+    git config user.email battery@example.invalid
+    git config user.name battery
+    printf 'body\n' > f.txt && git add f.txt && git commit -qm "chore: base"
+    git branch -M main
+    git remote add origin ../remote.git
+    git push -q -u origin main 2>/dev/null
+    if [ "$mode" = ahead ]; then
+      printf 'more\n' >> f.txt && git add f.txt && git commit -qm "feat(scope): local only"
+    fi
+    mk_yml "$s/work"
+  ) >/dev/null 2>&1; then
+    echo "  FAIL $name: sandbox clone setup failed"
+    fails=$((fails + 1)); rm -rf "$s"; return
+  fi
+  rc=0
+  ( cd "$s/work" && env -u LEFTHOOK -u LEFTHOOK_CONFIG LEFTHOOK_BIN="$STUB_DIR/lefthook-pass" \
+      HOME="$s/home" PATH="$SAFE_PATH" sh "$SHIM" --hand-patch-battery-run </dev/null ) >/dev/null 2>&1 || rc=$?
+  rm -rf "$s"
+  if [ "$rc" -eq "$want" ]; then
+    echo "  ok   $name (rc=$rc)"
+  else
+    echo "  FAIL $name: rc=$rc, want $want"
+    fails=$((fails + 1))
+  fi
+}
+
+run_noop "no-op push on a synced tree is allowed" 0 synced
+run_noop "empty stdin with a branch ahead of its upstream still refuses" 1 ahead
 extra=""
 refs_in=""
 if [ "$assert_rc" -eq 1 ]; then
