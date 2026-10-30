@@ -28,6 +28,13 @@
 #   * a clean run still exits 0, and a failing gate still propagates its own
 #     exit code (the guards add no false blocks and swallow nothing).
 #
+# Message-only rewrites (added after a reword was refused as a bypass on
+# 2026-10-28): git commit --amend -m produces an empty diff range, so lefthook
+# skips and the guard above called a legitimate reword a bypass. The last three
+# scenarios pin the boundary with real repositories — the rewrite shape is
+# allowed, while an empty commit stacked on top and a rewrite that changes file
+# content are both still refused.
+#
 # The stub lefthook binaries used by those scenarios exercise the exact
 # summary line lefthook 1.12.4 prints on its skip path, without needing a
 # real index, remote or network.
@@ -237,6 +244,51 @@ printf '#!/bin/sh\nexit 3\n' > "$STUB_FAIL"
 chmod +x "$STUB_FAIL"
 extra="LEFTHOOK_BIN=$STUB_FAIL"
 run "failing gate still fails" 3 mk_yml
+
+# 13-15: the message-only rewrite boundary. These need real objects, because
+# the shim proves the shape (remote commit present, not an ancestor, identical
+# tree) rather than taking the ref lines at their word — the fake shas above
+# resolve to nothing and therefore stay on the refusing side of the line.
+run_repo() {
+  name="$1"; want="$2"; mode="$3"
+  s="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+  mkdir -p "$s/home"
+  if ! ( cd "$s" || exit 1
+    git init -q . 2>/dev/null
+    git config user.email battery@example.invalid
+    git config user.name battery
+    printf 'body\n' > f.txt
+    git add f.txt
+    git commit -qm "chore: base"
+    old="$(git rev-parse HEAD)"
+    case "$mode" in
+      rewrite) git commit -q --amend -m "fix(scope): message-only rewrite" ;;
+      stacked) git commit -q --allow-empty -m "chore: empty commit on top" ;;
+      content) printf 'more\n' >> f.txt && git add f.txt && git commit -qm "feat(scope): real change" ;;
+    esac
+    new="$(git rev-parse HEAD)"
+    printf 'refs/heads/main %s refs/heads/main %s\n' "$new" "$old" > refs.txt
+    mk_yml "$s"
+  ) >/dev/null 2>&1; then
+    echo "  FAIL $name: sandbox repo setup failed"
+    fails=$((fails + 1)); rm -rf "$s"; return
+  fi
+  refs="$(cat "$s/refs.txt")"
+  rc=0
+  ( cd "$s" && printf '%s\n' "$refs" | env -u LEFTHOOK -u LEFTHOOK_CONFIG LEFTHOOK_BIN="$STUB_SKIP" \
+      HOME="$s/home" PATH="$SAFE_PATH" sh "$SHIM" --hand-patch-battery-run ) >/dev/null 2>&1 || rc=$?
+  rm -rf "$s"
+  if [ "$rc" -eq "$want" ]; then
+    echo "  ok   $name (rc=$rc)"
+  else
+    echo "  FAIL $name: rc=$rc, want $want"
+    fails=$((fails + 1))
+  fi
+}
+
+run_repo "message-only rewrite (same tree, replaced commit) is allowed" 0 rewrite
+run_repo "empty commit stacked on top still aborts" 1 stacked
+run_repo "rewrite that changes file content still aborts" 1 content
 extra=""
 refs_in=""
 if [ "$assert_rc" -eq 1 ]; then

@@ -313,9 +313,16 @@ cat > "$HOOKS/pre-push" <<'HOOK_EOF_9x'
 #      and exits 0 when the diff range comes back empty (dropped/consumed refs,
 #      an unfetchable remote sha, a path filter that matches nothing). When the
 #      push carries new commits — or carries none because every ref already
-#      points at what the remote has — that is a bypass, so it aborts. A
-#      deletion-only push is the one legitimate skip: nothing arrives, so it is
-#      allowed with a note.
+#      points at what the remote has — that is a bypass, so it aborts. Two
+#      skips are legitimate and are allowed with a note: a deletion-only push
+#      (nothing arrives), and a message-only rewrite, where every arriving ref
+#      REPLACES a commit the remote already has with an identical tree — an
+#      amended message, the only way to fix a published one. The old commit is
+#      still in the object db, so the two trees are compared rather than
+#      assumed: an empty commit added on top is not a rewrite, and a remote
+#      sha this clone cannot resolve is treated as a real push. Anything
+#      unproven stays a refusal. (Real case, 2026-10-28: a reworded message
+#      was refused as a gate bypass because its diff was empty.)
 #
 # The refs are buffered once and replayed to lefthook, so no downstream
 # consumer (git-lfs, a wrapper) can eat them on the way.
@@ -483,9 +490,20 @@ ref_lines=$(grep -c . "$REFS_FILE" 2>/dev/null || true)
 # A push "arrives" when at least one ref carries commits: local sha present,
 # not the all-zero null sha (deletion), and different from the remote side.
 # Deletion-only pushes are the one legitimate no-files push.
+#
+# same_tree_all marks the other one: EVERY arriving ref replaces a commit the
+# remote side already has, with the tree that commit already carried. That is
+# a message-only rewrite (git commit --amend -m), and the gates have nothing to
+# look at — they would diff an empty range. The proof is three-way and any ref
+# that fails a leg clears the flag: the remote commit must exist in this clone
+# (a reword leaves it in the object db; an unfetched one is unknowable, so it
+# keeps its gates), it must NOT be an ancestor of what is being pushed (an
+# empty commit stacked on top is a new commit, not a rewrite), and the two
+# trees must be identical.
 ZERO_SHA=0000000000000000000000000000000000000000
 arriving=""
 deleting=""
+same_tree_all=""
 while read -r _lref lsha _rref rsha
 do
   [ -n "$lsha" ] || continue
@@ -493,8 +511,16 @@ do
     deleting=1
     continue
   fi
-  if [ "$lsha" != "$rsha" ]; then
-    arriving=1
+  [ "$lsha" = "$rsha" ] && continue
+  arriving=1
+  if git cat-file -e "$rsha^{commit}" 2>/dev/null \
+     && ! git merge-base --is-ancestor "$rsha" "$lsha" 2>/dev/null \
+     && git diff --quiet "$rsha" "$lsha" 2>/dev/null
+  then
+    same_tree_all=1
+  else
+    same_tree_all=""
+    break
   fi
 done <"$REFS_FILE"
 
@@ -525,15 +551,19 @@ cat "$OUT_FILE" >&2
 
 # lefthook's skip path: the summary shows the command as skipped for "no
 # matching push files" and the exit code is still 0. Treat that as a failure
-# whenever commits are actually arriving.
+# whenever commits are actually arriving with content the gates have not seen.
 if grep -q "no matching push files" "$OUT_FILE"; then
-  if [ -n "$arriving" ]; then
+  if [ -n "$arriving" ] && [ -z "$same_tree_all" ]; then
     refuse_skip "lefthook skipped the gates ('no matching push files') for a push that carries new commits"
   fi
-  if [ -z "$deleting" ]; then
+  if [ -n "$same_tree_all" ]; then
+    echo "pre-push: note: gates skipped — message-only rewrite (every arriving ref" >&2
+    echo "  carries a tree the remote already has; no file content to verify)." >&2
+  elif [ -z "$deleting" ]; then
     refuse_skip "the push range came back empty — no ref carries a commit the remote does not already have"
+  else
+    echo "pre-push: note: gates skipped for a deletion-only push (no commits arriving)." >&2
   fi
-  echo "pre-push: note: gates skipped for a deletion-only push (no commits arriving)." >&2
 fi
 
 exit 0
