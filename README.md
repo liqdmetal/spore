@@ -312,6 +312,34 @@ pre-push gate in `scripts/gates.sh` refuses a push from a clone that never
 armed it, so the omission fails the push instead of waiting for the first
 ambiguity to hurt.
 
+**Keep exactly one account per host.** GCM's store is keyed by *username*, not
+by identity, so a second entry is not necessarily a second account: on
+2026-10-30 this machine held `liqdmetal` and `x-access-token` whose secrets
+were byte-identical and which both authenticated as `liqdmetal`. Two keys is
+all it takes for every username-less credential query — every `git push` — to
+hit the picker and hang, which is the state the guard has to refuse. Check it
+before it bites, on a fresh clone and after any `gh`/`git-credential-manager`
+login:
+
+```
+git-credential-manager github list     # expect one line per host
+```
+
+More than one line means a duplicate. Drop the redundant name, keeping the one
+you actually authenticate as (the guard's refusal names both, so a push tells
+you the same thing), then confirm the plain path works with no account named
+and no token in the URL:
+
+```
+git-credential-manager github logout x-access-token
+printf 'protocol=https\nhost=github.com\n\n' | git credential fill   # returns in <1s
+git push                                                              # no prompt
+```
+
+The removal is local to the GCM store — no repo config, token file or
+environment variable is involved — and a later `gh auth login` can re-create a
+duplicate, so re-check rather than assuming it stays clean.
+
 ## Sustainability (FOSS, grassroots — no VC, no token)
 
 Spore is BSD-3 free software. It stays free. The operator (not the protocol)
