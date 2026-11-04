@@ -6,8 +6,10 @@ name: release
 # (--clobber) rather than failing, so a bad build can be fixed without moving
 # the tag.
 #
-# Not built here: spore-peer / spore-iroh. They are Rust and need their own
-# targets and cross toolchains; this workflow covers the Go messenger only.
+# This workflow builds cmd/spore only. The in-repo Go cmd/spore-peer is an
+# E2 direct-body transport, distinct from the historical Rust spore-peer /
+# spore-iroh projects. It is not packaged here. Reusing historical peer asset
+# names requires an explicit transport/compatibility decision, not just a build.
 
 on:
   push:

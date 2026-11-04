@@ -10,7 +10,7 @@ RPC server, and the `spore` binary. Everything else is a command.
 - pick your OS, download `spore-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
 
 **Optional direct-peer server:**
-- Download the matching `spore-peer-<os>-<arch>` release asset if you will serve E2 bodies from your own machine. `spore-peer` defaults to loopback; remote use requires a trusted reachable LAN/VPN endpoint.
+- Serve E2 bodies from your own machine with `spore serve -dir <hold> -listen 127.0.0.1:8099`, or build the same server standalone: `go install github.com/liqdmetal/spore/cmd/spore-peer@latest`. Current releases ship no `spore-peer` asset — that binary is in-repo Go, not packaged. Both defaults bind loopback; remote use requires a trusted reachable LAN/VPN endpoint.
 
 **E2 kit and body store** (required for new messages):
 - Run `spore init -dir ~/.spore` and keep the identity/state files private.

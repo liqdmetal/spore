@@ -121,9 +121,11 @@ spore donate --all   # per-chain donation rail
 ```
 
 (Not building? The checksum-verified installer in
-[`docs/ONBOARDING.md`](ONBOARDING.md#get-the-binary) covers the same platforms
-the release matrix ships — including the `spore-peer` transport this document
-describes.)
+[`docs/ONBOARDING.md`](ONBOARDING.md#get-the-binary) installs the same
+platforms the release matrix ships — `spore` itself. The peer transport is
+in-repo Go `cmd/spore-peer` (or `spore serve`), not a separate release asset
+in current releases; build it from source when this document's peer commands
+apply to your node.)
 
 ## Serverless bodies (`sporepeer://`) — nobody holds your bytes but you two
 
@@ -207,7 +209,10 @@ what it reclaims.
 If a contact hands you a `FabricRelays` line for their card, they are asking
 you to run the pointer-forwarding half ([`RELAY_FABRIC.md`](RELAY_FABRIC.md)):
 a `spore-peer serve -fabric` daemon that queues 74-byte pointers for
-recipients to drain. It is the same binary and the same hold as above — one
+recipients to drain. (This `serve -fabric` surface is the Rust `spore-peer`
+sibling project — the in-repo Go `cmd/spore-peer` only has
+`version|serve|fetch|put` (no fabric flag); build the sibling from its own
+checkout.) It is the same binary and the same hold as above — one
 flag turns the body node into a relay:
 
 ```bash

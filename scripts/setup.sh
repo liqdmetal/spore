@@ -14,7 +14,9 @@
 # This script runs both, verifies both, and exits non-zero naming the exact
 # command to run when one is still wrong. It also reports a credential store
 # holding two GitHub accounts: the guard can only refuse a push then, so the
-# duplicate is caught here, at arm-time, rather than at push-time.
+# duplicate is caught here, at arm-time, rather than at push-time. It reports a
+# missing go/gofmt for the same reason: the pre-push gates shell out to them and
+# fail closed, so an unarmed toolchain turns every push into an exit-127 stop.
 #
 #   scripts/setup.sh          install anything missing, then verify
 #   scripts/setup.sh --check  verify only — changes nothing, safe in CI
@@ -89,6 +91,42 @@ if hooks_armed && [ -f "$SELF_DIR/hooks-manifest.sha256" ]; then
     warn "hooks DRIFT from the committed manifest — inspect with:
   scripts/verify-hooks.sh"
   fi
+fi
+
+# ---- 1b. Go toolchain ------------------------------------------------------
+# The hooks above run scripts/gates.sh, which shells out to `go` and `gofmt`,
+# and a gate that cannot run fails closed by design. So a PATH with no Go is
+# not a soft warning: every push stops ~30 ms in at `go build ./...` with exit
+# 127, having verified nothing, and the operator sees a push failure with no
+# obvious cause. Real case: Go installed at ~/go-toolchain/go/bin on Windows
+# with no PATH entry at all, which cost three push attempts to diagnose. Check
+# it here, where arming happens, because that is the last moment it is cheap.
+#
+# Presence only: a version floor would need its own policy, and gates.sh is the
+# thing that actually has to work. gofmt ships beside go, but is checked
+# separately so a PATH pointing at a stray copy of one names the right culprit.
+say ""
+say "== Go toolchain =="
+missing_go=""
+for tool in go gofmt; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    say "$tool: $(command -v "$tool")"
+  else
+    missing_go="${missing_go}${missing_go:+ and }$tool"
+  fi
+done
+if [ -n "$missing_go" ]; then
+  warn "$missing_go NOT on PATH — the pre-push gates run go and gofmt and fail
+  closed, so every push stops at 'go build ./...' (exit 127) without running a
+  single test.
+  Windows: add the toolchain's bin directory to PATH, then open a NEW shell
+    (usually %USERPROFILE%/go-toolchain/go/bin or C:/Program Files/Go/bin).
+    Already-running shells keep their old PATH — that is the usual miss.
+  Debian/Ubuntu: sudo apt install golang-go
+  Fedora: sudo dnf install golang
+  macOS: brew install go"
+else
+  say "go: $({ go version 2>/dev/null || true; } | awk '{print $3}') (gates can run)"
 fi
 
 # ---- 2. credential guard ---------------------------------------------------

@@ -25,6 +25,8 @@ slsa-verifier verify-artifact spore-linux-amd64 \
   --source-uri github.com/liqdmetal/spore --source-tag v0.10.2
 ```
 
+Attestation attaches on tag-push runs; a manual workflow-dispatch rebuild of an existing tag skips it — check the release for `multiple.intoto.jsonl` before verifying.
+
 `spore version` reports `v0.10.2`. Behaviour is identical to v0.10.1.
 
 ## v0.10.1 — first pipeline-built release, with SLSA provenance (2026-10-25)
@@ -81,7 +83,8 @@ amd64 and Linux amd64 on the same source.
 Two gaps, named rather than implied: this release has **no SLSA provenance**
 (v0.7.0–v0.8.6 shipped `multiple.intoto.jsonl`; this build is attested only by
 its workflow run and checksums), and it carries **no `spore-peer` binaries** —
-the peer and sidecar are Rust and are not built by that workflow.
+neither the in-repo Go `cmd/spore-peer` nor the historical Rust peer/sidecar are
+built by that workflow (build `cmd/spore-peer` from source when needed).
 
 It also settles the numbering: v0.10.0 supersedes `v0.9.0` (tagged, never
 released) and `v0.5.1` (a stray tag with no assets), and is a minor bump

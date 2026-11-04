@@ -9,8 +9,14 @@ central server. No VC. No token.
 Two commands: `spore init` then `spore msg send-e2 …`. (`spore demo` runs with
 no chain and no wallet if you just want to see it work.)
 
-**Install (checksum-verified, `spore` + `spore-peer`, all of
-linux/macOS/Windows, amd64 + arm64):**
+**Install (checksum-verified `spore`; optional `spore-peer` when the selected
+release provides a matching asset):**
+
+The current Go release workflow targets linux/macOS/Windows, amd64 + arm64,
+for `spore` only. The installers skip a missing peer asset with a notice.
+`cmd/spore-peer` in this repo is a Go E2 direct-body server; it is distinct
+from the historical Rust transport and is not built by this workflow.
+The shared executable name does not establish protocol compatibility.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh   # linux/macOS/WSL
@@ -20,22 +26,25 @@ irm https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.ps1 |
 ```
 
 Then `spore demo` — the full send → receive → burn lifecycle, no wallet, no
-setup. Releases also carry SLSA keyless provenance
-(`multiple.intoto.jsonl`) verifiable with
+setup. Tag-push release runs are configured to attach SLSA keyless provenance;
+manual workflow-dispatch runs skip it. Check the selected release for
+`multiple.intoto.jsonl`, verifiable with
 [slsa-verifier](https://github.com/slsa-framework/slsa-verifier).
 
 ## Releases
 
 | Version | Date | Highlights |
 |---|---|---|
+| **[v0.10.2](https://github.com/liqdmetal/spore/releases/tag/v0.10.2)** | 2026-10-25 | First pipeline-built release: all six Go targets built on GitHub Actions with `.sha256` + `SHA256SUMS` per asset, SLSA keyless provenance attached on tag pushes, release notes from the tag annotation. Ships `cmd/spore` only — no `spore-peer` asset (the E2 direct-body server `cmd/spore-peer` is in-repo Go, built from source when needed). Full history: docs/RELEASES.md |
 | **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. Pointing the carrier at a real chain moves to v0.9.0. |
 | **[v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0)** | 2026-09-23 | First release shipping the **full stack**: `spore` (Go) for all six targets (linux/macOS/Windows × amd64/arm64) plus the Rust `spore-peer` transport for five of them, per-asset `.sha256` checksums, and SLSA keyless provenance for every binary. Installers verify before they swap anything into place. |
 
-Pin the install with `SPORE_RELEASE=v0.8.0`, and verify a downloaded binary
-the way CI does with `slsa-verifier … --source-tag v0.8.0` — full recipe in
+Pin the install with `SPORE_RELEASE=v0.10.2`, and verify a downloaded binary
+the way CI does with `slsa-verifier … --source-tag v0.10.2` — full recipe in
 [`docs/ONBOARDING.md`](docs/ONBOARDING.md#get-the-binary). One honest
-caveat: `spore-peer` for Windows arm64 is not shipped yet (the Rust
-cross-linker for that target isn't trustworthy); Go `spore` for arm64 is.
+historical caveat for the Rust peer packages described above: Windows arm64
+was excluded. This does not describe the in-repo Go E2 peer or establish the
+asset inventory of a newer release; check that release before installing.
 
 ---
 

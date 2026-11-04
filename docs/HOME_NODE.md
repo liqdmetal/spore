@@ -12,18 +12,20 @@ service is a blind courier. → [`docs/MODEL_B_SERVICE.md`](MODEL_B_SERVICE.md).
 
 ## 0. Install the binaries on the node
 
-The node needs `spore` (mailbox/relay) and optionally `spore-peer` (if you
-serve bodies over `sporepeer://`). One command, checksum-verified — works on
-x86-64 and arm64 (Raspberry Pi 4/5, most SBCs):
+The node needs `spore` (mailbox/relay) and optionally the direct-peer
+server (if you serve bodies over `sporepeer://`). One command,
+checksum-verified — works on x86-64 and arm64 (Raspberry Pi 4/5, most
+SBCs):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh
-#  → ~/.local/bin/{spore,spore-peer}; add ~/.local/bin to PATH if needed
+#  → ~/.local/bin/spore; add ~/.local/bin to PATH if needed
 ```
 
-Pin a version with `SPORE_RELEASE=vX.Y.Z`, skip the transport with
-`SPORE_NO_PEER=1`. Verify after:
-`spore -version`.
+Pin a version with `SPORE_RELEASE=vX.Y.Z`. The installers look for a
+`spore-peer` asset only when the selected release ships one (current v0.10.x
+releases don't — run `spore serve`, or build `cmd/spore-peer` from source).
+Verify after: `spore -version`.
 
 ## What a home node runs
 
