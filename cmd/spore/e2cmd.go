@@ -212,7 +212,7 @@ func e2Carrier(fs *flag.FlagSet) (ratchetwire.ChainCarrier, error) {
 		codec = ratchetwire.DeroChainCodec{}
 	case "evm", "solana":
 		codec = ratchetwire.JSONCodec{}
-	case "nostr", "bitcoin", "cosmos", "ton":
+	case "nostr", "bitcoin", "cosmos", "ton", "tron":
 		codec = ratchetwire.CanonicalChainCodec{}
 	default:
 		return ratchetwire.ChainCarrier{}, fmt.Errorf("E2 pointer carrier unsupported on %s; refusing downgrade", c.Name())
@@ -370,7 +370,7 @@ func trimTrailingNewline(b []byte) []byte {
 
 func e2Common(fs *flag.FlagSet) {
 	fs.String("config", "", "config file path (default ~/.spore/config.json or $SPORE_CONFIG)")
-	fs.String("chain", "dero", "pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton (xmr unsupported)")
+	fs.String("chain", "dero", "pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton|tron (xmr unsupported)")
 	fs.String("ringsize", "16", "DERO Spore ring size: 8 or 16 (default 16; DERO only)")
 	fs.String("rpc", "", "chain RPC")
 	fs.String("rpc-login", "", "RPC user:pass")

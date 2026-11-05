@@ -17,6 +17,7 @@ import (
 	"github.com/liqdmetal/spore/internal/nostr"
 	solanaBackend "github.com/liqdmetal/spore/internal/solana"
 	"github.com/liqdmetal/spore/internal/ton"
+	"github.com/liqdmetal/spore/internal/tron"
 	"github.com/liqdmetal/spore/internal/xmr"
 )
 
@@ -53,6 +54,7 @@ type ChainConfig struct {
 	Signer                         bitcoin.SignerBroadcaster
 	Relay                          nostr.Relay
 	Sender                         ton.Sender
+	TronSender                     tron.Sender
 	ChainID                        string
 }
 
@@ -106,6 +108,9 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 	case "ton":
 		b := ton.New(ton.Config{Address: cfg.Address, Network: cfg.Network, BaseURL: cfg.BaseURL, PostPath: cfg.PostPath, ListPath: cfg.ListPath, HeightPath: cfg.HeightPath, Sender: cfg.Sender, DeliveryGuaranteed: cfg.DeliveryGuaranteed})
 		return b, nil
+	case "tron":
+		b := tron.New(tron.Config{Address: cfg.Address, Network: cfg.Network, BaseURL: cfg.BaseURL, PostPath: cfg.PostPath, ListPath: cfg.ListPath, HeightPath: cfg.HeightPath, Sender: cfg.TronSender, DeliveryGuaranteed: cfg.DeliveryGuaranteed})
+		return b, nil
 	case "solana":
 		if cfg.KeyFile == "" {
 			return nil, fmt.Errorf("solana backend needs -keyfile (solana signer keypair JSON)")
@@ -124,11 +129,11 @@ func Build(ctx context.Context, cfg ChainConfig) (chain.Chain, error) {
 		}
 		return solanaBackend.NewBackend(cfg.RPC, prog, signer), nil
 	default:
-		return nil, fmt.Errorf("unknown chain type %q (want dero|evm|xmr|solana)", cfg.Type)
+		return nil, fmt.Errorf("unknown chain type %q (want dero|evm|xmr|solana|nostr|bitcoin|cosmos|ton|tron)", cfg.Type)
 	}
 }
 
 // Supported lists the backend type names.
 func Supported() []string {
-	return []string{"dero", "evm", "xmr", "solana", "nostr", "bitcoin", "cosmos", "ton"}
+	return []string{"dero", "evm", "xmr", "solana", "nostr", "bitcoin", "cosmos", "ton", "tron"}
 }
