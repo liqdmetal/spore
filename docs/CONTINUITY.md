@@ -113,6 +113,12 @@ perform a check-in, and it needs no owner key. The envelope contains the times
 the owner was last alive, which is metadata a holder already learns by holding
 the vault; it exposes nothing about the payload.
 
+A fully offline live rehearsal of this path — simulated carrier, a real mailbox
+relay, two CLI identities and a running inbox — is
+`scripts/rehearsal-continuity-checkin.sh`. It checks adoption, refusal safety,
+byte-identical holder copies, and that a check-in envelope never reaches the
+mail index.
+
 ## Security boundary
 
 - No chain transaction is posted.
