@@ -61,8 +61,18 @@ func TestEncodeRejectsInvalidPointers(t *testing.T) {
 		"zero deadline v1": make([]byte, PointerV1Size),
 		"zero deadline v2": make([]byte, PointerV2Size),
 		"wrong version":    append([]byte{3, 0}, make([]byte, PointerV1Size-2)...),
-		"v1 len v2 version": func() []byte { p := make([]byte, PointerV1Size); p[0] = PointerV2Version; p[deadlineOffset] = 1; return p }(),
-		"v2 len v1 version": func() []byte { p := make([]byte, PointerV2Size); p[0] = PointerV1Version; p[deadlineOffset] = 1; return p }(),
+		"v1 len v2 version": func() []byte {
+			p := make([]byte, PointerV1Size)
+			p[0] = PointerV2Version
+			p[deadlineOffset] = 1
+			return p
+		}(),
+		"v2 len v1 version": func() []byte {
+			p := make([]byte, PointerV2Size)
+			p[0] = PointerV1Version
+			p[deadlineOffset] = 1
+			return p
+		}(),
 		"reserved byte set": func() []byte { p := validV1(); p[1] = 1; return p }(),
 		"bad length":        make([]byte, 73),
 	}
