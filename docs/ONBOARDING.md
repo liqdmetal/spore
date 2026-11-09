@@ -152,8 +152,8 @@ is about inbound reachability, UDP, and exit-node blocking — not about spore.
 | Nostr body store (`wss://…`) | ✅ measured | the damus relay answered through Tor (TCP 443) |
 | DERO | ✅ with a remote wallet RPC | point `-rpc` at a wallet node behind an `.onion`; no local sync, no chain on disk (mechanism, not measured) |
 | EVM | ✅ measured | `mainnet.base.org` and `base-rpc.publicnode.com` returned chainId `0x2105` over Tor |
-| Solana | ✅ measured | `api.mainnet-beta.solana.com` answered `getHealth: ok` over Tor |
-| Tron | ✅ measured | TronGrid and `tron-rpc.publicnode.com` returned blocks over Tor (TronGrid 403s a bare curl UA, accepts the Go one) |
+| Solana | ✅ with `solana-rpc.publicnode.com` | the official `api.mainnet-beta.solana.com` now refuses Tor exits ("Your IP or provider is blocked from this endpoint", 2026-11-09); publicnode answered `getHealth: ok` over Tor |
+| Tron | ✅ with `tron-rpc.publicnode.com` | TronGrid answers 403 to every user-agent from a Tor exit while answering direct — the UA was never the problem, the exit is; publicnode returned a block over Tor |
 | Bitcoin | ✅ measured | Blockstream Esplora returned the tip height over Tor |
 | Cosmos / TON | ✅ measured | publicnode REST `node_info` and toncenter `getMasterchainInfo` both answered over Tor |
 | XMR settlement | ✅ with a remote wallet RPC | point its wallet RPC at `monero-wallet-rpc` behind an `.onion` (Digest auth); no local node (mechanism, not measured) |
@@ -195,6 +195,11 @@ looked.
   failed **direct**, so that one is this network, not Tor.
 - Not measured: the wallet-RPC and onion-service rows. They are mechanisms with no endpoint
   here to point at, which is why they are labelled that way.
+- Re-measured the same day with `spore doctor -tor` on a second circuit (exit `185.220.101.152`):
+  Base, Blockstream Esplora, toncenter, Cosmos `publicnode` and the damus relay answered again,
+  and two rows changed — the official Solana RPC and TronGrid refuse Tor exits outright, so both
+  carriers go through their `publicnode` endpoints. Exit blocking is per-exit: another circuit
+  can differ, which is why this is a command and not a promise.
 
 Endpoints change their edges without telling anyone. Re-run this before trusting the table:
 `spore doctor -tor` dials the same endpoints through a local SOCKS5 proxy (Tor's `SocksPort`)

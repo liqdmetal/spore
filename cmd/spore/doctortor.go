@@ -197,10 +197,17 @@ func torCarrierProbes(storeURL string) []torProbe {
 		{Name: "evm-base", Method: http.MethodPost, URL: "https://mainnet.base.org",
 			Body:     `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`,
 			Evidence: evidenceEVMChainID("0x2105")},
-		{Name: "solana", Method: http.MethodPost, URL: "https://api.mainnet-beta.solana.com",
+		// publicnode, not the official RPC: api.mainnet-beta.solana.com refuses
+		// Tor exits outright ("Your IP or provider is blocked from this
+		// endpoint", measured 2026-11-09), and a probe that always fails is
+		// not a probe. The table names both endpoints and why.
+		{Name: "solana", Method: http.MethodPost, URL: "https://solana-rpc.publicnode.com",
 			Body:     `{"jsonrpc":"2.0","id":1,"method":"getHealth"}`,
 			Evidence: evidenceSolanaHealth},
-		{Name: "tron", Method: http.MethodPost, URL: "https://api.trongrid.io/wallet/getnowblock",
+		// publicnode, not TronGrid: TronGrid answers 403 from Tor exits whatever
+		// user-agent is sent (and answers direct), so the earlier "it rejects
+		// the UA" reading was wrong — it rejects the exit.
+		{Name: "tron", Method: http.MethodPost, URL: "https://tron-rpc.publicnode.com/wallet/getnowblock",
 			Body:     `{}`,
 			Evidence: evidenceTronBlock},
 		{Name: "bitcoin", Method: http.MethodGet, URL: "https://blockstream.info/api/blocks/tip/height",
@@ -321,16 +328,30 @@ func evidenceTipHeight(status int, body []byte) (string, error) {
 }
 
 func evidenceCosmosNodeInfo(_ int, body []byte) (string, error) {
+	// The REST gateway answers default_node_info (the gRPC one says
+	// node_info). Accepting only the second shape failed every real Cosmos
+	// endpoint while the carrier was fine — the probe was the broken part.
 	var r struct {
 		NodeInfo struct {
 			Network string `json:"network"`
 			Moniker string `json:"moniker"`
 		} `json:"node_info"`
+		DefaultNodeInfo struct {
+			Network string `json:"network"`
+			Moniker string `json:"moniker"`
+		} `json:"default_node_info"`
 	}
-	if err := json.Unmarshal(body, &r); err != nil || r.NodeInfo.Network == "" {
-		return "", fmt.Errorf("body has no node_info.network: %.60q", string(body))
+	if err := json.Unmarshal(body, &r); err != nil {
+		return "", fmt.Errorf("body is not Cosmos node-info JSON: %.60q", string(body))
 	}
-	return "node_info " + r.NodeInfo.Network + " (" + r.NodeInfo.Moniker + ")", nil
+	network, moniker := r.NodeInfo.Network, r.NodeInfo.Moniker
+	if network == "" {
+		network, moniker = r.DefaultNodeInfo.Network, r.DefaultNodeInfo.Moniker
+	}
+	if network == "" {
+		return "", fmt.Errorf("body has neither node_info nor default_node_info: %.60q", string(body))
+	}
+	return "node_info " + network + " (" + moniker + ")", nil
 }
 
 func evidenceTONMasterchain(status int, body []byte) (string, error) {
