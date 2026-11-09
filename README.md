@@ -107,13 +107,14 @@ transaction — so Spore never pretends to. What it guarantees:
 | Carrier | Backend | Pointer transport | Compost | Status |
 |---|---|---|---|---|
 | **DERO** | `internal/dero` | native encrypted tx payload carrying opaque E2 pointer | body TTL | **live, mainnet** |
-| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (local Anvil); deployment pending |
+| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | **live on Base; deployment receipt published** (LIVE_NODES §3) |
 | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
 | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
 | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
 | **Cosmos SDK** | `internal/cosmos` | configurable memo field | chain-specific | configurable seam |
 | **TON** | `internal/ton` | configurable comment | no universal burn | configurable seam |
-| Monero (XMR) | `internal/xmr` | 8-byte payment id | off-chain rendezvous | mock-verified; **too small for E2 pointer — refused, not downgraded** |
+| **Tron** | `internal/tron` | transfer memo (tx `data` field), V1 74 B / V2 106 B | body TTL; a transfer is immutable, so no burn is claimed | cheap-tier memo carrier |
+| Monero (XMR) | `internal/xmr` | 8-byte payment id — **money, not a pointer carrier** | off-chain rendezvous | **payment asset: a real payment settled through `bill watch`** (MONERO_SETTLEMENT §8); the E2 pointer is refused, not downgraded |
 
 Full carrier matrix, invariants, and deployment order:
 [`docs/CARRIER_MATRIX.md`](docs/CARRIER_MATRIX.md).

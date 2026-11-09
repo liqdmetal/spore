@@ -116,18 +116,25 @@ done
 # rehearsal must see the same bytes CI sees, whatever core.autocrlf says.
 gitx() { git -c core.autocrlf=false -c core.eol=lf "$@"; }
 
-# The flip already being in this tree is the release-day state, not a failure:
-# there is nothing left to rehearse.
-if gitx apply --reverse --check "$PATCH_FLIP" >/dev/null 2>&1; then
-  echo "release-day-rehearsal: the flip is already applied to this tree — nothing to rehearse"
-  exit 0
-fi
+# ---- the frozen base -------------------------------------------------------
+# These patches rehearse the v0.9.0 release day and are frozen against the tree
+# they were written for. Applying them to a moving HEAD turned every later docs
+# commit into a false failure, and the cure each time was to re-derive the
+# patch -- the opposite of a freeze. It also held the shipped docs hostage: the
+# hunks only matched while README and ONBOARDING kept calling the Base EVM
+# deployment "pending", long after LIVE_NODES recorded it. Pin the base: the
+# patches and the tree they patch now move together, or not at all.
+BASE_REF=${SPORE_RELEASE_REHEARSAL_BASE:-cb1e74c}
+base_full=$(git rev-parse --verify "$BASE_REF^{commit}" 2>/dev/null) || {
+  echo "release-day-rehearsal: frozen base $BASE_REF is not in this clone -- fetch it, or set SPORE_RELEASE_REHEARSAL_BASE" >&2
+  exit 2
+}
+base_sha=$(git rev-parse --short "$base_full")
 
-sha=$(git rev-parse --short HEAD 2>/dev/null || echo '?')
 echo "== release-day rehearsal: v0.9.0 flip + fees, applied to a throwaway tree =="
 echo "pass 1: $PATCH_FLIP"
 echo "pass 2: $PATCH_FEE"
-echo "tree:   HEAD $sha (committed state; the working tree is not used)"
+echo "tree:   frozen base $base_sha (not HEAD; the working tree is not used)"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/spore-release-rehearsal.XXXXXX")
 # Cleanup must never decide the verdict. The status captured on entry is what the
@@ -158,7 +165,7 @@ trap 'exit 130' INT TERM
 
 work="$tmp/tree"
 mkdir -p "$work"
-gitx archive HEAD | tar -x -C "$work"
+gitx archive "$base_full" | tar -x -C "$work"
 # The scratch is its own repository so that `git apply` cannot walk up out of
 # it into the real checkout and patch the wrong tree.
 git init -q "$work"
@@ -166,11 +173,11 @@ git init -q "$work"
 cd "$work"
 
 echo
-echo "-- pass 1: the flip still applies to HEAD"
+echo "-- pass 1: the flip still applies to its frozen base"
 if ! gitx apply --check "$top/$PATCH_FLIP" 2>"$tmp/apply.log"; then
-  echo "REHEARSAL FAILED: the frozen flip no longer applies to HEAD." >&2
-  echo "The docs moved under it. Re-derive release-designs/v0.9.0-doc-flips.patch" >&2
-  echo "from the current tree (see the provenance header) and re-run." >&2
+  echo "REHEARSAL FAILED: the frozen flip no longer applies to its frozen base $base_sha." >&2
+  echo "The base was rewritten, or the patch file was edited. Re-derive it against $base_sha" >&2
+  echo "(see the provenance header) and re-run." >&2
   sed 's/^/  /' "$tmp/apply.log" >&2
   exit 1
 fi
@@ -181,7 +188,7 @@ if ((FLIP_ONLY == 0)); then
   echo
   echo "-- pass 2: the fee notes still apply on top of the flip"
   # The fee patch's base IS the flipped tree, so this also asserts the pass
-  # order: against unflipped HEAD it does not apply at all.
+  # order: against the unflipped base it does not apply at all.
   if ! gitx apply --check "$top/$PATCH_FEE" 2>"$tmp/apply2.log"; then
     echo "REHEARSAL FAILED: the fee-notes patch does not apply on top of the flip." >&2
     echo "Either the flip moved a line the fee patches anchor on, or the fee patch" >&2
@@ -238,7 +245,7 @@ sed 's/^/  /' "$tmp/fill.log"
 
 if ((CHECK_ONLY)); then
   echo
-  echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $sha,"
+  echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $base_sha,"
   echo "and the fill recipe still resolves every marker they introduce"
   exit 0
 fi
@@ -397,7 +404,7 @@ grep -E '^--- FAIL: Test' "$tmp/gate-sabotaged.log" | sed 's/^/   /'
 
 echo
 if ((FLIP_ONLY)); then
-  echo "RELEASE-DAY REHEARSAL GREEN — the flip applies to HEAD $sha and the receipt gate both passes it and rejects a doc-only flip (fee pass not rehearsed)"
+  echo "RELEASE-DAY REHEARSAL GREEN — the flip applies to HEAD $base_sha and the receipt gate both passes it and rejects a doc-only flip (fee pass not rehearsed)"
 else
-  echo "RELEASE-DAY REHEARSAL GREEN — flip + fees apply in order to HEAD $sha and the receipt gate both passes them and rejects a doc-only flip"
+  echo "RELEASE-DAY REHEARSAL GREEN — flip + fees apply in order to HEAD $base_sha and the receipt gate both passes them and rejects a doc-only flip"
 fi

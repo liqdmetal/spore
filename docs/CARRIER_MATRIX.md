@@ -18,7 +18,7 @@ one-shot message.
 | Bitcoin | `OP_RETURN` output, maximum 80 bytes | Off-chain TTL/reaping | Esplora-compatible indexer | Immutable; body-only compost | Carrier implementation |
 | Cosmos SDK chains | Configured memo/message field | Off-chain TTL/reaping | Configured LCD/RPC/indexer | Chain-specific; no generic burn claim | Configurable carrier seam |
 | TON | Configured comment/payload field | Off-chain TTL/reaping | Configured API/indexer | No generic burn claim | Configurable carrier seam |
-| Tron | Transfer memo (tx `data` field), V1 and V2 | Off-chain TTL/reaping | TronGrid/TronScan API | No primitive; transfer is immutable, body-only compost | Cheap-tier memo carrier (`internal/tron`) |
+| Tron | Transfer memo (tx `data` field), V1 and V2 | Off-chain TTL/reaping | TronGrid/TronScan API | No primitive; transfer is immutable, body-only compost | Cheap-tier memo carrier (`internal/tron`), shipped in v0.11.0 |
 
 ## Carrier invariants
 

@@ -161,16 +161,21 @@ if port_busy "$ANVIL_PORT"; then
   exit 2
 fi
 
-sha=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')
+BASE_REF=${SPORE_RELEASE_REHEARSAL_BASE:-cb1e74c}
+base_full=$(git -C "$REPO_ROOT" rev-parse --verify "$BASE_REF^{commit}" 2>/dev/null) || {
+  echo "release-fill-rehearsal: frozen base $BASE_REF is not in this clone -- fetch it, or set SPORE_RELEASE_REHEARSAL_BASE" >&2
+  exit 2
+}
+sha=$(git -C "$REPO_ROOT" rev-parse --short "$base_full")
 echo "== release-fill rehearsal: can release day's fill actually be completed? =="
-echo "tree:   HEAD $sha + both frozen passes"
+echo "tree:   frozen base $sha + both frozen passes"
 echo "chain:  anvil at $RPC ($ANVIL_BIN)"
 echo "fill:   scripts/release-fill.sh"
 
 # ---- the tree release day will be looking at -------------------------------
 work="$ROOT/tree"
 mkdir -p "$work"
-git -C "$REPO_ROOT" -c core.autocrlf=false archive HEAD | tar -x -C "$work"
+git -C "$REPO_ROOT" -c core.autocrlf=false archive "$base_full" | tar -x -C "$work"
 git init -q "$work"
 
 # The fill driver is not part of what is being rehearsed — it IS the thing under
@@ -187,7 +192,7 @@ done
 
 cd "$work"
 step "apply both frozen passes (the release-day starting state)"
-gitx apply "$REPO_ROOT/$PATCH_FLIP" || fail "the frozen flip does not apply to HEAD $sha"
+gitx apply "$REPO_ROOT/$PATCH_FLIP" || fail "the frozen flip does not apply to frozen base $sha"
 gitx apply "$REPO_ROOT/$PATCH_FEE" || fail "the fee patch does not apply on top of the flip"
 
 # The release surfaces are whatever the two passes write — the same derivation
@@ -412,6 +417,6 @@ cp "$ROOT/registry.bak" "$work/internal/evm/mailboxdefaults.go"
   fail "the registry was not restored byte-identically after the negative control"
 ok "gate RED without its receipt, and the registry restored byte-identically"
 
-printf '\n\033[1;32mRELEASE-FILL REHEARSAL GREEN\033[0m — %d checks. A complete fill of HEAD %s clears the sweep and keeps the receipt gate green.\n' \
+printf '\n\033[1;32mRELEASE-FILL REHEARSAL GREEN\033[0m — %d checks. A complete fill of frozen base %s clears the sweep and keeps the receipt gate green.\n' \
   "$PASS" "$sha"
 printf 'Remaining before the tag: the §3 receipt values themselves (this proved the machinery, not the chain).\n'

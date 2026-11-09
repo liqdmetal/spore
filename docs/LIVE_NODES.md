@@ -1,6 +1,9 @@
 # Live-node spec — verify EVM + Solana + XMR for real
 
-m³ EVM and Solana backends are **live-verified**; XMR is still mock-verified.
+m³ EVM and Solana backends are **live-verified**, and XMR settles real payments
+through `bill watch` (§1 and MONERO_SETTLEMENT §8). The E2 carrier round-trip
+`spore msg send/recv -chain xmr` is still open: an 8-byte payment id cannot carry
+the pointer.
 This spec tracks the live nodes that prove each for real, on the Hetzner box
 (YOUR-NODE-HOST) where the DERO node already lives.
 
@@ -8,8 +11,10 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
 1. **EVM** — ✅ **live-verified** on a local anvil node (below); **v0.9.0 target:
    `MyceliumMailbox` on Base** (comparison + runbook in §3).
 2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
-3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
-   `spore msg send/recv -chain xmr` can verify end-to-end like DERO did.
+3. **XMR (Monero)** — ✅ **settlement live-verified**: a real payment was billed
+   through `bill watch` into a receipt that carries its own tx proof (§1,
+   MONERO_SETTLEMENT §8). ⬜ Open: `spore msg send/recv -chain xmr` as a carrier
+   round-trip.
 
 ---
 

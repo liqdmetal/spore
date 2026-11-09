@@ -27,8 +27,9 @@ The script downloads from the
 each binary's checksum against the release's `.sha256` files, and only moves
 binaries into place after verification (a failed download never clobbers an
 existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
-`SPORE_RELEASE=v0.10.2`, the current release (2026-10-25), built end to end
-by the GitHub Actions pipeline (see docs/RELEASES.md). (v0.7.0 was the first
+`SPORE_RELEASE=v0.11.0`, the current release (2026-11-09) — Monero settlement
+end to end and signed job receipts, plus the orphan-body sweep and a Tron memo
+carrier — built end to end by the GitHub Actions pipeline (see docs/RELEASES.md). (v0.7.0 was the first
 release shipping the full stack: `spore` for all six platforms and the Rust
 `spore-peer` transport for five of them. Current releases ship `spore` only —
 the E2 direct-body server `cmd/spore-peer` is in-repo Go, built from source.)
@@ -59,7 +60,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
   --source-uri github.com/liqdmetal/spore --source-tag vTAG
 ```
 
-For the current release, `vTAG` is `v0.10.2`.
+For the current release, `vTAG` is `v0.11.0`.
 
 </details>
 
@@ -360,11 +361,12 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
 |---|---|---|
 | DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
 | Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
-| EVM | 🧪 dev (anvil-verified; mailbox contract deployment pending) | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); pay-with-message on calldata path. Contract delivery + per-chain defaults: LIVE_NODES.md §3 |
+| EVM | ✅ live on Base | any public EVM RPC + `spore evm-proxy` (loopback local signing — no wallet node needed); pay-with-message on calldata path. Receipt: LIVE_NODES.md §3 |
 | Nostr | 🧪 carrier impl | relay URLs + a Nostr key |
 | Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
 | Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
-| XMR | 🚧 not for E2 | 8-byte seam too small for the pointer — refused, not downgraded |
+| Tron | 🧪 cheap-tier memo carrier | a TronGrid/TronScan profile + a wallet sender; V1 74 B / V2 106 B memo, no burn (a transfer is immutable) |
+| XMR | 💰 money asset, not a pointer carrier | a `monerod` + `monero-wallet-rpc` behind auth; `bill address` / `bill watch` settle it. The 8-byte payment id is too small for the E2 pointer — refused, not downgraded |
 
 `-chain` selects the carrier (`dero` default). Full matrix + invariants: CARRIER_MATRIX.md.
 
