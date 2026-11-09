@@ -169,6 +169,12 @@ gitx archive "$base_full" | tar -x -C "$work"
 # The scratch is its own repository so that `git apply` cannot walk up out of
 # it into the real checkout and patch the wrong tree.
 git init -q "$work"
+# The machinery is not what is being rehearsed -- the docs are. Use the invoking
+# checkout's scripts, so a rehearsal never fails because the frozen base predates
+# a fix to the tooling itself (the older tag rehearsal commits a throwaway
+# repository with a plain message, which the current commit-msg hook rejects).
+mkdir -p "$work/scripts"
+cp "$top"/scripts/*.sh "$work/scripts/" 2>/dev/null || true
 
 cd "$work"
 
