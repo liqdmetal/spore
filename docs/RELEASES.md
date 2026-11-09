@@ -53,6 +53,27 @@ that vanished. It runs pre-push and inside release-readiness.
 
 No wire-format change.
 
+### Assets verified after publication
+
+All six binaries were downloaded from this release on 2026-11-09 and checked three ways:
+against `SHA256SUMS`, against each asset's own `.sha256`, and against the digests in
+`multiple.intoto.jsonl` from the tag run.
+
+| Asset | SHA-256 |
+|---|---|
+| spore-darwin-amd64 | `e89e4fbfec9d502e4b18dd78514cc49ae2cf0e908b74a237298d52bb688e1f3d` |
+| spore-darwin-arm64 | `adb633d33eac1ec5df079963c68e8440db4c1f5371950a3125d2168986ab3661` |
+| spore-linux-amd64 | `69cb5af2902018824c3563c308add9ab1675ad83072037553d12f5c61c8cf8e5` |
+| spore-linux-arm64 | `616576ee8805adee20e49c2160f653228bceb6a043186490d15cbe22f3fcd2a1` |
+| spore-windows-amd64.exe | `f770a1f4b6f86dfeae1205f324e0d627d379e79909615c64936a6f24589c72af` |
+| spore-windows-arm64.exe | `6b666fcd5122c6ace9618b58a5e18da0720b5d7cc8ae3b9739629a88300fe739` |
+
+Every `.sha256` file agreed with its asset, and every asset name appeared as a provenance
+subject with the same digest. The attestation was compared by decoding its DSSE payload —
+`slsa-verifier` was not installed on the verifying machine, so the signature itself was not
+checked here; ONBOARDING.md has the recipe for doing that on a machine that has it.
+
+
 
 6 commits, 7 files, +237/−81 vs `v0.11.0`. No product code changed: the binaries
 are built from the same source as v0.11.0, so behaviour is identical. What moved
