@@ -481,6 +481,10 @@ echo "invoice #42 settled" | spore msg send-e2 -to ADDR -bundle-url URL \
 spore msg invoice -to ADDR -session <id> -amount 25dero -for "invoice #42"
 spore msg pay     -to ADDR -session <id> -amount 25dero -invoice <invoice-id>
 
+For paying a stranger in Monero end to end — the invoice, the wallet payment,
+the dual-signed receipt, and the hosted-mailbox option — see
+[PAY_IN_XMR.md](PAY_IN_XMR.md).
+
 # offline: queue now, send when a carrier is reachable:
 echo "from the plane" | spore msg compose -to ADDR -bundle-url URL -pinned-sig HEX
 spore msg flush                             # drains the queue through the real send path

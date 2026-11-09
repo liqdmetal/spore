@@ -45,7 +45,7 @@ XMR at all.
 **12**, so 1 XMR = 1 000 000 000 000 piconero:
 
 ```
-spore msg invoice -asset xmr -amount 2.5xmr -for "valve work"
+spore msg invoice -to ADDR -session SESSION_HEX -amount 2.5xmr -for "valve work"
 spore sign receipt create … -settlement rail=xmr,network=monero-mainnet,asset=xmr,amount=2500000000000,txid=HEX,settled=2026-10-26T00:00:00Z
 ```
 
