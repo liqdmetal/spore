@@ -72,6 +72,98 @@ mailbox or the nostr commons doesn't require it.
 
 Below, `spore …` means your binary. Verify with `spore -version`.
 
+## Ephemeral clients — Tails and Whonix
+
+Both systems are amnesic and Tor-only, and spore fits them: the client is one static
+binary, all state is one directory, and every network path is plain HTTPS. Two things
+change the answer to every question below: **the network is TCP-over-Tor only**, and
+**nothing survives a reboot unless you ask it to**.
+
+### Install (no persistence, no root)
+
+Tails keeps root locked behind an admin password you set yourself, and the installer
+never needs it — it writes to `~/.local/bin`. Tor is the only route out, so the GitHub
+release download can be slow or throttled: retry rather than conclude it is broken.
+
+```bash
+# Tails Terminal or a Whonix Workstation
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+spore -version                       # prints the release you got, e.g. v0.11.0
+spore demo                           # no chain, no wallet, no network — proves the binary
+```
+
+Pin a release you have already verified (the variable must reach `sh`, not `curl`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | SPORE_RELEASE=v0.11.0 sh
+```
+
+### Where state lives (`SPORE_HOME`)
+
+`spore init` writes the identity kit, prekey pool, ratchet state and `maildb` to
+`~/.spore`, overridable with `SPORE_HOME` or `-dir`. On Tails that directory is RAM:
+**every reboot is a new identity**, and any session that lived only there is gone.
+That is the right posture for a burn-after-reading client, and it is incompatible with
+contacts who pinned your previous `pinned-sig` — they must re-pin out-of-band.
+
+If you want a durable identity, keep *only* the kit on Persistent Storage:
+
+```bash
+# Tails: enable Persistent Storage first, then point the whole tree at it
+export SPORE_HOME="$HOME/Persistent/spore"
+mkdir -p "$SPORE_HOME"
+spore init
+```
+
+Persistent Storage is LUKS-encrypted, but it is still on disk: an identity that outlives
+the session is exactly what amnesia was buying you. Choose deliberately. `spore panic -confirm`
+shreds the directory when you want it gone before shutdown.
+
+### Hosted endpoints (the posture that actually fits)
+
+Do not run a mailbox or a peer server here — Tails has no inbound surface worth having
+and Tor will not accept one. Use a hosted mailbox as a blind courier:
+
+```bash
+spore init
+spore prekeybatch push -in "$SPORE_HOME/batch.json" \
+  -mailbox https://mail.sporem3.io/u/<name> -token [REDACTED]
+
+echo "hello" | spore msg send-e2 -to ADDR \
+  -bundle-url https://mail.sporem3.io/u/their-name/prekey -pinned-sig THEIR_PINNED_SIG_HEX \
+  -store https://mail.sporem3.io/u/<name> -store-token [REDACTED]
+```
+
+The operator sees timing and ciphertext, never keys or plaintext; `https://sporem3.io`
+lists the current endpoints. The serverless commons
+(`-store nostr://relay.damus.io,nos.lol`) needs no operator at all and usually survives
+Tor better than CDN-fronted chain RPCs.
+
+### Which carriers actually work over Tor
+
+Tails routes TCP through Tor and drops the rest, and Tor carries TCP only. So the split
+is about inbound reachability, UDP, and exit-node blocking — not about spore.
+
+| Carrier | Over Tor | Why |
+|---|---|---|
+| Hosted mailbox (`https://…`) | ✅ expected to work | plain HTTPS, no inbound, no UDP |
+| Nostr body store (`wss://…`) | ✅ usually works | websockets over TCP; some relays block exits |
+| DERO | ❌ not practical | needs a synced wallet node; chain sync on an amnesic disk is a non-starter |
+| EVM | ⚠️ endpoint-dependent | public RPCs are CDN/WAF-fronted and commonly block Tor exits |
+| Solana | ⚠️ endpoint-dependent | same; the public RPC is rate-limited and exit-hostile |
+| Tron | ⚠️ endpoint-dependent | TronGrid sits behind the same kind of edge |
+| Bitcoin | ⚠️ endpoint-dependent | Esplora endpoints are commonly Tor-blocked |
+| Cosmos / TON | ⚠️ endpoint-dependent | whatever profile you configure decides it |
+| XMR settlement | ❌ not from here | `bill watch` needs a wallet RPC; running one locally has the DERO problem |
+| `spore serve` / `sporepeer://` | ❌ cannot work | the receiver must be reachable and Tails has no inbound |
+| Iroh/Waku sidecars | ❌ cannot work | they use UDP; Tor carries TCP only |
+
+Practical conclusion: a Tails client is a **hosted-mailbox and Nostr client**. Chain
+carriers need a Tor-friendly endpoint — a `.onion` RPC you operate, or a provider that
+does not block exits. Treat any other success as luck, and do not put money on it.
+
+
 ## 0. Sanity check — no chain, no wallet, no setup
 
 ```bash
