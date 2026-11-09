@@ -196,7 +196,10 @@ looked.
 - Not measured: the wallet-RPC and onion-service rows. They are mechanisms with no endpoint
   here to point at, which is why they are labelled that way.
 
-Endpoints change their edges without telling anyone. Re-run this before trusting the table.
+Endpoints change their edges without telling anyone. Re-run this before trusting the table:
+`spore doctor -tor` dials the same endpoints through a local SOCKS5 proxy (Tor's `SocksPort`)
+and prints the payload each one returned, so a changed edge shows up as a failed row with the
+body it actually got, not as a silent HTTP 200.
 
 Practical conclusion: on this evidence a Tails client can reach every carrier spore has —
 Base, Solana, Tron, Bitcoin, TON and Cosmos included — as long as it uses an endpoint that

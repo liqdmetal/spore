@@ -257,7 +257,7 @@ func usage() {
   spore work-order handoff commitments|brief|deliver|decide|export|list|show|status|flush|prune|recover
              (private E2 work handoff and human accept/reject decisions; no execution/settlement)
   spore status [-json] [-config FILE] [-state-dir DIR] [-state-key FILE] [-timeout 5s]  (actionable local and carrier status)
-  spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...] [-json]         (pre-flight; -json emits a read-only local JSON report)
+  spore doctor [-priv HEX] [-dir DIR] [-listen ADDR] [-chain ...] [-json] [-tor]   (pre-flight; -json emits a read-only local JSON report)
   spore msg send-long -chain dero -to ADDR -identity F (-bundle F | -bundle-url URL) -pinned-sig HEX -file F ...   (DERO alias for canonical forward-private E2 long body; XMR tagging removed)
   spore msg keygen [-out FILE]           (identity keypair for E2E encryption)
   spore msg send ... -key HEX -peer-pub HEX    (encrypt E2E to peer pub)

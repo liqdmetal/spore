@@ -288,6 +288,9 @@ func doctorcmd(args []string) {
 	storeTok := fs.String("store-token", "", "with -live: bearer token for -store")
 	relayHop := fs.String("relay", "", "with -live: anonymous relay hop base URL (e.g. https://relay.example.org) — probes body writes through the relay instead of straight to -store")
 	jsonOutput := fs.Bool("json", false, "emit a machine-readable, read-only local diagnostic report (no network probes)")
+	tor := fs.Bool("tor", false, "probe every carrier through a SOCKS5 proxy and report which answer with real payloads")
+	torProxy := fs.String("tor-proxy", "127.0.0.1:9050", "with -tor: SOCKS5 proxy host:port (Tor SocksPort)")
+	torTimeout := fs.Duration("tor-timeout", 15*time.Second, "with -tor: per-carrier timeout")
 	addChainFlags(fs) // optional -chain/-rpc probe (same flags as `spore status`)
 	_ = fs.Parse(args)
 
@@ -370,6 +373,16 @@ func doctorcmd(args []string) {
 			RPCLogin: fs.Lookup("rpc-login").Value.String(),
 			Timeout:  *timeout,
 		}))
+	}
+
+	// Carrier reachability through a SOCKS5 proxy. Opt-in, and it counts a
+	// carrier that does not answer with the real payload as a failure: the
+	// point is to re-measure the onboarding table, so a green run must mean
+	// the table still holds on this circuit.
+	if *tor {
+		fmt.Println("  --- carrier reachability through a SOCKS5 proxy ---")
+		report(runTorDoctor(doctorTorOpts{Proxy: *torProxy, Timeout: *torTimeout, Store: *storeURL, StoreTok: *storeTok}))
+		fmt.Println("      UDP sidecars (Iroh/Waku) are not probed: Tor carries TCP only.")
 	}
 
 	// Optional chain probe (same machinery as `spore status`). Keyed off -rpc,
