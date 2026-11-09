@@ -3,6 +3,46 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.11.1 — Tails/Whonix onboarding, and Tor reachability measured (2026-11-09)
+
+6 commits, 7 files, +237/−81 vs `v0.11.0`. No product code changed: the binaries
+are built from the same source as v0.11.0, so behaviour is identical. What moved
+is who the client is for, and what the docs are allowed to claim.
+
+### An amnesic-client path
+
+[ONBOARDING.md](ONBOARDING.md) now has a Tails/Whonix section: no-root install,
+the `SPORE_HOME` choice between amnesia and Persistent Storage, the hosted-mailbox
+recipe, an onion-service recipe for `spore serve`, and a carrier-by-carrier Tor
+table. Every carrier has a Tor path except the UDP sidecars, which have none by
+construction.
+
+### Reachability that was measured, not guessed
+
+The table is filled from probes through a real Tor circuit (2026-11-09, exit
+`109.70.100.9`), sent with the client user-agent, checking response **bodies**:
+Base (`0x2105`), Solana `getHealth`, TronGrid and `tron-rpc.publicnode.com`,
+Blockstream Esplora, toncenter, Cosmos publicnode and the damus relay all
+answered. Three traps are recorded because they mislead: `mainnet.base.org`
+returns 200 with a Cloudflare challenge page, TronGrid 403s a bare `curl`
+user-agent while accepting the Go one, and `mempool.space` fails direct as well,
+so that one is not a Tor finding.
+
+### The rehearsal that was forcing the docs to lie
+
+The v0.9.0 release-day rehearsal applied its frozen patches to a moving `HEAD`, so
+every later docs commit read as a broken freeze and the cure each time was to
+re-derive the patch — the opposite of frozen. Worse, README and ONBOARDING could
+only keep matching while they called the Base EVM deployment "pending". Both
+rehearsal scripts now extract their tree from the patch base (`cb1e74c`,
+overridable with `SPORE_RELEASE_REHEARSAL_BASE`) and take the current tooling, and
+the original frozen patch is restored byte for byte.
+
+The EVM row stays at "deployment pending" on purpose: `KnownMailboxDeployments`
+ships empty until a Base deployment publishes its §3 receipt, and
+`TestDocClaimsMatchRegistryState` refuses a doc that flips first. No wire-format
+change.
+
 ## v0.11.0 — Monero settles end to end, and a job becomes a signed receipt (2026-11-09)
 
 49 commits, 78 files, +13,951/−233 vs `v0.10.2`. This is the first release since
