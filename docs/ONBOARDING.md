@@ -148,15 +148,15 @@ is about inbound reachability, UDP, and exit-node blocking — not about spore.
 
 | Carrier | Over Tor | Why |
 |---|---|---|
-| Hosted mailbox (`https://…`) | ✅ expected to work | plain HTTPS, no inbound, no UDP |
-| Nostr body store (`wss://…`) | ✅ usually works | websockets over TCP; some relays block exits |
-| DERO | ✅ with a remote wallet RPC | point `-rpc` at a wallet node behind an `.onion`; no local sync, no chain on disk |
-| EVM | ⚠️ endpoint-dependent | public RPCs are CDN/WAF-fronted and commonly block Tor exits |
-| Solana | ⚠️ endpoint-dependent | same; the public RPC is rate-limited and exit-hostile |
-| Tron | ⚠️ endpoint-dependent | TronGrid sits behind the same kind of edge |
-| Bitcoin | ⚠️ endpoint-dependent | Esplora endpoints are commonly Tor-blocked |
-| Cosmos / TON | ⚠️ endpoint-dependent | whatever profile you configure decides it |
-| XMR settlement | ✅ with a remote wallet RPC | point its wallet RPC at `monero-wallet-rpc` behind an `.onion` (Digest auth); no local node |
+| Hosted mailbox (`https://…`) | ✅ measured | HTTPS only; a probe route answered through Tor |
+| Nostr body store (`wss://…`) | ✅ measured | the damus relay answered through Tor (TCP 443) |
+| DERO | ✅ with a remote wallet RPC | point `-rpc` at a wallet node behind an `.onion`; no local sync, no chain on disk (mechanism, not measured) |
+| EVM | ✅ measured | `mainnet.base.org` and `base-rpc.publicnode.com` returned chainId `0x2105` over Tor |
+| Solana | ✅ measured | `api.mainnet-beta.solana.com` answered `getHealth: ok` over Tor |
+| Tron | ✅ measured | TronGrid and `tron-rpc.publicnode.com` returned blocks over Tor (TronGrid 403s a bare curl UA, accepts the Go one) |
+| Bitcoin | ✅ measured | Blockstream Esplora returned the tip height over Tor |
+| Cosmos / TON | ✅ measured | publicnode REST `node_info` and toncenter `getMasterchainInfo` both answered over Tor |
+| XMR settlement | ✅ with a remote wallet RPC | point its wallet RPC at `monero-wallet-rpc` behind an `.onion` (Digest auth); no local node (mechanism, not measured) |
 | `spore serve` / `sporepeer://` | ✅ via an onion service | publish the listening port as an onion service; your contact uses `.onion:port` |
 | Iroh/Waku sidecars | ❌ not over Tor | they need UDP and Tor carries TCP only — the one row with no Tor path |
 
@@ -180,10 +180,28 @@ cat /var/lib/tor/spore-hold/hostname        # abcdef….onion
 The store holds ciphertext bodies until they reap, and the address exists only while the
 session does — which is the point of serving it from Tails at all.
 
-Practical conclusion: every row above except the UDP sidecars has a Tor path — hosted HTTPS
-and Nostr as-is, chain carriers through a Tor-friendly or `.onion` endpoint, the peer store
-through an onion service. What remains is patience: Tor makes every first connection slower,
-and a carrier that answers today can be blocked at its edge tomorrow.
+### What was measured
+
+2026-11-09, through a fresh Tor SOCKS5 circuit (exit `109.70.100.9`), sending the same
+`Go-http-client/1.1` user-agent the client sends and reading response **bodies**, not status
+codes — a 200 is often a CDN challenge page, which is exactly how `mainnet.base.org` first
+looked.
+
+- Worked: Base (`mainnet.base.org`, `base-rpc.publicnode.com`), the Solana public RPC,
+  TronGrid and `tron-rpc.publicnode.com`, Blockstream Esplora, toncenter, Cosmos
+  `publicnode` REST, the damus Nostr relay, and the hosted mailbox route.
+- Did not: `base.llamarpc.com` (TLS 525 at their edge), `rpc.ankr.com/base` (wants an API
+  key — a keyless endpoint refusing is not a Tor finding), and `mempool.space`, which also
+  failed **direct**, so that one is this network, not Tor.
+- Not measured: the wallet-RPC and onion-service rows. They are mechanisms with no endpoint
+  here to point at, which is why they are labelled that way.
+
+Endpoints change their edges without telling anyone. Re-run this before trusting the table.
+
+Practical conclusion: on this evidence a Tails client can reach every carrier spore has —
+Base, Solana, Tron, Bitcoin, TON and Cosmos included — as long as it uses an endpoint that
+does not hate exits. The UDP sidecars still have no Tor path; the peer store and the wallet
+RPCs still need the onion-service setup above.
 
 
 ## 0. Sanity check — no chain, no wallet, no setup
