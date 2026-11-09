@@ -75,6 +75,8 @@ checked here; ONBOARDING.md has the recipe for doing that on a machine that has 
 
 
 
+## v0.11.1 — Tails/Whonix onboarding, and Tor reachability measured (2026-11-09)
+
 6 commits, 7 files, +237/−81 vs `v0.11.0`. No product code changed: the binaries
 are built from the same source as v0.11.0, so behaviour is identical. What moved
 is who the client is for, and what the docs are allowed to claim.
