@@ -66,6 +66,8 @@ func msgE2(args []string) {
 		msgInvoiceE2(args[1:])
 	case "pay":
 		msgPayE2(args[1:])
+	case "checkin":
+		msgCheckInE2(args[1:])
 	case "escrow":
 		if len(args) >= 2 && args[1] == "claim" {
 			msgEscrowClaimE2(args[2:])
@@ -857,6 +859,7 @@ type recvE2Opts struct {
 	autoAck                           *bool
 	ackTTL                            *time.Duration
 	outDir, ntfy                      *string
+	continuityVault                   *string
 	notifyEmail, notifySMS            *string
 	notifySMTPHost                    *string
 	notifySMTPPort                    *int
@@ -883,6 +886,7 @@ func newRecvE2Flagset() (*flag.FlagSet, *recvE2Opts) {
 	o.autoAck = fs.Bool("auto-ack", false, "reply 'delivered' on the same session after each successfully decrypted message (delivery receipts)")
 	o.ackTTL = fs.Duration("ack-ttl", 24*time.Hour, "frame retention for auto-ack receipts")
 	o.outDir = fs.String("out-dir", "", "write each received message body to a file in this dir (named <txid>.msg) instead of stdout — attachments/keep-a-copy mode")
+	o.continuityVault = fs.String("continuity-vault", "", "merge owner-signed continuity check-in messages into this vault copy as they arrive (holder side)")
 	o.ntfy = fs.String("ntfy", "", "POST a metadata-only notification to an ntfy/webhook URL on each message (plaintext never leaves the client)")
 	o.notifyEmail = fs.String("notify-email", "", "send a metadata-only email notification to this address (SMTP settings come from environment)")
 	o.notifySMS = fs.String("notify-sms", "", "send a metadata-only SMS notification to this E.164 number (Twilio settings come from environment)")

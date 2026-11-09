@@ -89,7 +89,7 @@ func main() {
 	case "incident":
 		incidentCmd(os.Args[2:])
 	case "msg":
-		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "escrow" || os.Args[2] == "dex" || os.Args[2] == "approve" || os.Args[2] == "inspect-approval" || os.Args[2] == "list-approvals" || os.Args[2] == "approval-metrics" || os.Args[2] == "receipts") {
+		if len(os.Args) > 2 && (os.Args[2] == "send-e2" || os.Args[2] == "recv-e2" || os.Args[2] == "reply-e2" || os.Args[2] == "forward-e2" || os.Args[2] == "sessions" || os.Args[2] == "prekeygen" || os.Args[2] == "compose" || os.Args[2] == "flush" || os.Args[2] == "mail" || os.Args[2] == "invoice" || os.Args[2] == "pay" || os.Args[2] == "checkin" || os.Args[2] == "escrow" || os.Args[2] == "dex" || os.Args[2] == "approve" || os.Args[2] == "inspect-approval" || os.Args[2] == "list-approvals" || os.Args[2] == "approval-metrics" || os.Args[2] == "receipts") {
 			msgE2(os.Args[2:])
 		} else {
 			msgcmd(os.Args[2:])
@@ -189,7 +189,7 @@ func usage() {
              [-chain dero|evm|solana|nostr|bitcoin|cosmos|ton ...] [-ringsize 8|16] -store URL
              -state-dir D -state-key F [-msg-file F|-]   (forward-private E2 send; plaintext NEVER on argv)
   spore msg recv-e2 -identity F -spk F [-opk-pool F] -store URL -state-dir D -state-key F
-             [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL] [-notify-email ADDRESS|-notify-sms E164]   (metadata-only arrival notifications)
+             [-auto-ack] [-maildb F] [-out-dir D] [-continuity-vault F] [-ntfy URL] [-notify-email ADDRESS|-notify-sms E164]   (metadata-only arrival notifications)
   spore msg reply-e2 -to ADDR -session HEX -state-dir D -state-key F [-msg-file F|-]   (continue a thread)
   spore msg forward-e2 -to ADDR -identity F -file F (-bundle F | -bundle-url URL) -pinned-sig HEX ...   (new session, same body)
   spore msg sessions [-store URL] -state-dir D -state-key F   (list thread/session ids)
@@ -201,6 +201,7 @@ func usage() {
   spore msg mail -db F add|list|block|unblock|threads|search|purge [flags]   (local contacts/threads/search)
   spore msg invoice -to ADDR -session HEX -amount 25dero [-for TEXT] [-due 72h] ...   (request payment in-thread)
   spore msg pay -to ADDR -session HEX -amount 25dero [-invoice ID] ...   (settle: money + proof ride ONE atomic tx)
+  spore msg checkin -to ADDR -session HEX -checkins ENVELOPE ...   (send owner-signed continuity check-ins in-thread; holders adopt with recv-e2 -continuity-vault)
   spore msg approve -request FILE -identity FILE -out FILE [-confirm]      (review and sign a typed capability approval)
   spore msg approve (-request A.json,B.json | -request-dir DIR) -identity FILE -out-dir DIR [-confirm] [-json] [-state-dir D]   (batch-sign approval requests; skips signed/invalid/expired/spent/other-approver)
   spore msg approve -request-dir QUEUE -identity FILE -out-dir DIR -watch [-every 30s] [-metrics-every 10m] [-metrics-json] [-state-dir D]   (always-on approver: rescan the queue, sign new requests, self-report metrics; until SIGINT/SIGTERM)
@@ -212,7 +213,7 @@ func usage() {
   spore msg escrow refund -hash HEX -to ADDR -session HEX ...                (refund an expired HTLC; announces in-thread)
   spore msg dex swap|wrap|unwrap [-ta T -tb T -min-out N | -amount Ndero] -to ADDR -session HEX ...  (relay-dex settlement; announces in-thread; SPORE_SAP_* env)
   spore panic [-home ~/.spore] [-state-dir D] [-maildb F] [-spool D] [-out-dir D] [-confirm]   (verifiable local wipe; dry-run without -confirm)
-  spore continuity create|check-in|status|release|verify|observe|quorum|anchor ... (encrypted continuity vault; signed N-of-M release; explicit optional chain commitment)
+  spore continuity create|check-in|merge|status|release|verify|observe|quorum|anchor ... (encrypted continuity vault; signed N-of-M release; explicit optional chain commitment)
   spore e2-device id|status|export|import|backup|restore [-state-dir D] [-state-key F]   (multi-device ratchet state sync; backup/restore seal identity+state under a passphrase file)
   spore sign doc -identity FILE -file DOC -statement "I agree" [-out SIG]   (detached, third-party-verifiable document signature)
   spore sign verify -file DOC -sig SIG [-pinned-sig HEX]                    (verify; -pinned-sig binds it to a known signer)

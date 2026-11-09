@@ -85,10 +85,33 @@ no-op, which matters when it arrives over an at-least-once transport. It needs
 no private key, consults no clock, and cannot extend a deadline the owner did
 not sign.
 
-Send `checkins.json` over the same private thread as everything else
-(`spore msg send-e2 … -msg-file checkins.json`). It contains the times the owner
-was last alive, which is the metadata a recipient already learns by holding the
-vault; it exposes nothing about the payload.
+### Sending check-ins over the thread
+
+A typed message carries the envelope, so a holder recognizes it in the inbox
+instead of reading protocol JSON as a chat body:
+
+```sh
+spore msg checkin -to HOLDER_ADDR -session SESSION_HEX -checkins ./checkins.json
+```
+
+On the holder's side, one flag merges every check-in message as it arrives — no
+file copying, no manual `merge`:
+
+```sh
+spore msg recv-e2 … -continuity-vault ./continuity-vault.json
+```
+
+The receiver applies the same chain rules as `merge` and writes the advanced
+copy atomically. A message for another vault, a broken chain, or a bad
+signature is printed as a refusal and changes nothing; it is not adopted and not
+recorded as a message body. Without `-continuity-vault` the receiver still
+recognizes the type and prints the vault id and sequence with a note that it was
+not adopted, so check-ins are visible before a copy is set up.
+
+`msg checkin` only transports an envelope the owner already signed — it does not
+perform a check-in, and it needs no owner key. The envelope contains the times
+the owner was last alive, which is metadata a holder already learns by holding
+the vault; it exposes nothing about the payload.
 
 ## Security boundary
 

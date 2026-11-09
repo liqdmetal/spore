@@ -53,6 +53,7 @@ type e2Ingestor struct {
 	ackCtx        context.Context // context for auto-ack pointer posts
 	outDir        string
 	receipts      string // receipts ledger path ("" disables)
+	continuity    string // vault copy that adopts check-in messages ("" = report only)
 	mdb           *maildb.MailDB
 	dispatcher    *notify.Dispatcher // nil disables notifications
 	autoAck       bool
@@ -316,6 +317,28 @@ func (g *e2Ingestor) ingest(inc chain.Incoming, frame ratchetwire.Frame, p ratch
 	if g.handleIncident(inc, frame.SessionID, plain) {
 		return
 	}
+	// Continuity check-ins are owner-signed protocol artifacts, not chat:
+	// adopt them into the holder's vault copy and report one line. A message
+	// that claims the type but fails any chain check is a refusal, never a
+	// silent non-adoption.
+	if env, isCheckIn, cerr := parseContinuityCheckInMessage(plain); isCheckIn {
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "e2 continuity: refused check-in message on tx %s: %v\n", shortTx(inc.TxID), cerr)
+			return
+		}
+		if g.continuity == "" {
+			last := env.Checkins[len(env.Checkins)-1]
+			fmt.Printf("%s continuity check-ins for vault %s: seq %d (not adopted: pass -continuity-vault)\n", shortTx(inc.TxID), continuityShortID(env.VaultID), last.Seq)
+			return
+		}
+		summary, _, aerr := adoptContinuityCheckInMessage(g.continuity, plain)
+		if aerr != nil {
+			fmt.Fprintf(os.Stderr, "e2 continuity: refused check-in message on tx %s: %v\n", shortTx(inc.TxID), aerr)
+			return
+		}
+		fmt.Printf("%s %s\n", shortTx(inc.TxID), summary)
+		return
+	}
 	// Receipts are ratcheted messages like any other: detect the
 	// envelope and surface it as an ack line instead of a message.
 	receiptInReplyTo, receiptStatus, isReceipt := parseReceipt(plain)
@@ -550,8 +573,13 @@ func openE2Receiver(fs *flag.FlagSet, outDir string, outDirRequired bool) (*e2In
 		creator = flagValueOr(fs, "address", "")
 	}
 	creatorPinned := hex.EncodeToString(creatorSig)
+	continuityVault := ""
+	if f := fs.Lookup("continuity-vault"); f != nil {
+		continuityVault = f.Value.String()
+	}
 	ing := &e2Ingestor{
 		st: st, ep: ep, ik: ik, sk: sk, op: op, pool: pool, incidentStore: incidentDB, stateDir: stateDir, creator: creator, creatorPinned: creatorPinned,
+		continuity:   continuityVault,
 		handoffStore: handoffDB, handoffLocal: handoff.Peer{Address: handoffAddress(fs), Pinned: creatorPinned},
 		carrier: ratchetwire.ChainCarrier{}, // fabric path never auto-acks on-chain
 		ackCtx:  context.Background(),

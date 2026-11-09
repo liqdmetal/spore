@@ -170,11 +170,12 @@ spore demo                     # see it work — no chain, no wallet
 
 # Forward-private E2 (the real messenger):
 spore msg send-e2   -to ADDR (-bundle F | -bundle-url URL) -pinned-sig HEX [-ringsize 8|16] [-amount 5.5dero] [-msg-file F|-]
-spore msg recv-e2   [-auto-ack] [-maildb F] [-out-dir D] [-ntfy URL]
+spore msg recv-e2   [-auto-ack] [-maildb F] [-out-dir D] [-continuity-vault F] [-ntfy URL]
 spore msg reply-e2  -to ADDR -session HEX      # continue a thread
 spore msg forward-e2 -to ADDR -file F …        # new session, same body
 spore msg sessions                             # list thread/session ids
 spore msg invoice|pay -session HEX -amount N   # in-thread settlement
+spore msg checkin -to ADDR -session HEX -checkins F  # continuity check-ins, adopted by recv-e2 -continuity-vault
 spore msg compose | flush                      # offline send queue (HMAC-sealed)
 spore msg mail add|list|block|threads|search|purge   # local contacts + search
 
