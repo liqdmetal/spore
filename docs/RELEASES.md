@@ -71,7 +71,10 @@ against `SHA256SUMS`, against each asset's own `.sha256`, and against the digest
 Every `.sha256` file agreed with its asset, and every asset name appeared as a provenance
 subject with the same digest. The attestation was compared by decoding its DSSE payload —
 `slsa-verifier` was not installed on the verifying machine, so the signature itself was not
-checked here; ONBOARDING.md has the recipe for doing that on a machine that has it.
+checked here; ONBOARDING.md has the recipe for doing that on a machine that has it, and
+the gate suite now runs that same command itself (`scripts/release-provenance-verify.sh`,
+against the release these notes call current). A machine without `slsa-verifier` gets a
+printed skip from that gate, not a pass it did not earn.
 
 
 

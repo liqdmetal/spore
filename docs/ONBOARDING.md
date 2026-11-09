@@ -62,6 +62,11 @@ slsa-verifier verify-artifact spore-linux-amd64 \
 
 For the current release, `vTAG` is `v0.12.0`.
 
+From a checkout, `bash scripts/release-provenance-verify.sh` runs exactly that against
+the release `docs/RELEASES.md` calls current — `--tag vTAG` pins one, `--all` covers all
+six assets, `--artifacts DIR` verifies a directory you already downloaded. Without
+`slsa-verifier` it prints why it skipped instead of reporting a check it could not run.
+
 </details>
 
 Build from source instead: `go install github.com/liqdmetal/spore/cmd/spore@latest`.

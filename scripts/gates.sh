@@ -547,6 +547,19 @@ echo "== one release version across the notes, the README and the onboarding gui
 run_gate 'release version pins agree' bash scripts/release-version-check.sh --quiet
 
 echo
+echo "== release provenance: slsa-verifier against the release the notes call current =="
+# The release's one load-bearing claim — these binaries were built from this
+# source — is a signature, and until now nothing in the suite checked it: the
+# v0.12.0 verification decoded the DSSE payload and compared digests, which
+# proves the payload agrees with SHA256SUMS, not that the signer is the release
+# workflow. This runs the documented command (verify-artifact, --source-uri
+# github.com/liqdmetal/spore, --source-tag from the notes) so a broken or absent
+# attestation fails a push. Where slsa-verifier is not installed, where the tag
+# is not published yet, or where GitHub is unreachable it prints why it skipped
+# rather than passing silently — a verification that runs and fails is a FAILURE.
+run_gate 'release provenance (slsa-verifier)' bash scripts/release-provenance-verify.sh
+
+echo
 echo "== release-designs release-prep set (in-tree; every pointer resolves) =="
 run_gate 'release-designs check' bash scripts/release-designs-check.sh
 
