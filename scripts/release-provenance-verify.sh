@@ -223,8 +223,10 @@ else
   fi
 fi
 
+# `slsa-verifier version` opens with an ASCII banner; take the version line, not
+# the logo, so the gate's own log names the tool that did the checking.
 ver=""
-ver=$("$VERIFIER" version 2>/dev/null | head -1 || true)
+ver=$("$VERIFIER" version 2>/dev/null | tr -d '\r' | grep -E '^(Version|GitVersion|Build):' | head -1 || true)
 note "release-provenance: ${ver:-slsa-verifier} verifying $TAG ($SLUG)"
 
 log=$(mktemp) || exit 2

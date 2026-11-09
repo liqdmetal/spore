@@ -55,9 +55,9 @@ No wire-format change.
 
 ### Assets verified after publication
 
-All six binaries were downloaded from this release on 2026-11-09 and checked three ways:
-against `SHA256SUMS`, against each asset's own `.sha256`, and against the digests in
-`multiple.intoto.jsonl` from the tag run.
+All six binaries were downloaded from this release on 2026-11-09 and checked four ways:
+against `SHA256SUMS`, against each asset's own `.sha256`, against the digests in
+`multiple.intoto.jsonl` from the tag run, and against that attestation's signature.
 
 | Asset | SHA-256 |
 |---|---|
@@ -69,12 +69,15 @@ against `SHA256SUMS`, against each asset's own `.sha256`, and against the digest
 | spore-windows-arm64.exe | `6b666fcd5122c6ace9618b58a5e18da0720b5d7cc8ae3b9739629a88300fe739` |
 
 Every `.sha256` file agreed with its asset, and every asset name appeared as a provenance
-subject with the same digest. The attestation was compared by decoding its DSSE payload —
-`slsa-verifier` was not installed on the verifying machine, so the signature itself was not
-checked here; ONBOARDING.md has the recipe for doing that on a machine that has it, and
-the gate suite now runs that same command itself (`scripts/release-provenance-verify.sh`,
-against the release these notes call current). A machine without `slsa-verifier` gets a
-printed skip from that gate, not a pass it did not earn.
+subject with the same digest. The signature itself was then checked, not only the payload
+it covers: `slsa-verifier` v2.7.1 verified all six assets against `multiple.intoto.jsonl`
+with `--source-uri github.com/liqdmetal/spore --source-tag v0.12.0`, and `--all` reported
+each of them `ok`. The earlier digest comparison had decoded the DSSE payload, which shows
+the payload agrees with `SHA256SUMS` but not that this repository's release workflow signed
+it; the verifier run is what establishes that, so the gate suite now carries it
+(`scripts/release-provenance-verify.sh`, run against the release these notes call current).
+Where `slsa-verifier` is absent, the tag is unpublished, or GitHub is unreachable, that
+gate prints its reason and a skip — never a pass it did not earn.
 
 
 
