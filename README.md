@@ -107,7 +107,7 @@ transaction — so Spore never pretends to. What it guarantees:
 | Carrier | Backend | Pointer transport | Compost | Status |
 |---|---|---|---|---|
 | **DERO** | `internal/dero` | native encrypted tx payload carrying opaque E2 pointer | body TTL | **live, mainnet** |
-| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | **live on Base; deployment receipt published** (LIVE_NODES §3) |
+| **EVM** | `internal/evm` | mailbox contract / calldata | `burn(to,seq)` after delivery | live-verified (local Anvil); deployment pending |
 | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
 | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
 | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
