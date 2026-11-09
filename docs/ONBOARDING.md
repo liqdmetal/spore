@@ -122,8 +122,9 @@ shreds the directory when you want it gone before shutdown.
 
 ### Hosted endpoints (the posture that actually fits)
 
-Do not run a mailbox or a peer server here — Tails has no inbound surface worth having
-and Tor will not accept one. Use a hosted mailbox as a blind courier:
+A hosted mailbox is the simplest posture here: it needs no setup beyond the route an
+operator gives you. If you want to serve bodies yourself, publish the listener as an onion
+service (below) rather than a public port — Tor gives you inbound without exposing an address.
 
 ```bash
 spore init
@@ -149,19 +150,40 @@ is about inbound reachability, UDP, and exit-node blocking — not about spore.
 |---|---|---|
 | Hosted mailbox (`https://…`) | ✅ expected to work | plain HTTPS, no inbound, no UDP |
 | Nostr body store (`wss://…`) | ✅ usually works | websockets over TCP; some relays block exits |
-| DERO | ❌ not practical | needs a synced wallet node; chain sync on an amnesic disk is a non-starter |
+| DERO | ✅ with a remote wallet RPC | point `-rpc` at a wallet node behind an `.onion`; no local sync, no chain on disk |
 | EVM | ⚠️ endpoint-dependent | public RPCs are CDN/WAF-fronted and commonly block Tor exits |
 | Solana | ⚠️ endpoint-dependent | same; the public RPC is rate-limited and exit-hostile |
 | Tron | ⚠️ endpoint-dependent | TronGrid sits behind the same kind of edge |
 | Bitcoin | ⚠️ endpoint-dependent | Esplora endpoints are commonly Tor-blocked |
 | Cosmos / TON | ⚠️ endpoint-dependent | whatever profile you configure decides it |
-| XMR settlement | ❌ not from here | `bill watch` needs a wallet RPC; running one locally has the DERO problem |
-| `spore serve` / `sporepeer://` | ❌ cannot work | the receiver must be reachable and Tails has no inbound |
-| Iroh/Waku sidecars | ❌ cannot work | they use UDP; Tor carries TCP only |
+| XMR settlement | ✅ with a remote wallet RPC | point its wallet RPC at `monero-wallet-rpc` behind an `.onion` (Digest auth); no local node |
+| `spore serve` / `sporepeer://` | ✅ via an onion service | publish the listening port as an onion service; your contact uses `.onion:port` |
+| Iroh/Waku sidecars | ❌ not over Tor | they need UDP and Tor carries TCP only — the one row with no Tor path |
 
-Practical conclusion: a Tails client is a **hosted-mailbox and Nostr client**. Chain
-carriers need a Tor-friendly endpoint — a `.onion` RPC you operate, or a provider that
-does not block exits. Treat any other success as luck, and do not put money on it.
+### Serving bodies through an onion service
+
+`spore serve` is a body store, not a public service, so keep it on loopback and publish the
+port instead of the machine:
+
+```bash
+spore serve -dir ~/hold -listen 127.0.0.1:7777 -reap-every 10m
+
+# publish 127.0.0.1:7777 as an onion service, then read the address tor assigned.
+# Tails: an admin session editing /etc/tor/torrc (or OnionShare) can add:
+#   HiddenServiceDir /var/lib/tor/spore-hold/
+#   HiddenServicePort 7777 127.0.0.1:7777
+cat /var/lib/tor/spore-hold/hostname        # abcdef….onion
+
+# hand your contact: sporepeer://abcdef….onion:7777
+```
+
+The store holds ciphertext bodies until they reap, and the address exists only while the
+session does — which is the point of serving it from Tails at all.
+
+Practical conclusion: every row above except the UDP sidecars has a Tor path — hosted HTTPS
+and Nostr as-is, chain carriers through a Tor-friendly or `.onion` endpoint, the peer store
+through an onion service. What remains is patience: Tor makes every first connection slower,
+and a carrier that answers today can be blocked at its edge tomorrow.
 
 
 ## 0. Sanity check — no chain, no wallet, no setup
