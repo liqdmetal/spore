@@ -29,6 +29,8 @@ func continuitycmd(args []string) {
 		continuityCreate(args[1:])
 	case "check-in":
 		continuityCheckIn(args[1:])
+	case "merge":
+		continuityMergeCheckIns(args[1:])
 	case "status":
 		continuityStatus(args[1:])
 	case "release":
@@ -93,8 +95,9 @@ func continuityUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   spore continuity create -owner-key FILE -recipient-pub HEX[,HEX,...] -file PAYLOAD \
       -out VAULT [-interval 24h] [-grace 24h]
-  spore continuity check-in -vault VAULT -owner-key FILE
-  spore continuity status -vault VAULT [-at UNIX]
+  spore continuity check-in -vault VAULT -owner-key FILE [-emit ENVELOPE]
+  spore continuity merge -vault VAULT -checkins ENVELOPE [-out VAULT]
+  spore continuity status -vault VAULT [-at UNIX] [-warn 6h] [-exit-code]
   spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
   spore continuity verify -vault VAULT
   spore continuity revocation-init -vault VAULT -out STATE [-owner-key KEY -checkpoint CHECKPOINT]
@@ -141,7 +144,15 @@ released plaintext must be transferred separately by the operator.
 The vault contains ciphertext, recipient envelopes, and signed liveness records;
 no plaintext or private key is written into it. Check-in must occur strictly
 before the current deadline. Release is explicit and does not send money,
-contact anyone, or trigger an on-chain action.`)
+contact anyone, or trigger an on-chain action.
+
+A copy of the vault is only current while its signed check-in chain is. Check-in
+with -emit writes that chain (vault id, owner signing key, signed liveness
+records; no payload, no keys) and merge advances a recipient's or observer's
+copy with it. A stale copy otherwise releases against a deadline the owner
+already revoked. merge appends nothing unless every new record continues the
+same vault, owner key, and signature chain, and re-delivering an envelope the
+copy has is a no-op.`)
 }
 
 func continuityCreate(args []string) {
@@ -177,6 +188,7 @@ func continuityCheckIn(args []string) {
 	fs := flag.NewFlagSet("continuity check-in", flag.ExitOnError)
 	vaultPath := fs.String("vault", "", "vault JSON path")
 	ownerPath := fs.String("owner-key", "", "owner X25519 private key file")
+	emit := fs.String("emit", "", "also write the signed check-in envelope for recipients and observers")
 	_ = fs.Parse(args)
 	if *vaultPath == "" || *ownerPath == "" {
 		check(errors.New("continuity check-in requires -vault and -owner-key"))
@@ -188,15 +200,57 @@ func continuityCheckIn(args []string) {
 	check(writeContinuityVault(*vaultPath, v))
 	last := v.Checkins[len(v.Checkins)-1]
 	fmt.Printf("continuity check-in accepted: seq %d; next deadline %s\n", last.Seq, time.Unix(last.Deadline, 0).UTC().Format(time.RFC3339))
+	if *emit != "" {
+		env, err := v.CheckIns()
+		check(err)
+		raw, err := json.MarshalIndent(env, "", "  ")
+		check(err)
+		check(writeAtomicPrivate(*emit, append(raw, '\n')))
+		fmt.Printf("check-in envelope written: %s (send it to every holder; a stale copy releases on the old deadline)\n", *emit)
+	}
+}
+
+func continuityMergeCheckIns(args []string) {
+	fs := flag.NewFlagSet("continuity merge", flag.ExitOnError)
+	vaultPath := fs.String("vault", "", "vault JSON path to advance")
+	envPath := fs.String("checkins", "", "owner-signed check-in envelope JSON path")
+	out := fs.String("out", "", "output vault path (default: replace -vault atomically)")
+	_ = fs.Parse(args)
+	if *vaultPath == "" || *envPath == "" {
+		check(errors.New("continuity merge requires -vault and -checkins"))
+	}
+	v := readContinuityVault(*vaultPath)
+	raw, err := readContinuityArtifact(*envPath)
+	check(err)
+	env, err := continuity.ParseCheckInEnvelope(raw)
+	check(err)
+	merged, err := v.MergeCheckIns(env)
+	check(err)
+	dest := *out
+	if dest == "" {
+		dest = *vaultPath
+	}
+	check(writeContinuityVault(dest, v))
+	last := v.Checkins[len(v.Checkins)-1]
+	if merged == 0 {
+		fmt.Printf("continuity copy already current: seq %d; deadline %s\n", last.Seq, time.Unix(last.Deadline, 0).UTC().Format(time.RFC3339))
+		return
+	}
+	fmt.Printf("continuity check-ins merged: +%d (seq %d); next deadline %s\n", merged, last.Seq, time.Unix(last.Deadline, 0).UTC().Format(time.RFC3339))
 }
 
 func continuityStatus(args []string) {
 	fs := flag.NewFlagSet("continuity status", flag.ExitOnError)
 	vaultPath := fs.String("vault", "", "vault JSON path")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
+	warn := fs.Duration("warn", 0, "report DUE SOON when the deadline is within this duration")
+	exitCode := fs.Bool("exit-code", false, "exit 10 on DUE SOON and 11 on RELEASABLE (default: always 0)")
 	_ = fs.Parse(args)
 	if *vaultPath == "" {
 		check(errors.New("continuity status requires -vault"))
+	}
+	if *warn < 0 {
+		check(errors.New("continuity status: -warn must not be negative"))
 	}
 	v := readContinuityVault(*vaultPath)
 	now := *at
@@ -205,11 +259,24 @@ func continuityStatus(args []string) {
 	}
 	st, err := v.Status(now)
 	check(err)
+	remaining := st.DueAt - now
 	state := "WAITING"
-	if st.Releasable {
+	code := 0
+	switch {
+	case st.Releasable:
 		state = "RELEASABLE"
+		code = 11
+	case *warn > 0 && remaining <= int64(*warn/time.Second):
+		state = "DUE SOON"
+		code = 10
 	}
-	fmt.Printf("%s vault=%s due=%s checkins=%d\n", state, st.VaultID, time.Unix(st.DueAt, 0).UTC().Format(time.RFC3339), st.CheckInCount)
+	if remaining < 0 {
+		remaining = 0
+	}
+	fmt.Printf("%s vault=%s due=%s checkins=%d remaining=%s\n", state, st.VaultID, time.Unix(st.DueAt, 0).UTC().Format(time.RFC3339), st.CheckInCount, (time.Duration(remaining) * time.Second).String())
+	if *exitCode {
+		os.Exit(code)
+	}
 }
 
 func continuityRelease(args []string) {

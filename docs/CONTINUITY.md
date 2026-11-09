@@ -49,6 +49,47 @@ spore continuity release \
 a time oracle. If the owner misses the deadline, a late check-in is rejected and
 cannot move the deadline forward.
 
+`status` also answers the question that matters before the deadline: with
+`-warn 6h` it reports `DUE SOON` inside that window, and `-exit-code` turns the
+state into exit 10 (due soon) or 11 (releasable) so a cron entry or a monitor
+can alert without parsing text. Without `-exit-code` the exit status stays 0.
+
+## Keeping recipient and observer copies current
+
+A vault file is the authority, but recipients and observers hold copies, and a
+copy stops being evidence the moment the owner checks in: its latest signed
+deadline is the old one. Left alone, that old deadline passes and a recipient
+can release against a decision the owner has already revoked. Check-ins
+therefore have to travel to the copies.
+
+`check-in -emit` writes the owner-signed check-in chain — public vault id, owner
+signing key, and signed liveness records, with no payload ciphertext and no
+keys — and `merge` advances a copy with it:
+
+```sh
+spore continuity check-in -vault ./continuity-vault.json \
+  -owner-key ./owner.key -emit ./checkins.json
+
+# on a recipient's or observer's machine, against their older copy:
+spore continuity merge -vault ./continuity-vault.json -checkins ./checkins.json
+spore continuity status -vault ./continuity-vault.json -warn 6h
+```
+
+`merge` accepts only records that continue this vault's chain: same vault id,
+same owner signing key, the same genesis record, consecutive sequence numbers,
+`prev` digests that match, deadlines recomputed from the vault's `interval` and
+`grace`, and a valid owner signature over every record. It appends nothing
+unless all new records pass, so a tampered or truncated envelope leaves the
+copy byte-identical. Re-delivering an envelope the copy already contains is a
+no-op, which matters when it arrives over an at-least-once transport. It needs
+no private key, consults no clock, and cannot extend a deadline the owner did
+not sign.
+
+Send `checkins.json` over the same private thread as everything else
+(`spore msg send-e2 … -msg-file checkins.json`). It contains the times the owner
+was last alive, which is the metadata a recipient already learns by holding the
+vault; it exposes nothing about the payload.
+
 ## Security boundary
 
 - No chain transaction is posted.
@@ -79,7 +120,9 @@ does not claim:
 - legal proof of death, incapacity, or succession.
 
 A continuity artifact proves only the signed state and deadline it contains. It
-does not prove a person's death or incapacity. Production operation still
+does not prove a person's death or incapacity, and a recipient holding an
+unmerged copy is looking at an old decision — distribution is an operational
+duty, not a guarantee this tool can enforce. Production operation still
 requires independently protected vault copies, observer availability, and a
 human recovery procedure.
 

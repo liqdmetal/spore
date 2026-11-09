@@ -196,8 +196,9 @@ spore panic [-home ~/.spore] [-confirm]   # verifiable local wipe of keys/state/
 
 # Explicit continuity vault (no automatic fund movement):
 spore continuity create -owner-key FILE -recipient-pub HEX[,HEX,...] -file PAYLOAD -out VAULT
-spore continuity check-in -vault VAULT -owner-key FILE
-spore continuity status -vault VAULT [-at UNIX]
+spore continuity check-in -vault VAULT -owner-key FILE [-emit ENVELOPE]
+spore continuity merge -vault VAULT -checkins ENVELOPE [-out VAULT]
+spore continuity status -vault VAULT [-at UNIX] [-warn 6h] [-exit-code]
 spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
 spore continuity verify -vault VAULT
 spore continuity watch-init -vault VAULT -observer-key KEY -out WATCH_STATE

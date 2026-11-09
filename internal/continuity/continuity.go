@@ -250,7 +250,7 @@ func CheckIn(v *Vault, ownerPriv []byte, now int64) error {
 		return ErrDeadlinePassed
 	}
 	if now <= last.At {
-		return fmt.Errorf("%w: check-in time must advance", ErrInvalidVault)
+		return fmt.Errorf("%w: check-in must be later than the previous one (seq %d at Unix %d; the chain advances in whole seconds)", ErrInvalidVault, last.Seq, last.At)
 	}
 	ownerKey := append([]byte(nil), ownerPriv...)
 	defer sporecrypto.Zero(ownerKey)
