@@ -58,7 +58,8 @@ block() {
 }
 
 for tool in scripts/release-designs-check.sh scripts/release-tag-message.sh \
-  scripts/release-placeholders.sh scripts/release-day-rehearsal.sh; do
+  scripts/release-placeholders.sh scripts/release-day-rehearsal.sh \
+  scripts/release-version-check.sh; do
   [ -f "$tool" ] || {
     echo "release-readiness: $tool is missing — cannot check" >&2
     exit 2
@@ -124,6 +125,14 @@ if [ -z "$(git tag -l 'v0.9.0' 2>/dev/null)" ]; then
   ok "no local v0.9.0 tag yet"
 else
   block "a local v0.9.0 tag already exists"
+fi
+
+# 8. one version, everywhere it is pinned
+if bash scripts/release-version-check.sh --quiet >/dev/null 2>&1; then
+  ok "RELEASES.md, README.md and ONBOARDING.md name the same release version"
+else
+  block "the release version disagrees across RELEASES.md, README.md and ONBOARDING.md" \
+    "bash scripts/release-version-check.sh"
 fi
 
 # informational: a local comparison only, so it never blocks

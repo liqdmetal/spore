@@ -540,6 +540,13 @@ echo "== doc-refs checker =="
 run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
 
 echo
+echo "== one release version across the notes, the README and the onboarding guide =="
+# v0.11.1 landed its notes and left three pins on v0.11.0: an in-place edit that
+# wrote nothing and exited 0. No gate noticed, because each gate reads its own
+# file. This one reads them together, so a half-bump fails the push.
+run_gate 'release version pins agree' bash scripts/release-version-check.sh --quiet
+
+echo
 echo "== release-designs release-prep set (in-tree; every pointer resolves) =="
 run_gate 'release-designs check' bash scripts/release-designs-check.sh
 
