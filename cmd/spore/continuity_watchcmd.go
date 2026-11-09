@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/liqdmetal/spore/internal/continuity"
@@ -43,6 +44,7 @@ func continuityWatch(args []string) {
 	webhookURL := fs.String("webhook", "", "metadata-only notification webhook URL")
 	revocationsPath := fs.String("revocations", "", "optional revocation state JSON path")
 	checkpointPath := fs.String("checkpoint", "", "optional signed revocation checkpoint JSON path")
+	checkinsPath := fs.String("checkins", "", "comma-separated owner-signed check-in envelopes to adopt before evaluating")
 	at := fs.Int64("at", 0, "evaluation time as Unix seconds (default: current time)")
 	flush := fs.Bool("flush", false, "synchronously attempt queued notifications")
 	_ = fs.Parse(args)
@@ -52,11 +54,35 @@ func continuityWatch(args []string) {
 	v := readContinuityVault(*vaultPath)
 	observerKey, err := readObserverKey(*observerKeyPath)
 	check(err)
+	// Adopt owner-signed check-ins before evaluating. A watcher holding a stale
+	// copy would otherwise alert on a deadline the owner has already revoked.
+	adopted := 0
+	if *checkinsPath != "" {
+		adopted, err = adoptCheckInEnvelopes(v, splitCheckInPaths(*checkinsPath))
+		check(err)
+		if adopted > 0 {
+			check(writeContinuityVault(*vaultPath, v))
+			last := v.Checkins[len(v.Checkins)-1]
+			fmt.Printf("continuity watch: adopted %d check-in(s); seq %d due=%s\n", adopted, last.Seq, time.Unix(last.Deadline, 0).UTC().Format(time.RFC3339))
+		}
+	}
 	stateRaw, err := readContinuityArtifact(*statePath)
 	check(err)
 	state, err := continuity.ParseWatchState(stateRaw)
 	check(err)
-	check(state.VerifyForVault(v))
+	if err := state.VerifyForVault(v); err != nil {
+		if !watchStateSuperseded(state, v) {
+			check(err)
+		}
+		// The adopted check-ins legitimately moved this vault's epoch. Re-anchor
+		// the observer's signed checkpoint instead of alerting on the old one.
+		state, err = continuity.NewWatchState(v, observerKey)
+		check(err)
+		raw, err := json.MarshalIndent(state, "", "  ")
+		check(err)
+		check(writeAtomicPrivate(*statePath, append(raw, '\n')))
+		fmt.Printf("continuity watch: checkpoint re-anchored; event=%s\n", continuity.WatchEventID(state))
+	}
 	if (*revocationsPath == "") != (*checkpointPath == "") {
 		check(errors.New("continuity watch requires both -revocations and -checkpoint"))
 	}
@@ -117,4 +143,54 @@ func continuityWatch(args []string) {
 		check(outbox.Flush(context.Background()))
 		fmt.Println("continuity watch: notification flush complete")
 	}
+}
+
+// adoptCheckInEnvelopes advances a watcher's vault copy with owner-signed
+// check-in envelopes, in order, so a watcher that receives one envelope per
+// check-in still converges. Any envelope that is malformed, belongs to another
+// vault, or is not a valid continuation aborts adoption: this watcher must
+// never alert on a deadline it could not verify.
+func adoptCheckInEnvelopes(v *continuity.Vault, paths []string) (int, error) {
+	total := 0
+	for _, path := range paths {
+		raw, err := readContinuityArtifact(path)
+		if err != nil {
+			return total, err
+		}
+		env, err := continuity.ParseCheckInEnvelope(raw)
+		if err != nil {
+			return total, err
+		}
+		merged, err := v.MergeCheckIns(env)
+		if err != nil {
+			return total, err
+		}
+		total += merged
+	}
+	return total, nil
+}
+
+// watchStateSuperseded reports whether the checkpoint describes an older epoch
+// of this same vault, which is the only case where a watch may re-anchor it.
+// A checkpoint from another vault, policy, or owner stays an operator error,
+// and so does a vault older than the checkpoint: adoption moves a watcher
+// forward along the owner's signed chain, never backward.
+func watchStateSuperseded(state *continuity.WatchState, v *continuity.Vault) bool {
+	if state == nil || v == nil || len(v.Checkins) == 0 {
+		return false
+	}
+	last := v.Checkins[len(v.Checkins)-1]
+	return state.VaultID == v.VaultID && state.PolicyID == v.PolicyID && state.OwnerSigPub == v.OwnerSigPub &&
+		last.Seq > state.CheckInSeq
+}
+
+func splitCheckInPaths(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

@@ -110,7 +110,7 @@ func continuityUsage() {
   spore continuity observe -vault VAULT -observer-key OBSERVER_KEY -out NOTICE [-at UNIX]
   spore continuity verify-notice -notice NOTICE [-vault VAULT]
   spore continuity watch-init -vault VAULT -observer-key OBSERVER_KEY -out WATCH_STATE
-  spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush]
+  spore continuity watch -vault VAULT -observer-key OBSERVER_KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush] [-checkins ENVELOPE[,ENVELOPE]]
   spore continuity watch-reaper -log NODE_LOG -state STATE -outbox OUTBOX -webhook URL [-node spore|spore-peer] [-grace N]
   spore continuity recovery-create -vault VAULT [-policy POLICY] [-quorum QUORUM] [-anchor ANCHOR] [-receipt RECEIPT] [-watch WATCH_STATE] [-notice NOTICE] -out BUNDLE
   spore continuity recovery-verify -bundle BUNDLE

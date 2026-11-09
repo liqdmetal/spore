@@ -202,7 +202,7 @@ spore continuity status -vault VAULT [-at UNIX] [-warn 6h] [-exit-code]
 spore continuity release -vault VAULT -recipient-key FILE -out PAYLOAD [-at UNIX]
 spore continuity verify -vault VAULT
 spore continuity watch-init -vault VAULT -observer-key KEY -out WATCH_STATE
-spore continuity watch -vault VAULT -observer-key KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush]
+spore continuity watch -vault VAULT -observer-key KEY -state WATCH_STATE -notice NOTICE -outbox OUTBOX -webhook URL [-at UNIX] [-flush] [-checkins ENVELOPE[,ENVELOPE]]
 spore continuity recovery-create -vault VAULT [-policy POLICY] [-quorum QUORUM] [-anchor ANCHOR] [-receipt RECEIPT] [-watch WATCH_STATE] [-notice NOTICE] -out BUNDLE
 spore continuity recovery-verify -bundle BUNDLE
 spore continuity recovery-restore -bundle BUNDLE -dir EMPTY_DIR

@@ -286,6 +286,15 @@ spore continuity watch \
   [-flush]
 ```
 
+Pass `-checkins ENVELOPE[,ENVELOPE]` and the watch adopts those owner-signed
+check-ins before it evaluates anything, writes the advanced vault back, and
+re-anchors its own signed checkpoint to the new epoch. That ordering is the
+point: a watcher holding a stale copy would otherwise alert on a deadline the
+owner already revoked. If an envelope does not verify — different vault,
+tampered record, broken chain — the watch exits without writing, re-anchoring,
+or queueing anything. It never re-anchors on a checkpoint from another vault;
+that stays an operator error.
+
 The webhook receives only a stable event identifier, a generic subject, and an
 optional timestamp. Provider credentials remain environment-only. Failed
 provider delivery stays in the 0600 outbox for retry; delivery is at-least-once
