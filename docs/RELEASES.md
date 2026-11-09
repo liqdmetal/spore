@@ -3,6 +3,127 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.11.0 — Monero settles end to end, and a job becomes a signed receipt (2026-11-09)
+
+49 commits, 78 files, +13,951/−233 vs `v0.10.2`. This is the first release since
+v0.10.0 where the product itself moved, and both features are optional by
+design: a provider chooses whether a receipt exists at all, and Monero billing
+is still behind `-xmr-unverified`.
+
+### Monero settles through `bill watch`
+
+- **XMR is a money asset** — `2.5xmr` is billable beside `25dero`, with
+  piconero exactness: a sub-piconero amount is refused, not rounded.
+- **Per-order subaddresses** — `spore bill address` issues one fresh
+  subaddress per order, labels it, and records it in the ledger `bill watch`
+  reads back. Attribution no longer depends on a hand-written map.
+- **`bill watch -xmr-unverified`** — a confirmation floor, a hold on
+  unattributed payments, and the five guards in
+  [MONERO_SETTLEMENT.md](MONERO_SETTLEMENT.md) §5, with a mock-RPC test in the
+  shape `internal/xmr` uses.
+- **Digest, not Basic** — the wallet RPC refuses Basic outright. The poller
+  authenticates the way `internal/xmr` does; the live run found this, not a
+  mock.
+- **`bill reconcile`, and drift at startup** — the issued-address ledger is
+  diffed against the wallet's `get_address`, each proposal names the command
+  that adopts an address only the wallet knows, and `bill watch` reports drift
+  when it starts, so an unrecorded address is visible before a payment lands
+  on it.
+- **The live round trip is done** — one real payment carried through
+  provisioning into a receipt on the Hetzner wallet (MONERO_SETTLEMENT §8
+  step 5), recorded in [LIVE_NODES.md](LIVE_NODES.md).
+
+DERO bill watch no longer loses a payment held for a missing batch: its
+watermark pins the way the Monero branch does, instead of advancing past a
+payment it could not attribute.
+
+### Job receipts: a signed record of work
+
+[JOB_RECEIPT_V1.md](JOB_RECEIPT_V1.md) fixes the canonical record, and
+`spore sign receipt create|sign|verify` emits and verifies it with the role's
+fixed statement enforced — a signature asserting something else is refused.
+Two optional records ship beside it:
+
+- **spend** — a provider-blind accounting record with a salted commitment, so
+  a client can account for money spent without the provider's participation.
+- **export / tally** — the §9 rows with per-row evidence and a fixed sort, and
+  the §8 aggregation rules over a directory of job receipts; `tally -proofs`
+  verifies the optional `tx_proof` block that `bill watch` now attaches at
+  provisioning time.
+
+A published fixture vector and a test reproduce the §6 sign-and-verify
+sequence byte for byte. The gap is named in the doc rather than implied: there
+is no chain client, so `tally` can check that a receipt cites a txid you
+confirmed, never that the transaction exists.
+
+### Tron as a cheap E2 pointer carrier
+
+`internal/tron` carries an E2 pointer in a TRON memo on the cheap tier, and
+[CLOSE-FREE-ROUTING.md](CLOSE-FREE-ROUTING.md) is the carrier assessment that
+priced it against the alternatives.
+
+### The store stops losing bodies, and the tests stop lying
+
+- `spore store sweep` lists and reclaims `.body` files with no deadline
+  record, behind an age guard — the one state reap can never repair, because
+  reap discovers candidates by globbing `*.exp`. `WIRE_SPEC.md` now states the
+  store's concurrency contract: `Put`, `Reap` and `Delete` are serialized
+  against each other, which is what closed the window that produced those
+  orphans.
+- The reap ticker no longer drops expired bodies that arrive without an access
+  marker, with a regression test.
+- Golden-file generators write atomically and are opt-in
+  (`SPORE_REGEN_VECTORS=1`), so `go test ./...` can no longer rewrite
+  `interop-vectors.json` under a parallel run.
+- The sub-second and approval-timing tests anchor their windows instead of
+  racing their own setup, which is what made the full suite fail at random.
+
+No wire-format change: the `WIRE_SPEC.md` edits are the store contract above.
+
+### Arming a clone is one command, and a push cannot skip it
+
+- `scripts/setup.sh` installs the hooks and the credential guard, verifies
+  both, and exits non-zero naming the exact command to run; `--check` audits
+  without changing anything.
+- The pre-push shim fails closed: an empty diff range refuses instead of
+  skipping, and a same-tree force push (a reword) is recognised as nothing to
+  gate rather than reported as a bypass.
+- A duplicated GitHub account in the credential store is refused fast at push
+  time and reported at arm time — the ambiguity used to hang a push on a
+  picker no terminal can answer.
+- `--check` warns when `go`/`gofmt` are not on PATH, because the gates fail
+  closed and a push otherwise dies at `go build ./...` in 30 ms.
+
+### Gates that fail for real reasons
+
+- Gate runs are serialized: a busy machine reports itself instead of reading
+  as a slow gate, and the timings log keeps the history honest.
+- `-race` finds a C toolchain itself on Windows instead of dying on a bare
+  PATH, and the sepolia self-check names what failed instead of exiting in one
+  silent second.
+- The rehearsal cleanup trap can no longer fail an otherwise green run.
+- `scripts/defender-exclusions.ps1` excludes the Go build paths from Defender
+  real-time scanning: measured 58.5 → 21.4 Defender CPU-seconds per two `-race`
+  runs, and 55.5 s → 41.5 s for the gate under contention.
+
+### Artifacts
+
+All six targets (linux/darwin/windows × amd64/arm64) build on GitHub Actions
+from the tag, each with a `.sha256` sibling plus `SHA256SUMS`, and
+`multiple.intoto.jsonl` from the SLSA generic generator pinned at `v2.1.0`:
+
+```bash
+slsa-verifier verify-artifact spore-linux-amd64 \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/liqdmetal/spore --source-tag v0.11.0
+```
+
+Attestation attaches on tag-push runs; a manual workflow-dispatch rebuild of an
+existing tag skips it. As in v0.10.x this ships `cmd/spore` only — the in-repo
+Go `cmd/spore-peer` is built from source when needed.
+
+`spore version` reports `v0.11.0`.
+
 ## v0.10.2 — release notes come from the tag annotation (2026-10-25)
 
 No messenger code changed since v0.10.1. One pipeline fix, proven end to end.
