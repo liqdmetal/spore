@@ -3,7 +3,56 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
-## v0.11.1 — Tails/Whonix onboarding, and Tor reachability measured (2026-11-09)
+## v0.12.0 — a Tor probe you can run yourself, with fallbacks that name themselves (2026-11-09)
+
+9 commits, 5 files, +803/−75 vs `v0.11.1`. The first release since v0.11.0 where the
+product itself moved, and it moves in the direction the docs kept promising: a claim
+you can test instead of one you have to trust.
+
+### `spore doctor -tor`
+
+`spore doctor -tor` dials every carrier row from ONBOARDING.md through a SOCKS5 proxy
+(Tor's SocksPort by default) and prints the payload each one returned: `chainId 0x2105`,
+`getHealth ok`, a real Tron block ID, an Esplora tip, Cosmos `node_info`, a TON
+masterchain seqno, the relay page, and — with `-store` — the mailbox route.
+
+- **Bodies, not status codes.** A 200 is often a Cloudflare challenge page, and
+  TronGrid answers 403 while working fine direct. Each row must show evidence or fail.
+- **The dialer is stdlib SOCKS5 CONNECT** — no new dependency — and there is no direct
+  fallback, because a probe that silently bypassed the proxy would report a green table
+  for traffic that never touched it.
+- **The circuit names itself.** An exit check reports the IP, and a SOCKS proxy that is
+  not Tor is labelled as such rather than presented as a Tor result.
+
+### Fallbacks that name themselves
+
+A carrier now lists its documented endpoint first and the public mirror behind it. The
+first endpoint that returns real evidence passes the row, and the note names it *plus*
+why the other failed: `fallback solana-rpc.publicnode.com answered: getHealth ok;
+api.mainnet-beta.solana.com: Your IP or provider is blocked from this endpoint`.
+
+Both alternatives were rejected on purpose. Hardcoding one endpoint made a working
+carrier a permanent red row (the official Solana RPC refuses Tor exits). A quiet
+fallback would have hidden that the documented endpoint stopped working. Measured on
+two circuits: TronGrid 403'd every user-agent from one and answered normally from
+another, which is why the row is a measurement and the table says so.
+
+### What the live runs changed in the docs
+
+Solana and Tron rows now name the `publicnode` endpoints and explain why. "What was
+measured" records the circuits and the per-exit caveat. And one failure was the probe's
+own: the Cosmos REST gateway returns `default_node_info`, which the check did not accept,
+so a healthy carrier failed — fixed with the real body shape pinned in a test.
+
+### A release that cannot half-land
+
+v0.11.1 shipped its notes while three install pins still said v0.11.0. A new gate now
+compares the newest RELEASES.md heading with the README release row, both README pins,
+the slsa `--source-tag`, and the ONBOARDING `vTAG`, failing on any disagreement or a pin
+that vanished. It runs pre-push and inside release-readiness.
+
+No wire-format change.
+
 
 6 commits, 7 files, +237/−81 vs `v0.11.0`. No product code changed: the binaries
 are built from the same source as v0.11.0, so behaviour is identical. What moved
