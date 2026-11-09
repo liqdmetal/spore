@@ -9,20 +9,31 @@ Rehearse with: bash scripts/release-day-rehearsal.sh
 Re-derived 2026-10-25 against main@cb1e74c: the README roadmap paragraph was
 reflowed after the freeze, so its hunk is regenerated from the current text
 with the same flip applied. Every other hunk is byte-identical to the original.
+Re-derived 2026-11-09 against main@3142d73: 08700b0 rewrote the ONBOARDING
+install paragraph (v0.10.2 as the current release) and moved the README
+release table, and the v0.11.0 notes row moved the install pin. Only the README
+v0.8.0 row and the first ONBOARDING install hunk are regenerated from the
+current text, keeping the v0.11.0/v0.10.2 rows and the current-release wording;
+the EVM carrier-row and roadmap claims and the vTAG sentence are preserved
+verbatim, and every other hunk is byte-identical to the original.
+Also 2026-11-09: ONBOARDING's carrier table had drifted back to "EVM 🧪 dev,
+mailbox contract deployment pending" while README and LIVE_NODES §3 both say
+live on Base; the flip restores the Base-live row, which is the wording the
+fee-notes pass anchors on, so pass 2 applies untouched.
 diff --git a/README.md b/README.md
-index daac0ea..b69892f 100644
+index e99b968..f8ac17b 100644
 --- a/README.md
 +++ b/README.md
-@@ -28,7 +28,7 @@ setup. Releases also carry SLSA keyless provenance
- 
- | Version | Date | Highlights |
+@@ -37,7 +37,7 @@ manual workflow-dispatch runs skip it. Check the selected release for
  |---|---|---|
+ | **[v0.11.0](https://github.com/liqdmetal/spore/releases/tag/v0.11.0)** | 2026-11-09 | **Monero settles end to end** (`2.5xmr` billable, one fresh subaddress per order, Digest-authenticated wallet polling, `bill reconcile` plus a startup drift check, proven with a real payment on the live wallet), and **a job becomes a signed receipt** (`spore sign receipt create|sign|verify|spend|export|tally`, role statements enforced, optional chain-proof block). Also the orphan-body sweep, serialized `Put`/`Reap`, a TRON memo carrier for E2 pointers, and gates that can no longer skip or hang. No wire-format change. Full history: docs/RELEASES.md |
+ | [v0.10.2](https://github.com/liqdmetal/spore/releases/tag/v0.10.2) | 2026-10-25 | First pipeline-built release: all six Go targets built on GitHub Actions with `.sha256` + `SHA256SUMS` per asset, SLSA keyless provenance attached on tag pushes, release notes from the tag annotation. Ships `cmd/spore` only — no `spore-peer` asset (the E2 direct-body server `cmd/spore-peer` is in-repo Go, built from source when needed). Full history: docs/RELEASES.md |
 -| **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. Pointing the carrier at a real chain moves to v0.9.0. |
 +| **[v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0)** | 2026-09-27 | The **EVM carrier readied for the wire**: local EIP-155 signing, the loopback `spore evm-proxy` in front of read-only public RPCs, the per-chain `evm_mailbox` config seam, and a durable settlement notice outbox pinned by crash-window tests — plus the relay work-order prepare/identity boundary, DEL-escaping canonical JSON, and a reaper-watchdog staleness fix. At v0.8.0 release time, the Base deployment was planned for v0.9.0; the Base EVM deployment later shipped in v0.9.0 (receipt: docs/LIVE_NODES.md §3). |
  | **[v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0)** | 2026-09-23 | First release shipping the **full stack**: `spore` (Go) for all six targets (linux/macOS/Windows × amd64/arm64) plus the Rust `spore-peer` transport for five of them, per-asset `.sha256` checksums, and SLSA keyless provenance for every binary. Installers verify before they swap anything into place. |
  
- Pin the install with `SPORE_RELEASE=v0.8.0`, and verify a downloaded binary
-@@ -97,7 +97,7 @@ transaction — so Spore never pretends to. What it guarantees:
+ Pin the install with `SPORE_RELEASE=v0.11.0`, and verify a downloaded binary
+@@ -107,7 +107,7 @@ transaction — so Spore never pretends to. What it guarantees:
  | Carrier | Backend | Pointer transport | Compost | Status |
  |---|---|---|---|---|
  | **DERO** | `internal/dero` | native encrypted tx payload carrying opaque E2 pointer | body TTL | **live, mainnet** |
@@ -31,7 +42,7 @@ index daac0ea..b69892f 100644
  | **Solana** | `internal/solana` | inbox PDA (program v2) | `burn(idx)` after delivery | **live, mainnet; self-messaging verified** |
  | **Nostr** | `internal/nostr` | signed event content | NIP-09 delete (best-effort) | carrier impl |
  | **Bitcoin** | `internal/bitcoin` | `OP_RETURN` (≤80B) | body-only (chain immutable) | carrier impl, signer-injected |
-@@ -318,8 +318,7 @@ transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
+@@ -368,8 +368,7 @@ transport, 4 new carriers, pay-with-message + in-thread invoices, local maildb
  one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, serverless bodies over `spore-peer`
  (`sporepeer://` store backend, `spore serve` daemon, cross-binary Go↔Rust
  interop tests), and direct E2 body fetch via `disk://` + `spore-peer serve`.
@@ -55,7 +66,7 @@ index 181e628..f256def 100644
  
  ## 8. The gating item for sender authentication (T1)
 diff --git a/ROADMAP.md b/ROADMAP.md
-index 9c2daf2..f8a39f3 100644
+index c706ae5..60d7c15 100644
 --- a/ROADMAP.md
 +++ b/ROADMAP.md
 @@ -13,8 +13,8 @@ remaining; it does not re-state live status.*
@@ -69,7 +80,7 @@ index 9c2daf2..f8a39f3 100644
  - **E2 secure layer** (`internal/secure`, `0xE0` envelope) for public chains.
  - **X3DH + Double Ratchet** (`internal/ratchet`, `internal/ratchetwire`, `0xE2`):
    forward-private, post-compromise healing, AAD-bound to the session, ratchet
-@@ -149,15 +149,15 @@ upstream gate.
+@@ -174,15 +174,15 @@ where it was.
  
  #### v0.8.0 — shipped: the EVM carrier readied for the wire
  
@@ -91,7 +102,7 @@ index 9c2daf2..f8a39f3 100644
  - **Settlement:** the durable notice outbox — money-first settlement
    commands queue failed counterparty notices and re-announce them, pinned
    by kill -9 crash windows and nine derosim E2E tests.
-@@ -169,13 +169,15 @@ alongside it:
+@@ -194,13 +194,15 @@ alongside it:
  
  #### v0.9.0 — E2 pointer deployment on the EVM mailbox contract
  
@@ -113,7 +124,7 @@ index 9c2daf2..f8a39f3 100644
  
  **Already in-repo (built, tested, pinned):**
  
-@@ -187,13 +189,15 @@ pointing it at a funded account on a real chain and publishing the evidence.
+@@ -212,13 +214,15 @@ pointing it at a funded account on a real chain and publishing the evidence.
    encoding, log decode, `read(to,seq)`, and `burn(to,seq)` wired through
    `chain.Watch`'s auto-burn (burn failure never fails a delivery). Verified
    on Anvil end-to-end, including the post-burn empty-slot compost proof.
@@ -132,13 +143,12 @@ index 9c2daf2..f8a39f3 100644
  - **Pinned creation bytecode:** `tools/mycelium.bin` is real solc v0.8.26
    output of the documented pipeline, held in place by
    `TestPinnedMyceliumBytecode`, `TestDeployTxCarriesPinnedMyceliumCode`, and
-@@ -215,36 +219,31 @@ pointing it at a funded account on a real chain and publishing the evidence.
+@@ -240,36 +244,31 @@ pointing it at a funded account on a real chain and publishing the evidence.
    delivered pointer in the mailbox slot while the legacy `msg recv` path
    burned correctly.
  
 -**v0.9.0 must do:**
-+**v0.9.0 deployment status:**
- 
+-
 -1. **Deploy for real.** Choose the chain (a cheap L2 is the honest first
 -   target — pointer txs are small and frequent), fund a key, run
 -   `spore contract deploy-mycelium` against its RPC, and record the txid +
@@ -157,6 +167,12 @@ index 9c2daf2..f8a39f3 100644
 -5. **(Stretch, not the gate)** pay-with-message through the contract path —
 -   needs a `payable deliver` variant or a value-forwarding pattern. Kept out
 -   of the done-bar on purpose so the core deployment is not hostage to it.
+-
+-**Done when:**
+-
+-- [ ] `MyceliumMailbox` deployed on a real EVM chain; creation txid + address
++**v0.9.0 deployment status:**
++
 +1. **Deployed on Base (chain 8453).** `MyceliumMailbox` creation receipt
 +   is in `docs/LIVE_NODES.md` §3.
 +2. **Two-party E2E proven on Base.** A → B `send-e2` → receive →
@@ -168,11 +184,9 @@ index 9c2daf2..f8a39f3 100644
 +   record the results in LIVE_NODES §3.
 +5. **(Stretch, not shipped)** pay-with-message through the contract path;
 +   this remains outside the deployment done-bar.
- 
--**Done when:**
++
 +**Done in v0.9.0:**
- 
--- [ ] `MyceliumMailbox` deployed on a real EVM chain; creation txid + address
++
 +- [x] `MyceliumMailbox` deployed on a real EVM chain; creation txid + address
        published in `docs/LIVE_NODES.md` and reflected in the carrier matrix.
 -- [ ] Two-party `send-e2` → receive → auto-burn proven against that
@@ -188,7 +202,7 @@ index 9c2daf2..f8a39f3 100644
  
  Deliberately **not** in v0.9.0: cross-chain identity proof (item #10 below).
  EVM delivery here is DERO-independent — the recipient is an EVM address and
-@@ -255,7 +254,7 @@ the ratchet is X3DH as today; cross-chain rendezvous is its own later gate.
+@@ -280,7 +279,7 @@ the ratchet is X3DH as today; cross-chain rendezvous is its own later gate.
  | 1 | **Finish escrow + swap UX in chat** | **HTLC close and dex settlements are both in-thread.** Escrow: `msg escrow claim/refund` (see shipped notes). Swap: `msg dex swap|wrap|unwrap` invoke RelayDEX/RelayWrappedDero and announce via `spore/dex/v1` envelopes; `msg dex fees` publishes the in-contract rake (90/10 LP/treasury, atomic swaps free) per docs/BUSINESS.md. Contract IDs now have a real config seam (`SPORE_SAP_HTLC_SC/DEX_SC/WDERO_SC` env) with local refusals — previously `sap.HTLCContractID` was never seeded, so the HTLC fund path sent an empty SCID. **Two-party soak shipped:** `spore derosim serve` (wallet-RPC simulator with honest RelayHTLC/RelayDEX/RelayWrappedDero semantics — hash-verified claims, expiry refunds, constant-product min-out, 1:1 wrap mint/burn) + `scripts/escrow_dex_soak.sh` drive real CLI processes both sides through bootstrap → fund→claim → fund→refund → swap → wrap/unwrap → receipts-ledger + web-card checks (31 green). The soak forced the swap input leg into existence: `msg dex swap -amount <n><ta-token>` (was a zero-deposit invoke that moved nothing). |
  | 2 | **Tokenized search execution** — **shipped** | `maildb.Search` now prefilters through the inverted index (`PositionsContaining`: one vocabulary scan unions the positions of tokens containing any query term — a provable superset under substring semantics), the index is rebuilt on `Open` so search survives restart, `Purge` rebuilds it so compaction can never misalign positions, and `mail search` gained `-any`/`-not` OR/NOT flags. Exact `matchesQuery` semantics are unchanged and pinned by equivalence tests. |
  | 3 | **Bitcoin/TON value carriage** | Their `PostPayload` discards the amount hint today, so `-amount` is refused on them. Real support needs Bitcoin dust-output + fee/UTXO wiring and a TON value-bearing message. |
@@ -198,7 +212,7 @@ index 9c2daf2..f8a39f3 100644
  | 6 | **XMR live-verify** | Pruned `monerod` syncing; needs a real `monero-wallet-rpc`. Scope stays short-signal + off-chain rendezvous (no native payload encryption, no E2 pointer). |
  | 7 | **L1 mempool catch (~1–2s)** | Rust scanner on derohe-rs watches the node txpool and decrypts before mining. |
 diff --git a/VISION.md b/VISION.md
-index 742c8d3..9106bf2 100644
+index 31a2094..221d019 100644
 --- a/VISION.md
 +++ b/VISION.md
 @@ -1,8 +1,9 @@
@@ -222,7 +236,7 @@ index 742c8d3..9106bf2 100644
  | **Solana** | ⚠️ inbox PDA public → secure envelope | signer keypair | **live on mainnet** (BPF program `GbNWrv…BraAs`) |
  | **Monero** | ⚠️ different model (see §3) | wallet RPC | built, **mock-verified** — pending node sync |
  | **other privacy chains** | varies | varies | same rule: needs the 2 primitives |
-@@ -113,8 +114,9 @@ addresses" — the same cross-chain-proof problem as §4.
+@@ -121,8 +122,9 @@ addresses" — the same cross-chain-proof problem as §4.
  
  1. ✅ **The chain seam** — `internal/chain` (Chain + Watch) + `internal/whisper`
     codec. Core has zero chain-specific dependency.
@@ -262,7 +276,7 @@ index b910133..cfe7573 100644
  
  ## Live carrier evidence and current send policy
 diff --git a/docs/CARRIER_MATRIX.md b/docs/CARRIER_MATRIX.md
-index aba5d5f..c079558 100644
+index 7f6304b..a0f4a0a 100644
 --- a/docs/CARRIER_MATRIX.md
 +++ b/docs/CARRIER_MATRIX.md
 @@ -11,7 +11,7 @@ one-shot message.
@@ -306,7 +320,7 @@ index 6883a6f..95ed9a9 100644
  - **Hardened**: E2E envelope random-nonce fix, adversarial tests, 19 pkgs green
  
 diff --git a/docs/LIVE_NODES.md b/docs/LIVE_NODES.md
-index 7ec6b23..876224a 100644
+index 758e04e..2bbb6b9 100644
 --- a/docs/LIVE_NODES.md
 +++ b/docs/LIVE_NODES.md
 @@ -1,12 +1,14 @@
@@ -330,7 +344,7 @@ index 7ec6b23..876224a 100644
  2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
  3. **XMR (Monero)** — ⏳ mock-verified; a pruned `monerod` is syncing so
     `spore msg send/recv -chain xmr` can verify end-to-end like DERO did.
-@@ -79,15 +81,18 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
+@@ -130,15 +132,18 @@ honest capability. Long-body XMR is a rendezvous integration, separate.
  
  ---
  
@@ -353,7 +367,7 @@ index 7ec6b23..876224a 100644
  
  ## 2. EVM node / RPC target
  
-@@ -107,11 +112,14 @@ locally. Options:
+@@ -158,11 +163,14 @@ locally. Options:
  ### Recommended: anvil (foundry) dev node on Hetzner
  `anvil` is a 10-second local EVM node that pre-funds test accounts and accepts
  `eth_sendTransaction` for them — no faucet, no real chain, but it exercises the
@@ -372,7 +386,7 @@ index 7ec6b23..876224a 100644
  
  ### Steps (anvil path)
  ```
-@@ -548,12 +556,12 @@ and a second delivered slot left unburned, the watchdog reads green (`0`)
+@@ -701,12 +709,12 @@ and a second delivered slot left unburned, the watchdog reads green (`0`)
  while the unburned slot is inside its grace window and turns red (`1`) once it
  exits. That is the same polarity the local proof asserts.
  
@@ -390,7 +404,7 @@ index 7ec6b23..876224a 100644
  
  ### Honest notes (sender-side reality)
  
-@@ -612,9 +620,10 @@ exits. That is the same polarity the local proof asserts.
+@@ -765,9 +773,10 @@ exits. That is the same polarity the local proof asserts.
     (long text needs the rendezvous work)? Or do you want the rendezvous
     integration speced first?
  
@@ -407,40 +421,28 @@ index 7ec6b23..876224a 100644
 +remaining path is a `monero-wallet-rpc` round-trip, exactly like the DERO
  node did.
 diff --git a/docs/ONBOARDING.md b/docs/ONBOARDING.md
-index e1cddc4..b9d59f5 100644
+index d2345e5..d1efa75 100644
 --- a/docs/ONBOARDING.md
 +++ b/docs/ONBOARDING.md
-@@ -25,13 +25,16 @@ The script downloads from the
- [releases page](https://github.com/liqdmetal/spore/releases/latest), verifies
- each binary's checksum against the release's `.sha256` files, and only moves
- binaries into place after verification (a failed download never clobbers an
--existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
--`SPORE_RELEASE=v0.8.0`, the current release (2026-09-27), which readies the
--EVM carrier for the wire: local EIP-155 signing, the loopback `evm-proxy`,
--and a durable settlement notice outbox. (v0.7.0 remains the first release
-+existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — for example,
-+`SPORE_RELEASE=v0.8.0` for the v0.8.0 release (2026-09-27), which readied
-+the EVM carrier for the wire with local EIP-155 signing, the loopback
-+`evm-proxy`, and a durable settlement notice outbox. (v0.7.0 remains the
-+first release
- shipping the full stack: `spore` for all six platforms and the `spore-peer`
- transport for five of them.)
+@@ -33,6 +33,8 @@ release shipping the full stack: `spore` for all six platforms and the Rust
+ `spore-peer` transport for five of them. Current releases ship `spore` only —
+ the E2 direct-body server `cmd/spore-peer` is in-repo Go, built from source.)
  
 +The Base EVM deployment shipped later in v0.9.0 (receipt: `LIVE_NODES.md` §3).
 +
  <details>
  <summary>Manual download / other platforms</summary>
  
-@@ -55,7 +58,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
+@@ -59,7 +61,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
    --source-uri github.com/liqdmetal/spore --source-tag vTAG
  ```
  
--For the current release, `vTAG` is `v0.8.0`.
+-For the current release, `vTAG` is `v0.10.2`.
 +For the v0.8.0 example above, `vTAG` is `v0.8.0`; substitute the version you're verifying.
  
  </details>
  
-@@ -340,7 +343,7 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
+@@ -360,7 +362,7 @@ spore panic -confirm        # verifiably shred keys, state, maildb, spool, out-d
  |---|---|---|
  | DERO | ✅ live, mainnet | a funded DERO wallet running `--rpc-server`; native value + pay-with-message |
  | Solana | ✅ live, mainnet (self-messaging) | a Solana keypair + SOL for fees |
@@ -450,7 +452,7 @@ index e1cddc4..b9d59f5 100644
  | Bitcoin | 🧪 carrier impl (signer-injected) | an Esplora-compatible indexer + a signer; `-amount` refused (value not wired) |
  | Cosmos / TON | 🧪 configurable seams | an explicit endpoint profile; `-amount` refused |
 diff --git a/docs/PEER_SETUP.md b/docs/PEER_SETUP.md
-index b854e20..48759dc 100644
+index 229edff..8c657ab 100644
 --- a/docs/PEER_SETUP.md
 +++ b/docs/PEER_SETUP.md
 @@ -5,9 +5,10 @@ point**: a whisper rides a real DERO transaction, encrypted end-to-end by
@@ -491,7 +493,7 @@ index b854e20..48759dc 100644
    the E2 kit, or `msg recv-e2`). This is the privacy model: no shared box to
    subpoena, no operator. Bare `whisper recv` remains only for old native mail.
 diff --git a/docs/RATCHET.md b/docs/RATCHET.md
-index 32ec3b0..bbd0ac8 100644
+index 9a4a05d..d1e075c 100644
 --- a/docs/RATCHET.md
 +++ b/docs/RATCHET.md
 @@ -200,9 +200,9 @@ becomes genuinely blind, which was always the README's claim.
