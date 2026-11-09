@@ -11,8 +11,14 @@
 // reason this file parses bodies:
 //
 //	mainnet.base.org   200, but the body is a Cloudflare challenge page
-//	api.trongrid.io    403 to a bare curl user-agent, a real block to the client's
+//	api.trongrid.io    403 to every user-agent from a Tor exit, a block direct
 //	mempool.space      fails direct as well, so it is not a Tor finding at all
+//
+// A carrier lists its endpoints in order: the documented one first, then the
+// public mirror. The first endpoint that returns real evidence wins, and the
+// report names it — plus why the primary failed, so a stale docs claim shows up
+// as "<mirror> answered; <primary> said 403" instead of either a permanent red
+// row (hardcoding one endpoint) or a silent pass (hiding the fallback).
 //
 //	spore doctor -tor
 //	spore doctor -tor -tor-proxy 127.0.0.1:9150 -tor-timeout 20s
@@ -32,6 +38,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -180,43 +187,55 @@ func socks5ErrText(code byte) string {
 	}
 }
 
-// torProbe is one carrier endpoint and the evidence that it really answered.
+// torProbe is one carrier: endpoint candidates in preference order, and the
+// evidence that the answering endpoint really answered.
 type torProbe struct {
 	Name     string
 	Method   string
-	URL      string
+	URLs     []string
 	Body     string
+	Token    string // bearer token, mailbox only
 	Evidence func(status int, body []byte) (string, error)
 }
 
 // torCarrierProbes mirrors docs/ONBOARDING.md §"Which carriers actually work
 // over Tor", plus an exit check so the report says which circuit produced it.
-func torCarrierProbes(storeURL string) []torProbe {
+// The documented endpoint is always first; the mirror exists because the
+// official edge may refuse Tor exits on a given day (measured 2026-11-09), and
+// that must show up as a named fallback, not as a carrier that "does not work".
+func torCarrierProbes(storeURL, storeToken string) []torProbe {
 	probes := []torProbe{
-		{Name: "circuit", Method: http.MethodGet, URL: "https://check.torproject.org/api/ip", Evidence: evidenceTorCircuit},
-		{Name: "evm-base", Method: http.MethodPost, URL: "https://mainnet.base.org",
-			Body:     `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`,
+		{Name: "circuit", Method: http.MethodGet,
+			URLs: []string{"https://check.torproject.org/api/ip"}, Evidence: evidenceTorCircuit},
+		{Name: "evm-base", Method: http.MethodPost,
+			URLs: []string{"https://mainnet.base.org", "https://base-rpc.publicnode.com"},
+			Body: `{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`,
+			// mainnet.base.org answers 200 with a Cloudflare challenge page to
+			// some clients; the body check is what rejects it.
 			Evidence: evidenceEVMChainID("0x2105")},
-		// publicnode, not the official RPC: api.mainnet-beta.solana.com refuses
-		// Tor exits outright ("Your IP or provider is blocked from this
-		// endpoint", measured 2026-11-09), and a probe that always fails is
-		// not a probe. The table names both endpoints and why.
-		{Name: "solana", Method: http.MethodPost, URL: "https://solana-rpc.publicnode.com",
-			Body:     `{"jsonrpc":"2.0","id":1,"method":"getHealth"}`,
+		{Name: "solana", Method: http.MethodPost,
+			URLs: []string{"https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"},
+			Body: `{"jsonrpc":"2.0","id":1,"method":"getHealth"}`,
+			// The official RPC refuses Tor exits outright ("Your IP or provider
+			// is blocked from this endpoint", 2026-11-09).
 			Evidence: evidenceSolanaHealth},
-		// publicnode, not TronGrid: TronGrid answers 403 from Tor exits whatever
-		// user-agent is sent (and answers direct), so the earlier "it rejects
-		// the UA" reading was wrong — it rejects the exit.
-		{Name: "tron", Method: http.MethodPost, URL: "https://tron-rpc.publicnode.com/wallet/getnowblock",
-			Body:     `{}`,
+		{Name: "tron", Method: http.MethodPost,
+			URLs: []string{"https://api.trongrid.io/wallet/getnowblock", "https://tron-rpc.publicnode.com/wallet/getnowblock"},
+			Body: `{}`,
+			// TronGrid answers 403 from Tor exits whatever user-agent is sent,
+			// and answers direct — it rejects the exit, not the UA.
 			Evidence: evidenceTronBlock},
-		{Name: "bitcoin", Method: http.MethodGet, URL: "https://blockstream.info/api/blocks/tip/height",
+		{Name: "bitcoin", Method: http.MethodGet,
+			URLs:     []string{"https://blockstream.info/api/blocks/tip/height"},
 			Evidence: evidenceTipHeight},
-		{Name: "cosmos", Method: http.MethodGet, URL: "https://cosmos-rest.publicnode.com/cosmos/base/tendermint/v1beta1/node_info",
+		{Name: "cosmos", Method: http.MethodGet,
+			URLs:     []string{"https://cosmos-rest.publicnode.com/cosmos/base/tendermint/v1beta1/node_info"},
 			Evidence: evidenceCosmosNodeInfo},
-		{Name: "ton", Method: http.MethodGet, URL: "https://toncenter.com/api/v2/getMasterchainInfo",
+		{Name: "ton", Method: http.MethodGet,
+			URLs:     []string{"https://toncenter.com/api/v2/getMasterchainInfo"},
 			Evidence: evidenceTONMasterchain},
-		{Name: "nostr", Method: http.MethodGet, URL: "https://relay.damus.io/",
+		{Name: "nostr", Method: http.MethodGet,
+			URLs:     []string{"https://relay.damus.io/"},
 			Evidence: evidenceNostrRelay},
 	}
 	if storeURL != "" {
@@ -225,7 +244,8 @@ func torCarrierProbes(storeURL string) []torProbe {
 		// store) versus 401/403 (live but this client is not authorized).
 		probes = append(probes, torProbe{
 			Name: "mailbox", Method: http.MethodGet,
-			URL:      strings.TrimRight(storeURL, "/") + "/body/" + strings.Repeat("0", 64),
+			URLs:     []string{strings.TrimRight(storeURL, "/") + "/body/" + strings.Repeat("0", 64)},
+			Token:    storeToken,
 			Evidence: evidenceMailboxRoute,
 		})
 	}
@@ -305,9 +325,9 @@ func evidenceTronBlock(status int, body []byte) (string, error) {
 		Error   string `json:"Error"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		// TronGrid answers 403 to a plain curl user-agent; the client's own
-		// Go user-agent is accepted. Distinguish the two in the message.
-		return "", fmt.Errorf("HTTP %d, body is not a block: %.60q (TronGrid rejects some user-agents — check the UA before blaming Tor)", status, string(body))
+		// TronGrid 403s from Tor exits and answers direct; the message keeps
+		// the reader from blaming the user-agent again.
+		return "", fmt.Errorf("HTTP %d, body is not a block: %.60q (some edges refuse Tor exits; the mirror is a different edge)", status, string(body))
 	}
 	if r.Error != "" {
 		return "", fmt.Errorf("TronGrid error: %s", r.Error)
@@ -401,9 +421,90 @@ type doctorTorOpts struct {
 	StoreTok string
 }
 
+// torHost is the report label for an endpoint: the host is what a reader needs.
+func torHost(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
+}
+
+// torEndpointLabel names an endpoint precisely enough to tell two candidates
+// apart: two paths on the same host (a mirror serving several APIs) would
+// otherwise read as the same failure twice.
+func torEndpointLabel(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	if u.Path == "" || u.Path == "/" {
+		return u.Host
+	}
+	return u.Host + u.Path
+}
+
+// runTorProbeSet tries each carrier's endpoints in order and reports the first
+// one that returns evidence. A carrier whose primary endpoint fails but whose
+// mirror answers is a PASS that names both: the carrier works, and the stale
+// claim is visible rather than either a permanent red row or a silent pass.
+func runTorProbeSet(client *http.Client, probes []torProbe, timeout time.Duration) []doctorCheck {
+	var out []doctorCheck
+	for _, p := range probes {
+		start := time.Now()
+		var failures []string
+		answered := false
+		for _, endpoint := range p.URLs {
+			evidence, err := doTorProbe(client, p, endpoint, timeout)
+			if err != nil {
+				failures = append(failures, torEndpointLabel(endpoint)+": "+err.Error())
+				continue
+			}
+			note := fmt.Sprintf("%s  (%dms)", evidence, time.Since(start).Milliseconds())
+			if len(failures) > 0 {
+				note = fmt.Sprintf("fallback %s answered: %s  (%dms); %s",
+					torEndpointLabel(endpoint), evidence, time.Since(start).Milliseconds(), strings.Join(failures, "; "))
+			}
+			out = append(out, doctorCheck{Name: p.Name, OK: true, Note: note})
+			answered = true
+			break
+		}
+		if !answered {
+			out = append(out, doctorCheck{Name: p.Name, OK: false, Note: strings.Join(failures, "; ")})
+		}
+	}
+	return out
+}
+
+// doTorProbe performs one request against one endpoint and applies the body check.
+func doTorProbe(client *http.Client, p torProbe, endpoint string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, p.Method, endpoint, strings.NewReader(p.Body))
+	if err != nil {
+		return "", fmt.Errorf("request: %v", err)
+	}
+	if p.Body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if p.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+p.Token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if rerr != nil {
+		return "", fmt.Errorf("HTTP %d but the body could not be read: %v", resp.StatusCode, rerr)
+	}
+	return p.Evidence(resp.StatusCode, body)
+}
+
 // runTorDoctor probes every carrier through the proxy. A carrier that does not
-// answer with the real payload FAILS the run: this check exists to be measured
-// again, so a green report must mean the table still holds on this circuit.
+// answer with the real payload on any endpoint FAILS the run: this check exists
+// to be measured again, so a green report must mean the table still holds on
+// this circuit.
 func runTorDoctor(o doctorTorOpts) []doctorCheck {
 	if o.Timeout <= 0 {
 		o.Timeout = 15 * time.Second
@@ -420,46 +521,5 @@ func runTorDoctor(o doctorTorOpts) []doctorCheck {
 	}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: o.Timeout}
-
-	var out []doctorCheck
-	for _, p := range torCarrierProbes(o.Store) {
-		start := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), o.Timeout)
-		req, err := http.NewRequestWithContext(ctx, p.Method, p.URL, strings.NewReader(p.Body))
-		if err != nil {
-			cancel()
-			out = append(out, doctorCheck{Name: p.Name, OK: false, Note: fmt.Sprintf("request: %v", err)})
-			continue
-		}
-		if p.Body != "" {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		if p.Name == "mailbox" && o.StoreTok != "" {
-			req.Header.Set("Authorization", "Bearer "+o.StoreTok)
-		}
-		resp, err := client.Do(req)
-		elapsed := time.Since(start)
-		if err != nil {
-			cancel()
-			out = append(out, doctorCheck{Name: p.Name, OK: false,
-				Note: fmt.Sprintf("no answer through %s: %v", o.Proxy, err)})
-			continue
-		}
-		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		cancel()
-		if rerr != nil {
-			out = append(out, doctorCheck{Name: p.Name, OK: false,
-				Note: fmt.Sprintf("HTTP %d but the body could not be read: %v", resp.StatusCode, rerr)})
-			continue
-		}
-		evidence, eerr := p.Evidence(resp.StatusCode, body)
-		if eerr != nil {
-			out = append(out, doctorCheck{Name: p.Name, OK: false, Note: eerr.Error()})
-			continue
-		}
-		out = append(out, doctorCheck{Name: p.Name, OK: true,
-			Note: fmt.Sprintf("%s  (%dms)", evidence, elapsed.Milliseconds())})
-	}
-	return out
+	return runTorProbeSet(client, torCarrierProbes(o.Store, o.StoreTok), o.Timeout)
 }

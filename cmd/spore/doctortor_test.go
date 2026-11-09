@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -163,7 +164,7 @@ func TestTorEvidenceRejectsAResponseThatMerelyParses(t *testing.T) {
 		{"solana health", evidenceSolanaHealth, 200, `{"jsonrpc":"2.0","id":1,"result":"ok"}`, true, "getHealth ok"},
 		{"solana degraded", evidenceSolanaHealth, 200, `{"jsonrpc":"2.0","id":1,"result":"behind"}`, false, "want ok"},
 		{"tron block", evidenceTronBlock, 200, `{"blockID":"` + strings.Repeat("ab", 32) + `","block_header":{}}`, true, "block abababab"},
-		{"tron 403 html", evidenceTronBlock, 403, "<html>Forbidden</html>", false, "rejects some user-agents"},
+		{"tron 403 html", evidenceTronBlock, 403, "<html>Forbidden</html>", false, "refuse Tor exits"},
 		{"esplora tip", evidenceTipHeight, 200, "975197\n", true, "975197"},
 		{"esplora html", evidenceTipHeight, 200, "<html>rate limited</html>", false, "not a positive integer"},
 		{"cosmos node_info", evidenceCosmosNodeInfo, 200, `{"node_info":{"network":"cosmoshub-4","moniker":"n"}}`, true, "cosmoshub-4"},
@@ -200,29 +201,101 @@ func TestTorEvidenceRejectsAResponseThatMerelyParses(t *testing.T) {
 }
 
 func TestTorCarrierProbesMirrorTheDocumentedRows(t *testing.T) {
-	names := map[string]bool{}
-	for _, p := range torCarrierProbes("") {
-		names[p.Name] = true
+	names := map[string]torProbe{}
+	for _, p := range torCarrierProbes("", "") {
+		names[p.Name] = p
+		if len(p.URLs) == 0 {
+			t.Fatalf("carrier %q has no endpoint to probe", p.Name)
+		}
 	}
 	for _, want := range []string{"circuit", "evm-base", "solana", "tron", "bitcoin", "cosmos", "ton", "nostr"} {
-		if !names[want] {
+		if _, ok := names[want]; !ok {
 			t.Fatalf("carrier row %q has no probe — the table would claim what doctor cannot re-measure", want)
 		}
 	}
-	if names["mailbox"] {
+	if _, ok := names["mailbox"]; ok {
 		t.Fatal("mailbox must only appear when -store names one")
 	}
+	// The documented endpoint must be tried first, with the mirror behind it.
+	if got := names["solana"].URLs[0]; !strings.Contains(got, "api.mainnet-beta.solana.com") {
+		t.Fatalf("solana primary = %q", got)
+	}
+	if len(names["solana"].URLs) < 2 || !strings.Contains(names["solana"].URLs[1], "publicnode") {
+		t.Fatalf("solana fallback missing: %v", names["solana"].URLs)
+	}
+	if len(names["tron"].URLs) < 2 || !strings.Contains(names["tron"].URLs[1], "publicnode") {
+		t.Fatalf("tron fallback missing: %v", names["tron"].URLs)
+	}
 	withStore := false
-	for _, p := range torCarrierProbes("https://host/u/alice/") {
+	for _, p := range torCarrierProbes("https://host/u/alice/", "tok") {
 		if p.Name == "mailbox" {
 			withStore = true
-			if !strings.HasSuffix(p.URL, "/body/"+strings.Repeat("0", 64)) {
-				t.Fatalf("mailbox probe URL = %q", p.URL)
+			if p.Token != "tok" {
+				t.Fatalf("mailbox probe dropped its token: %q", p.Token)
+			}
+			if !strings.HasSuffix(p.URLs[0], "/body/"+strings.Repeat("0", 64)) {
+				t.Fatalf("mailbox probe URL = %q", p.URLs[0])
 			}
 		}
 	}
 	if !withStore {
 		t.Fatal("mailbox probe missing with -store")
+	}
+}
+
+// TestRunTorProbeSetFallsBackToTheMirror pins the behaviour the live run asked
+// for: a primary edge that refuses Tor exits is a named fallback, not a red row
+// and not a silent pass.
+func TestRunTorProbeSetFallsBackToTheMirror(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("<html>Forbidden</html>"))
+	}))
+	defer primary.Close()
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if len(body) == 0 {
+			t.Errorf("mirror got an empty body — the probe must send its request body")
+		}
+		w.Write([]byte(`{"blockID":"` + strings.Repeat("cd", 32) + `"}`))
+	}))
+	defer mirror.Close()
+
+	probe := torProbe{
+		Name: "tron", Method: http.MethodPost, Body: `{}`,
+		URLs:     []string{primary.URL + "/wallet/getnowblock", mirror.URL + "/wallet/getnowblock"},
+		Evidence: evidenceTronBlock,
+	}
+	checks := runTorProbeSet(primary.Client(), []torProbe{probe}, 3*time.Second)
+	if len(checks) != 1 || !checks[0].OK {
+		t.Fatalf("expected one passing check, got %+v", checks)
+	}
+	note := checks[0].Note
+	if !strings.Contains(note, "fallback") || !strings.Contains(note, "block cdcdcdcd") {
+		t.Fatalf("note should name the fallback and its evidence: %q", note)
+	}
+	if !strings.Contains(note, "403") {
+		t.Fatalf("note should say why the primary failed: %q", note)
+	}
+}
+
+func TestRunTorProbeSetFailsWhenEveryEndpointFails(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("<html>down</html>"))
+	}))
+	defer dead.Close()
+	probe := torProbe{
+		Name: "solana", Method: http.MethodPost, Body: `{"jsonrpc":"2.0"}`,
+		URLs:     []string{dead.URL + "/a", dead.URL + "/b"},
+		Evidence: evidenceSolanaHealth,
+	}
+	checks := runTorProbeSet(dead.Client(), []torProbe{probe}, 3*time.Second)
+	if len(checks) != 1 || checks[0].OK {
+		t.Fatalf("a carrier with no answering endpoint must fail: %+v", checks)
+	}
+	if !strings.Contains(checks[0].Note, "/a") || !strings.Contains(checks[0].Note, "/b") {
+		t.Fatalf("the failure should name every endpoint tried: %q", checks[0].Note)
 	}
 }
 
@@ -237,5 +310,18 @@ func TestRunTorDoctorFailsWhenTheProxyIsDown(t *testing.T) {
 		if c.OK {
 			t.Fatalf("check %q passed without a proxy", c.Name)
 		}
+	}
+}
+
+// Compile-time guard: the JSON round-trip in evidenceTorCircuit must remain a
+// plain struct decode, so a moved field fails here rather than silently
+// reporting an exit of "".
+func TestTorCircuitEvidenceShape(t *testing.T) {
+	var r struct {
+		IsTor bool   `json:"IsTor"`
+		IP    string `json:"IP"`
+	}
+	if err := json.Unmarshal([]byte(`{"IsTor":true,"IP":"1.2.3.4"}`), &r); err != nil || !r.IsTor || r.IP != "1.2.3.4" {
+		t.Fatalf("exit-check shape changed: %+v %v", r, err)
 	}
 }

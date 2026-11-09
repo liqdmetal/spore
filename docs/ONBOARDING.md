@@ -204,7 +204,9 @@ looked.
 Endpoints change their edges without telling anyone. Re-run this before trusting the table:
 `spore doctor -tor` dials the same endpoints through a local SOCKS5 proxy (Tor's `SocksPort`)
 and prints the payload each one returned, so a changed edge shows up as a failed row with the
-body it actually got, not as a silent HTTP 200.
+body it actually got, not as a silent HTTP 200. Each carrier tries its documented endpoint
+first and then the public mirror, naming which one answered and why the other did not — so a
+stale official endpoint reads as a fallback, never as a pass.
 
 Practical conclusion: on this evidence a Tails client can reach every carrier spore has —
 Base, Solana, Tron, Bitcoin, TON and Cosmos included — as long as it uses an endpoint that
