@@ -27,9 +27,8 @@ The script downloads from the
 each binary's checksum against the release's `.sha256` files, and only moves
 binaries into place after verification (a failed download never clobbers an
 existing install). Pin a version with `SPORE_RELEASE=vX.Y.Z` — e.g.
-`SPORE_RELEASE=v0.12.0`, the current release (2026-11-09) — `spore doctor -tor`, which
-re-measures every carrier through a SOCKS5 proxy and names the endpoint that answered —
-built end to end by the GitHub Actions pipeline (see docs/RELEASES.md). (v0.7.0 was the first
+`SPORE_RELEASE=v0.13.0`, the current release (2026-11-10) — continuity check-ins a holder
+can merge straight from the inbox — built end to end by the GitHub Actions pipeline (see docs/RELEASES.md). (v0.7.0 was the first
 release shipping the full stack: `spore` for all six platforms and the Rust
 `spore-peer` transport for five of them. Current releases ship `spore` only —
 the E2 direct-body server `cmd/spore-peer` is in-repo Go, built from source.)
@@ -60,7 +59,7 @@ slsa-verifier verify-artifact spore-linux-amd64 \
   --source-uri github.com/liqdmetal/spore --source-tag vTAG
 ```
 
-For the current release, `vTAG` is `v0.12.0`.
+For the current release, `vTAG` is `v0.13.0`.
 
 From a checkout, `bash scripts/release-provenance-verify.sh` runs exactly that against
 the release `docs/RELEASES.md` calls current — `--tag vTAG` pins one, `--all` covers all
@@ -101,7 +100,7 @@ spore demo                           # no chain, no wallet, no network — prove
 Pin a release you have already verified (the variable must reach `sh`, not `curl`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | SPORE_RELEASE=v0.12.0 sh
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | SPORE_RELEASE=v0.13.0 sh
 ```
 
 ### Where state lives (`SPORE_HOME`)

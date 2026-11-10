@@ -3,6 +3,82 @@
 Release notes per tag, newest first. Binaries are stamped with
 `git describe --tags --always` at build time (`spore version` prints it).
 
+## v0.13.0 — a holder's vault catches up from the inbox (2026-11-10)
+
+10 commits, 21 files, +2238/−17 vs `v0.12.0`. Continuity shipped as a file you
+carried to holders by hand, so a copy that fell behind kept releasing on a
+deadline the owner had already revoked. This release lets the owner's signed
+check-ins travel over the thread they already use, and lets a holder adopt them
+on arrival.
+
+### A check-in a stale copy can adopt
+
+`continuity check-in -emit ENVELOPE` writes the owner-signed chain, and
+`continuity merge -vault V -checkins ENVELOPE` adopts it. The rules are the ones
+the vault itself enforces: same vault and owner key, a strictly forward sequence
+whose `prev` digest matches, a recomputed deadline, and every record's signature
+re-verified. Merging needs no private key, is atomic, and is idempotent — a
+replay reports "already current" and writes nothing, while a foreign vault, a
+broken chain or a bad signature is refused with the file left byte-identical.
+
+`continuity status -warn 6h -exit-code` turns staleness into an exit code a
+monitor can branch on: 10 due soon, 11 releasable.
+
+### The watcher adopts before it judges
+
+`continuity watch -checkins A[,B]` merges arriving envelopes *before* deciding
+whether the deadline passed, so a holder who receives the owner's proof while
+preparing a release no longer reports a deadline the owner already revoked.
+Adoption is forward-only and same-chain only, and a refused envelope does not
+move the watch state — the next genuine check-in still lands.
+
+### The envelope rides the thread
+
+`spore msg checkin -to HOLDER -session SID -checkins ENVELOPE` sends an envelope
+the owner already signed over an open ratchet session: no owner key, no new
+transport, nothing extra for the carrier to learn. `spore msg recv-e2 …
+-continuity-vault V` merges it as it arrives — one line, no file copying, no
+manual `merge` — with the same checks as `merge` and an atomic write.
+
+A message that claims the type but fails verification is reported as a refusal
+and changes nothing: not adopted, not recorded as a chat body. Without the flag
+the receiver still names the vault and sequence and says it did not adopt, so the
+artifact is visible before a copy exists. No chain or ratchet wire-format change:
+`spore/continuity-checkins/v1` rides inside the existing encrypted frame, and an
+older peer shows it as a message instead of adopting it.
+
+### Everything else in the range
+
+- `docs/PAY_IN_XMR.md` — the buyer walkthrough behind the v0.11.0 Monero work:
+one thread, one wallet payment, a dual-signed receipt, with the honest line first
+(`msg pay` does not move XMR; it refuses rather than print PAID over a transfer
+that never happened). It is anchored from ONBOARDING, and the `msg invoice`
+example in `MONERO_SETTLEMENT.md` now shows the real `-to -session` shape.
+- The provenance check v0.12.0's notes described landed just after that tag and now
+runs in the gate suite: `scripts/release-provenance-verify.sh` verifies the assets
+of the release the notes call current with `slsa-verifier`. A check that runs and
+fails is a failure; an absent tool or an unpublished tag is a named skip.
+- `scripts/rehearsal-continuity-checkin.sh` — the live rehearsal, with its own
+loopback ports and workspace: a simulated carrier, a real mailbox relay, two CLI
+identities and a running inbox.
+
+### What was verified, and what was not
+
+The continuity package tests cover the envelope parser, adoption, replay and
+refusal byte-identity; an ingestor test drives a real ratchet session through the
+same `ingest()` both transports call; the rehearsal ran green on Windows Git Bash
+and on WSL2 Ubuntu, where the holder's copy went `checkins=1 → 2 → 3`, verified
+and byte-identical to the owner's, with a foreign vault refused in between and
+ordinary chat unaffected.
+
+Honest limits: the rehearsal's carrier is the DERO wallet-RPC simulator, not the
+network, so fee and block-timing behaviour is untested; its vault is sealed to a
+throwaway recipient key because adoption needs no key, so release decryption is
+covered only by the continuity tests. `watch` remains metadata-only, and adoption
+proves the owner's chain forwarded — not that the owner is alive right now.
+
+No wire-format change.
+
 ## v0.12.0 — a Tor probe you can run yourself, with fallbacks that name themselves (2026-11-09)
 
 9 commits, 5 files, +803/−75 vs `v0.11.1`. The first release since v0.11.0 where the
