@@ -1,7 +1,7 @@
 # Spore — m³ · Multi-chain Private Messenger
 
 **In one line:** an E2E-encrypted, **forward-private, compostable** messenger
-that rides any of seven chains — you talk wallet-to-wallet, money and message
+that rides any of eight chains — you talk wallet-to-wallet, money and message
 in the same atomic transaction, and everything rots on your schedule. No
 central server. No VC. No token.
 
@@ -376,6 +376,33 @@ one-shot onboarding, panic wipe, multi-device state sync via `e2-device`, server
 interop tests), and direct E2 body fetch via `disk://` + `spore-peer serve`.
 Next: tokenized search, in-chat settlement (escrow/swap), and real-chain EVM
 deployment.
+
+## Docs
+
+Every document, by topic: [`docs/INDEX.md`](docs/INDEX.md). The short list:
+
+- **Start here** — [`docs/ONBOARDING.md`](docs/ONBOARDING.md) (zero to first
+  message), [`docs/FRIENDS.md`](docs/FRIENDS.md) (one conversation in five
+  minutes), [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (the DERO path in depth).
+- **Running it** — [`docs/HOME_NODE.md`](docs/HOME_NODE.md),
+  [`docs/MODEL_B_SERVICE.md`](docs/MODEL_B_SERVICE.md),
+  [`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md),
+  [`docs/NTFY_BETA.md`](docs/NTFY_BETA.md).
+- **Continuity and money** — [`docs/CONTINUITY.md`](docs/CONTINUITY.md),
+  [`docs/MONERO_SETTLEMENT.md`](docs/MONERO_SETTLEMENT.md),
+  [`docs/PAY_IN_XMR.md`](docs/PAY_IN_XMR.md),
+  [`docs/JOB_RECEIPT_V1.md`](docs/JOB_RECEIPT_V1.md).
+- **Protocol** — [`docs/WIRE_SPEC.md`](docs/WIRE_SPEC.md),
+  [`docs/RATCHET.md`](docs/RATCHET.md),
+  [`docs/MESSAGE_DATAFLOW.md`](docs/MESSAGE_DATAFLOW.md),
+  [`docs/SENDER_AUTH.md`](docs/SENDER_AUTH.md),
+  [`docs/MULTIDEVICE.md`](docs/MULTIDEVICE.md).
+- **Working with others** — [`docs/PRIVATE_HANDOFF.md`](docs/PRIVATE_HANDOFF.md),
+  [`docs/DAO_REVIEW.md`](docs/DAO_REVIEW.md),
+  [`docs/APPROVAL_RUNBOOK.md`](docs/APPROVAL_RUNBOOK.md),
+  [`docs/HOOKED_INTEGRATION.md`](docs/HOOKED_INTEGRATION.md).
+- **Why and what for** — [`VISION.md`](VISION.md), [`ROADMAP.md`](ROADMAP.md),
+  [`docs/USE_CASES.md`](docs/USE_CASES.md), [`docs/BUSINESS.md`](docs/BUSINESS.md).
 
 ## License
 
