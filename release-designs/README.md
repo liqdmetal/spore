@@ -51,6 +51,15 @@ deployment-day commit described in
   `internal/evm` test cannot quietly turn release-day instructions into
   fiction. The one deliberate gap is `v0.9.0-tag-message-final.txt`, created at
   tag time — kept in step with `NOT_YET` in `scripts/release-designs-check.sh`.
+- **`scripts/docs-cites-check.sh`** (the `doc citations resolve` pre-push gate)
+  reads the same set as prose: every backticked path, flag and identifier in the
+  notes, in the tag message, and in the lines each frozen patch **installs**
+  must resolve in the tree. It is not a second spelling of the Go guard — that
+  one knows this set's shape and the claims the receipt gate requires, this one
+  knows nothing and checks what a reader would follow. Two limits are
+  deliberate: a patch's context and `-` lines quote the tree it deletes and are
+  never read, and `release-designs/` is excluded from the source corpus, so a
+  name only the patch carries cannot satisfy a doc's citation.
 - **`TestReleaseDesignsExecutablePatchDeliversGateClaims`** covers the artifact
   release day actually runs. It reconstructs every hunk's post-apply text from
   `v0.9.0-doc-flips.patch` and requires each gated claim to appear **raw** in

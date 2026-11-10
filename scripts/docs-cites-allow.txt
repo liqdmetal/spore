@@ -43,3 +43,6 @@ GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs	an example address in LIVE_NODES.md
 
 # --- planned work, named before it exists ------------------------------------
 internal/routing	planned module, listed under CLOSE-FREE-ROUTING.md's "Later" — the doc says so on the same line
+
+# --- produced at tag time, by design ----------------------------------------
+release-designs/v0.9.0-tag-message-final.txt	written by scripts/release-tag-message.sh --write at tag time; never committed (NOT_YET in scripts/release-designs-check.sh)

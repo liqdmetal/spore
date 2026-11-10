@@ -34,9 +34,17 @@
 # they are as often runtime state or a doc title as a citation, and the noisy
 # first version of this gate drowned in them; absolute paths, home-relative
 # paths, URLs, templates, globs and shell snippets, none of which this checkout
-# can resolve. release-designs/ is pruned from the corpus as well: those patches
-# carry frozen doc text, and a name that exists only in a doc patch has not been
-# verified, it has been echoed back.
+# can resolve.
+#
+# The release-prep set is read too, because it is the text that ships: the
+# release-designs notes are prose an operator follows, the tag message is signed
+# verbatim into an immutable tag, and the frozen patches are the flip applied by
+# hand on release day. For a patch only the lines it INSTALLS are checked (the
+# `+` lines); its context and `-` lines quote the tree the patch deletes, so
+# requiring them to resolve today would fail on the very deletion it records.
+# The patches stay out of the SOURCE corpus, though: a name that exists only in
+# release text has not been verified, it has been echoed back, and a doc citing
+# it must fail.
 #
 #   bash scripts/docs-cites-check.sh              # check the docs
 #   bash scripts/docs-cites-check.sh --quiet      # exit status only
@@ -79,7 +87,10 @@ usage: bash scripts/docs-cites-check.sh [--quiet] [--list] [--self-check]
   --docs-root    tree the docs are read from (default: the same tree)
   --allow        allowlist file (default: scripts/docs-cites-allow.txt)
 
-Docs checked: docs/*.md, README.md, design.md, solana-program/README.md
+Docs checked: docs/*.md, README.md, design.md, solana-program/README.md,
+release-designs/*.md, release-designs/*tag-message*.txt, and the lines each
+release-designs/*.patch installs (its context and `-` lines describe a tree
+that is already gone and are not checked)
 EOF
 }
 
@@ -293,24 +304,37 @@ check_token() { # FILE LINE TOKEN
   return 0
 }
 
+check_line() { # FILE LINE TEXT — every backticked token on one line
+  local rest=$3 tok
+  while [[ $rest == *'`'*'`'* ]]; do
+    rest=${rest#*\`}
+    tok=${rest%%\`*}
+    rest=${rest#*\`}
+    check_token "$1" "$2" "$tok"
+  done
+}
+
 check_doc() { # FILE
-  local line ln text rest tok
+  local line
   while IFS= read -r line; do
-    ln=${line%%:*}
-    text=${line#*:}
-    rest=$text
-    while [[ $rest == *'`'*'`'* ]]; do
-      rest=${rest#*\`}
-      tok=${rest%%\`*}
-      rest=${rest#*\`}
-      check_token "$1" "$ln" "$tok"
-    done
+    check_line "$1" "${line%%:*}" "${line#*:}"
   done < <(grep -n '`' "$1" 2>/dev/null || true)
+}
+
+# check_patch FILE — only the lines the patch installs. Its context and `-` lines
+# quote the tree the patch deletes; requiring them to resolve would fail on the
+# deletion the patch exists to record, which is why they are not read at all.
+check_patch() { # FILE
+  local line
+  while IFS= read -r line; do
+    check_line "$1" "${line%%:*}" "${line#*:}"
+  done < <(awk '/^\+/ && !/^\+\+\+/ { print NR ":" $0 }' "$1" 2>/dev/null || true)
 }
 
 # ---- the run ---------------------------------------------------------------
 check_tree() {
   local f missing=0 extra docs_seen=0
+  local rel_dir="$DOC_ROOT/release-designs" rel_md=0 rel_tag=0 rel_patch=0
   build_sets "$CODE_ROOT" || return 2
   load_allow
 
@@ -327,6 +351,31 @@ check_tree() {
     fi
     check_doc "$DOC_ROOT/$extra"
   done
+  # The release-prep set: notes an operator follows, the tag message that is
+  # signed verbatim, and the doc text each frozen patch installs on release day.
+  for f in "$rel_dir"/*.md; do
+    [ -f "$f" ] || continue
+    check_doc "$f"
+    rel_md=$((rel_md + 1))
+  done
+  for f in "$rel_dir"/*tag-message*.txt; do
+    case $f in *-final.txt) continue ;; esac   # written at tag time, never committed
+    [ -f "$f" ] || continue
+    check_doc "$f"
+    rel_tag=$((rel_tag + 1))
+  done
+  for f in "$rel_dir"/*.patch; do
+    [ -f "$f" ] || continue
+    check_patch "$f"
+    rel_patch=$((rel_patch + 1))
+  done
+  # Zero of any of them is not "nothing to check": the text that ships is the
+  # last thing that may be read as prose without being resolved.
+  if [ "$rel_md" -eq 0 ] || [ "$rel_tag" -eq 0 ] || [ "$rel_patch" -eq 0 ]; then
+    echo "docs-cites-check: release text missing under $rel_dir (notes=$rel_md tag-message=$rel_tag patches=$rel_patch) — the text that ships was not read" >&2
+    return 2
+  fi
+
   [ "$missing" -eq 1 ] && return 2
 
   if [ "$docs_seen" -eq 0 ]; then
@@ -350,16 +399,17 @@ check_tree() {
     return 1
   fi
   [ "$unused" -gt 0 ] && return 1
-  [ "$QUIET" -eq 1 ] || printf 'docs-cites-check: clean — %s citation(s) resolve, %s skipped (prose, globs, out-of-tree)\n' \
-    "$CHECKED" "$SKIPPED"
+  [ "$QUIET" -eq 1 ] || printf 'docs-cites-check: clean — %s citation(s) resolve, %s skipped (prose, globs, out-of-tree); release text: %s notes, %s tag message, %s patch addition(s)\n' \
+    "$CHECKED" "$SKIPPED" "$rel_md" "$rel_tag" "$rel_patch"
   return 0
 }
 
 # ---- the rehearsal ---------------------------------------------------------
 self_check() {
-  local tmp fail=0 cls tok
+  local tmp fail=0 cls tok target
   tmp=$(mktemp -d) || { echo "docs-cites-check: mktemp failed" >&2; return 2; }
-  mkdir -p "$tmp/code/scripts" "$tmp/code/internal/known" "$tmp/proj/docs" "$tmp/proj/solana-program"
+  mkdir -p "$tmp/code/scripts" "$tmp/code/internal/known" "$tmp/proj/docs" \
+    "$tmp/proj/solana-program" "$tmp/proj/release-designs"
   printf 'echo known\n' >"$tmp/code/scripts/known.sh"
   cat >"$tmp/code/internal/known/known.go" <<'GO'
 package known
@@ -373,6 +423,33 @@ GO
   : >"$tmp/proj/README.md"
   : >"$tmp/proj/design.md"
   : >"$tmp/proj/solana-program/README.md"
+  # The release set, including the two lines a patch may NOT be held to: its
+  # context and its deletion both cite a name that is gone, and the green run
+  # below is what proves they are left alone. The directory is named once and
+  # joined from there: a literal `<set>/notes.md` in a tracked file would read as
+  # a pointer to an artifact that does not exist, and scripts/release-designs-check.sh
+  # fails the build on exactly that.
+  local rel_dir="$tmp/proj/release-designs"
+  cat >"$rel_dir/notes.md" <<'MD'
+# fixture release notes
+
+Flip `internal/known/known.go`; the runbook still names `scripts/known.sh`.
+MD
+  cat >"$tmp/proj/release-designs/v0.9.0-tag-message.txt" <<'TXT'
+# fixture tag draft — do not tag
+# (strip EVERYTHING above this line)
+
+Tag for `scripts/known.sh` — receipt in `docs/sample.md`.
+TXT
+  cat >"$tmp/proj/release-designs/v0.9.0-doc-flips.patch" <<'PATCH'
+--- a/docs/sample.md
++++ b/docs/sample.md
+@@ -1,3 +1,3 @@
+ A context line that still cites `scripts/gone.sh`.
+-The removed line cited `scripts/gone.sh` and `KnownConstant`.
++The installed line cites `scripts/known.sh` and `KnownConstant`.
+ A trailing context line.
+PATCH
   cat >"$tmp/proj/docs/sample.md" <<'MD'
 # fixture
 
@@ -400,20 +477,26 @@ MD
   fi
 
   # One class at a time, so a failure names the class it proves.
-  for cls in path flag ident; do
+  for cls in path flag ident release patch; do
     case $cls in
-      path) tok='scripts/gone.sh' ;;
-      flag) tok='-gone-flag' ;;
-      ident) tok='GoneConstant' ;;
+      path) target="$tmp/proj/docs/sample.md"; tok='scripts/gone.sh' ;;
+      flag) target="$tmp/proj/docs/sample.md"; tok='-gone-flag' ;;
+      ident) target="$tmp/proj/docs/sample.md"; tok='GoneConstant' ;;
+      release) target="$rel_dir/notes.md"; tok='scripts/release-gone.sh' ;;
+      patch) target="$tmp/proj/release-designs/v0.9.0-doc-flips.patch"; tok='scripts/patch-gone.sh' ;;
     esac
-    printf '\nAlso `%s`.\n' "$tok" >>"$tmp/proj/docs/sample.md"
+    if [ "$cls" = patch ]; then
+      printf '+The patch would install `%s`.\n' "$tok" >>"$target"
+    else
+      printf '\nAlso `%s`.\n' "$tok" >>"$target"
+    fi
     if run_fixture; then
       echo "self-check: FAILED — a missing $cls (\"$tok\") passed"
       fail=1
     else
       echo "self-check: missing $cls is red"
     fi
-    sed -i '$ d' "$tmp/proj/docs/sample.md"
+    sed -i '$ d' "$target"
   done
 
   # The other direction: the doc is untouched and the code loses the name. A
@@ -426,12 +509,54 @@ MD
     echo "self-check: code drift is red"
   fi
 
+  # Release text must not verify itself. One tree, because that is the real
+  # layout: with separate roots the corpus never held the patch to match in the
+  # first place. The name lives ONLY in a patch deletion, so a corpus that still
+  # read release-designs/ — or a patch reader that also read `-` lines — would
+  # find it and pass the doc. Both must fail.
+  local one="$tmp/one" one_rel="$tmp/one/release-designs"
+  mkdir -p "$one/scripts" "$one/docs" "$one/solana-program" "$one_rel"
+  printf 'echo known\n' >"$one/scripts/known.sh"
+  : >"$one/README.md"
+  : >"$one/design.md"
+  : >"$one/solana-program/README.md"
+  printf 'Cite `scripts/known.sh`.\n' >"$one/docs/sample.md"
+  printf '# notes\n\nThe flip touches `scripts/known.sh`.\n' >"$one_rel/notes.md"
+  printf '# draft\n# (strip EVERYTHING above this line)\n\nTag for `scripts/known.sh`.\n' \
+    >"$one/release-designs/v0.9.0-tag-message.txt"
+  printf -- '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-A line that mentions `PatchOnlyName`.\n+The line it installs.\n' \
+    >"$one/release-designs/v0.9.0-doc-flips.patch"
+
+  run_same_tree() {
+    CODE_ROOT=$one DOC_ROOT=$one ALLOW_FILE=$tmp/allow
+    CHECKED=0 FAILED=0 SKIPPED=0
+    WORDS=() FLAGS=() QUOTED=() ALLOW=() USED=()
+    check_tree >/dev/null 2>&1
+    return $?
+  }
+
+  if run_same_tree; then
+    echo "self-check: single tree with release text resolves"
+  else
+    echo "self-check: FAILED — the single-tree fixture does not resolve"
+    run_same_tree >&2 || true
+    fail=1
+  fi
+  printf 'Also `PatchOnlyName`.\n' >>"$one/docs/sample.md"
+  if run_same_tree; then
+    echo "self-check: FAILED — a doc verified against a name only release text carries"
+    fail=1
+  else
+    echo "self-check: release text cannot verify a doc (echo is not evidence)"
+  fi
+
   CODE_ROOT=$saved_code DOC_ROOT=$saved_docs ALLOW_FILE=$saved_allow
   CHECKED=$saved_checked FAILED=$saved_failed SKIPPED=$saved_skipped
   rm -rf "$tmp"
 
   [ "$fail" -eq 0 ] || return 1
-  echo "self-check: the gate reads every class in both directions"
+  echo "self-check: the gate reads every class in both directions, the patch's"
+  echo "  installed lines only, and the release set without letting it verify itself"
   return 0
 }
 

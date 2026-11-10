@@ -601,9 +601,12 @@ echo "== cited paths, flags and identifiers still exist =="
 # workflow deleted with the rest of the CI. Nothing stopped the next rename.
 # This resolves every backticked citation against the tree — paths on disk, flags
 # in the Go registrations and the scripts, identifiers as words in source — and
-# fails when one is gone. Citations that live outside this checkout are declared,
-# with a reason each, in scripts/docs-cites-allow.txt, and a row nobody uses any
-# more is itself a failure.
+# fails when one is gone. It reads the release-prep set too, which is the text
+# that actually ships: the notes, the message signed verbatim into the tag, and
+# the lines each frozen patch installs (its context and deletion lines quote a
+# tree that is already gone, so they are not read). Citations that live outside
+# this checkout are declared, with a reason each, in scripts/docs-cites-allow.txt,
+# and a row nobody uses any more is itself a failure.
 run_gate 'doc citations resolve' bash scripts/docs-cites-check.sh --quiet
 
 echo
