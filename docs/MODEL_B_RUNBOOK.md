@@ -1,6 +1,6 @@
 # Model B — operator runbook (stand up a hosted mailbox + node for a phone)
 
-*How an operator provisions a phone user a private remote node + hosted mailbox. Phone holds keys; the service is the blind courier. Everything below uses the shipped spore binary (v0.2.x) on a Linux box like the Hetzner node.*
+*How an operator provisions a phone user a private remote node + hosted mailbox. Phone holds keys; the service is the blind courier. Everything below uses the shipped spore binary on a Linux box like the Hetzner node.*
 
 ## 0. What you're running (one per paid user, or shared for free tier)
 

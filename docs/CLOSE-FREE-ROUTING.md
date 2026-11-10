@@ -1,6 +1,13 @@
 # Close-to-free messaging and routing
 
-Repo: `C:\Users\officeone\spore`
+> **Status, 2026-11-10: the Tron half of this plan has shipped.** `internal/tron`,
+> the `internal/backend` case, the `-chain` help entry and the
+> `docs/CARRIER_MATRIX.md` row landed in v0.11.0 — §3's steps are done, and its
+> "must add" list is history. Still planned: the routing tier policy and the
+> multi-chain receive fan-in in §2.2. Everything below stands as written: it is
+> the assessment that chose the carrier, with its 2026-11 fee inputs, not a
+> current status page.
+
 Scope: assessment + plan. No code changed by this document.
 Status key: **live** = shipped path; **planned** = not in code; **probe pending** = exact value not measured or not verifiable from repo.
 
@@ -8,7 +15,7 @@ Source notes:
 - Fee figures below use TRX amounts exactly and USD figures as the ~2026-11 exchange-rate framing supplied (illustrative; TRX amounts are the authoritative numbers).
 - No USD conversion is made here. No TRX price is assumed.
 - Tron figures are 2026-11 inputs, not measured by this repo.
-- `cmd\spore\e2cmd.go`: `-chain` help at line 373 (`pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton (xmr unsupported)`) and ChainConfig assembly at lines 194-196 verified against the tree; `tron` must be added to both.
+- `cmd\spore\e2cmd.go`: `-chain` help at line 373 (`pointer carrier: dero|evm|solana|nostr|bitcoin|cosmos|ton (xmr unsupported)`) and ChainConfig assembly at lines 194-196 verified against the tree; `tron` has since been added to both (v0.11.0); the line numbers cited are where they stood when this was written.
 
 ---
 
@@ -78,7 +85,7 @@ Fee column: numbers as given in input; currency unit probe pending except where 
 | EVM L1 | ~$1-10 | ~12 s-2 min | calldata | `burn` when enabled | anchor |
 | Cosmos SDK | ~$0.001-0.05 | ~6-7 s (tendermint final) | memo ~512 B-1 KB | chain-specific; no generic burn claim | configurable seam |
 | TON | ~0.005-0.05 TON (~$0.01-0.10) | ~1-5 s | comment up to ~127 B; **code V1-only (74 B)** | no generic burn claim | configurable seam |
-| **Tron** | **0 to ~0.30 TRX** | **~3 s readable; ~57 s irreversible** | memo ~200 B; V1 100 chars, V2 144 chars | no primitive; body-only compost | **planned** (see §3) |
+| **Tron** | **0 to ~0.30 TRX** | **~3 s readable; ~57 s irreversible** | memo ~200 B; V1 100 chars, V2 144 chars | no primitive; body-only compost | **shipped** (`internal/tron`, v0.11.0); not live-verified |
 | Bitcoin | ~$0.02-2 (feerate-dependent) | ~10 min-1 h (1-6 conf) | OP_RETURN 80 B; **code V1-only** (V2 108 B script refused) | immutable; body-only compost | carrier implementation; anchor |
 | Monero (XMR) | n/a | n/a | 8 B payment-id seam | n/a | **refused** for E2 pointer; never downgraded |
 

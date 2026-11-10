@@ -93,7 +93,7 @@ release download can be slow or throttled: retry rather than conclude it is brok
 # Tails Terminal or a Whonix Workstation
 curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-spore -version                       # prints the release you got, e.g. v0.12.0
+spore -version                       # prints the release you got, e.g. v0.13.0
 spore demo                           # no chain, no wallet, no network — proves the binary
 ```
 

@@ -1,96 +1,90 @@
 # Chat with a friend using spore — 5-minute setup
 
-Both you and your friend each need **two things running**: your DERO wallet's
-RPC server, and the `spore` binary. Everything else is a command.
+Two people, one conversation, no server in the middle. You each need the `spore`
+binary and a channel to swap two short values out-of-band. Everything else is a
+command.
 
-## 1. Get the binaries
+This page is the short path. The long one — building from source, a mailbox you
+host yourself, Tor-only machines — is [`ONBOARDING.md`](ONBOARDING.md).
 
-**spore** (download, no Go needed):
-- Linux/macOS/Windows binaries: https://github.com/liqdmetal/spore/releases/latest
-- pick your OS, download `spore-<os>-<arch>`, `chmod +x` (linux/mac), put it on PATH.
+## 1. Get the binary (both of you)
 
-**Optional direct-peer server:**
-- Serve E2 bodies from your own machine with `spore serve -dir <hold> -listen 127.0.0.1:8099`, or build the same server standalone: `go install github.com/liqdmetal/spore/cmd/spore-peer@latest`. Current releases ship no `spore-peer` asset — that binary is in-repo Go, not packaged. Both defaults bind loopback; remote use requires a trusted reachable LAN/VPN endpoint.
-
-**E2 kit and body store** (required for new messages):
-- Run `spore init -dir ~/.spore` and keep the identity/state files private.
-- Configure the recipient's mailbox or another supported body store.
-- New DERO messages use X3DH + Double Ratchet; old native records remain receive-only.
-
-New E2 bodies can use the Go `spore-peer serve` direct-fetch service: the sender
-writes ciphertext to `disk://<body-dir>`, and the receiver fetches from
-`peer://<reachable-host:port>`. The older Rust compatibility transport remains
-for historical long-body records. Direct TCP is unauthenticated and exposes
-endpoint/fetch timing; use loopback or a trusted VPN/LAN.
-
-
-## 2. Start your wallet RPC
-
-Your friend already runs a DERO wallet. Start it with the RPC server on a known
-address, and make sure it has a little balance (for the tiny postage on sends):
-
-```sh
-dero-wallet-cli --wallet-file mywallet.db \
-  --daemon-address <your node or a public node> \
-  --rpc-server --rpc-bind 127.0.0.1:20209
+```bash
+curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.sh | sh   # linux/macOS/WSL
+```
+```powershell
+irm https://raw.githubusercontent.com/liqdmetal/spore/main/scripts/install.ps1 | iex        # Windows
 ```
 
-> Privacy note: point at **your own** derod for full privacy. A public daemon
-> works but trusts that node operator more. Your wallet needs enough DERO to pay
-> the ~0.0002 tx fee per send.
+Then `spore demo`: the whole send → receive → burn cycle with no wallet, no chain
+and no network. If that prints its two messages, the binary is sound.
 
-Confirm it's up:
-```sh
-curl http://127.0.0.1:20209/json_rpc -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"1","method":"getaddress"}'
+## 2. Make an identity (both of you)
+
+```bash
+spore init                        # ~/.spore: identity kit, prekey pool, config.json
 ```
 
-## 3. Chat
+`-dir DIR` (or `SPORE_HOME`) puts it elsewhere. That directory holds your keys:
+keep it private, and `spore panic -confirm` is how you wipe it. `spore init` also
+writes a config the later commands read, so you do not repeat paths and
+addresses on every send.
 
-**Receive** (leave running in a terminal):
-```sh
-spore whisper recv \
-  -rpc http://127.0.0.1:20209/json_rpc \
-  -identity ~/.spore/identity.key -spk ~/.spore/spk.key \
-  -opk-pool ~/.spore/opk-pool.json \
+## 3. Pick where bodies live (both of you)
+
+Spore puts only an opaque pointer on-chain; the ciphertext body lives in a store
+for its TTL. You need one address both of you can reach:
+
+- a mailbox someone runs — yours, a friend's, or an operator's, or
+- the public Nostr commons: `-store nostr://relay.damus.io,nos.lol` with a
+  dedicated `-store-key` (a key of its own, never your identity key).
+
+Mailbox setup, tokens, TLS and the trade-offs are in
+[`ONBOARDING.md`](ONBOARDING.md) and
+[`CARRIER_MATRIX.md`](CARRIER_MATRIX.md).
+
+## 4. Swap two values out-of-band (both of you)
+
+1. **Your public prekey bundle** — the sender needs it before the first message.
+   Put it where your friend can fetch it, or hand over the file when you are
+   already talking.
+2. **Your pinned signing key** — the fingerprint your friend pins, sent over a
+   channel where they already know the message is from you. A bundle fetched
+   from a URL is a convenience, never the proof: `-pinned-sig` is still required
+   and still verified.
+
+## 5. One receives, one sends
+
+**Your friend, receiving** (leave it running; `-out-dir` is where bodies land):
+
+```bash
+spore msg recv-e2 -identity ~/.spore/identity.key \
+  -store https://your-mailbox.example -out-dir ./inbox
+```
+
+`-auto-ack` sends a delivery receipt back on the same session, `-maildb FILE`
+indexes what arrives so you can search it later, and `-ntfy URL` wakes you
+instead of holding a terminal open.
+
+**You, sending** (the body never appears in `argv`):
+
+```bash
+printf 'meet at the usual place\n' | spore msg send-e2 \
+  -to THEIR_ADDRESS -chain dero \
+  -bundle ./their-bundle.json -pinned-sig THEIR_PINNED_SIG_HEX \
   -store https://your-mailbox.example \
-  -state-dir ~/.spore/state -state-key ~/.spore/state.key
+  -identity ~/.spore/identity.key
 ```
 
-**Send** (your friend is Bob; use his bundle and pinned signing key):
-```sh
-printf 'meet at the usual place\n' | spore whisper send \
-  -rpc http://127.0.0.1:20209/json_rpc \
-  -to bob -identity ~/.spore/identity.key \
-  -bundle ./bob-bundle.json -pinned-sig BOB_SIGNING_KEY_HEX \
-  -store https://your-mailbox.example \
-  -state-dir ~/.spore/state -state-key ~/.spore/state.key \
-  -ringsize 16
-```
-`-to bob` resolves his DERO name when `-daemon` is configured. Or pass his
-full `dero1…` address. New DERO sends use X3DH + Double Ratchet and default to
-ring size 16; pass `-ringsize 8` for the smaller supported transaction.
+Reply in the same thread with `spore msg reply-e2 -to ADDR -session HEX`, and
+list open threads with `spore msg sessions`.
 
-When Bob sends back, the E2 receiver fetches the body, advances the ratchet,
-and prints it. The DERO transaction contains only the opaque pointer.
+## What this is, and is not
 
-## Long messages (files / prose)
+The chain sees an opaque pointer and a fee; the body is forward-private and
+expires on your schedule. Metadata — "a transaction happened at about this time"
+— is public on every carrier. Deleting a body does not unwrite the pointer, and
+no protocol can promise otherwise.
 
-Short and long DERO sends use the same E2 path. For a file:
-```sh
-spore whisper send-long \
-  -to bob -identity ~/.spore/identity.key \
-  -bundle ./bob-bundle.json -pinned-sig BOB_SIGNING_KEY_HEX \
-  -file ./body.txt -store https://your-mailbox.example \
-  -state-dir ~/.spore/state -state-key ~/.spore/state.key \
-  -ringsize 16
-```
-The body is ratcheted and stored off-chain. New E2 can use HTTP/Nostr or the
-optional `disk://` + `spore-peer serve` direct path; the old Rust one-shot body
-format remains receive-only.
-
-## Notes
-- Your wallet must stay running while you chat (it signs + delivers).
-- Names (`-to bob`) need `-daemon`; full `dero1…` addresses don't.
-- There is no "point at a server and tada" — the wallet is the engine. That's
-  what makes it private.
+If something does not work, `spore doctor` is the preflight that names which
+piece is missing.
