@@ -77,12 +77,20 @@ if [ -z "$ROOT" ]; then
     exit 2
   }
 fi
-cd "$ROOT"
+
+# --root is also how --self-check points at its scratch tree, so a bad path here
+# is a usage/state error, not a shell failure: bare `cd` would exit 1 with a bash
+# diagnostic and no mention of this script.
+if [ ! -d "$ROOT" ]; then
+  echo "docs-constants-check: not a directory: $ROOT" >&2
+  exit 2
+fi
+cd "$ROOT" || exit 2
 
 # ---- the table -------------------------------------------------------------
 # name <TAB> go file <TAB> constant <TAB> claim shapes <TAB> docs
 #
-# Tabs, not pipes: the shapes are EREs and an alternation like (KiB|MiB) would
+# Tabs, not pipes: the shapes are EREs and an alternation like (B|KiB|MiB|GiB) would
 # split a pipe-separated row into the wrong fields — which it did, silently, on
 # the first version of this table. Shapes are ;-separated and docs ,-separated.
 #
@@ -92,15 +100,15 @@ cd "$ROOT"
 table() {
   printf '%s\t%s\t%s\t%s\t%s\n' \
     'peer request frame cap' 'internal/peerstore/server.go' 'maxRequestFrame' \
-    'request capped at [0-9.]+ ?(KiB|MiB);[0-9.]+ ?(KiB|MiB) request cap' 'docs/WIRE_SPEC.md' \
+    'request capped at [0-9.]+ ?(B|KiB|MiB|GiB);[0-9.]+ ?(B|KiB|MiB|GiB) request cap' 'docs/WIRE_SPEC.md' \
     'peer response frame cap' 'internal/peerstore/peerstore.go' 'maxFrame' \
-    'transport cap [0-9.]+ ?(KiB|MiB)' 'docs/WIRE_SPEC.md' \
+    'transport cap [0-9.]+ ?(B|KiB|MiB|GiB)' 'docs/WIRE_SPEC.md' \
     'peer body cap' 'internal/peerstore/server.go' 'maxPeerBodyBytes' \
-    'caps bodies at [0-9.]+ ?(KiB|MiB)' 'docs/WIRE_SPEC.md' \
+    'caps bodies at [0-9.]+ ?(B|KiB|MiB|GiB)' 'docs/WIRE_SPEC.md' \
     'review artifact parser cap' 'internal/daoreview/review.go' 'MaxCertificate' \
-    'capped at \*\*[0-9.]+ ?(KiB|MiB)' 'docs/DAO_REVIEW.md' \
+    'capped at \*\*[0-9.]+ ?(B|KiB|MiB|GiB)' 'docs/DAO_REVIEW.md' \
     'http body store cap' 'internal/store/httpstore.go' 'maxBody' \
-    '[0-9.]+ ?(KiB|MiB) HTTP body store' 'docs/PRIVATE_HANDOFF.md'
+    '[0-9.]+ ?(B|KiB|MiB|GiB) HTTP body store' 'docs/PRIVATE_HANDOFF.md'
 }
 
 # ---- value handling --------------------------------------------------------
