@@ -20,7 +20,10 @@
 #   recent_median > earlier_median * GATE_TREND_RATIO
 #   AND recent_median - earlier_median >= GATE_TREND_FLOOR.
 # Rows with status=fail are excluded from the timing statistics but counted
-# and reported separately — a gate that starts failing IS the signal.
+# and reported separately — a gate that starts failing IS the signal. Rows with
+# status=lock (run-lock takeovers recorded by gates.sh) are skipped entirely:
+# they are push-queue incidents, not gate latency, and counting them would put
+# phantom "gates" in this table.
 #
 # Exit codes: 0 no trends (warnings allowed), 1 at least one gate trending.
 set -eu
@@ -58,6 +61,7 @@ ok != 1 { next }
   if (mode != "" && $2 != mode) next
   gate = $5; ms = $6 + 0; status = $7
   gsub(/^"|"$/, "", gate)
+  if (status == "lock") next        # lock takeover event, not a gate
   if (status == "fail") { fails[gate]++; next }
   n[gate]++
   all[gate "," n[gate] - 1] = ms

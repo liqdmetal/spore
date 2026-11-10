@@ -29,6 +29,12 @@
 # Default location: .gate-timings.csv in the spore repo root (gitignored).
 # Override with GATE_TIMINGS_CSV=<path>, or disable with GATE_TIMINGS_CSV=off.
 #
+# A lock takeover is recorded there too: gate column `run lock takeover (owner
+# gone)` or `(stale beat)`, status `lock`, duration_ms the time the waiter spent
+# queued before it took the lock. Rows with that status are events, not gates —
+# gate-trends.sh skips them — but repeated rows mean locks are being abandoned,
+# which is a push-latency problem the per-gate table cannot show.
+#
 # The summary also flags any gate slower than GATE_SLOW_RATIO (default 2)
 # times its historical median from prior rows of the CSV — this machine's
 # own baseline, never the run being judged. Informational only: a slow-but-
@@ -203,12 +209,14 @@ acquire_lock() {
     if [ "$beat_age" -ge 5 ] && [ "$owner_pid" != "$$" ] && owner_is_gone "$owner_pid"; then
       if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$owner_pid" ]; then
         echo "gates: taking over a run lock whose owner (pid $owner_pid) is no longer running"
+        lock_event "owner gone" "$(( waited * 1000 ))"
         rm -rf "$LOCK_DIR" 2>/dev/null || true
         continue
       fi
     fi
     if [ "$beat_age" -gt $(( GATE_LOCK_STALE_MIN * 60 )) ]; then
       echo "gates: taking over a stale run lock ($(( beat_age / 60 ))m since its last gate finished)"
+      lock_event "stale beat" "$(( waited * 1000 ))"
       rm -rf "$LOCK_DIR" 2>/dev/null || true
       continue
     fi
@@ -245,6 +253,17 @@ csv_row() {  # csv_row GATE DURATION_MS STATUS
 }
 
 TIMINGS=""
+
+# lock_event KIND WAIT_MS — record a lock takeover in the latency log. The
+# gate column carries a label rather than a gate name, and the status is `lock`
+# so analysis can separate an incident from a suite: a row here means this run
+# queued behind a lock nobody released, which is exactly the push-latency story
+# the per-gate table cannot tell.
+lock_event() {
+  csv_init
+  csv_row "run lock takeover ($1)" "$2" lock
+  return 0
+}
 
 # run_gate LABEL CMD... — run CMD, print its duration, remember it for the
 # end-of-run table, and exit with CMD's status on failure (so a failing gate
