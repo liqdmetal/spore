@@ -192,7 +192,7 @@ Semantics:
 
 The fabric rides the §5 frame and socket unchanged (one socket, three verbs;
 RELAY_FABRIC.md design law 1). Verbs are JSON objects dispatched per-frame,
-served ONLY on nodes started with `-fabric`; others answer
+served ONLY on relay nodes that enable the fabric — the Rust `spore-peer`; this repo's Go binary is the client (`spore fabric subscribe`, `send-e2 -route-fabric`) and does not serve them. Others answer
 `0x01 + "501 fabric disabled"`. Requests carry `"verb"` — a `§5` `{"cid":…}`
 request never does, so the paths are disjoint.
 
@@ -285,7 +285,7 @@ handle's queue it is touching. Worst case on a crash-hard, never-drained
 handle: max_per_handle expired envelopes on disk, all bounded by the cap,
 all gone at the next touch of that handle.
 
-**Knobs:** `-fabric`, `--fabric-per-handle N` (queue cap, default 32),
+**Knobs (relay side):** `-fabric`, `--fabric-per-handle N` (queue cap, default 32),
 `--fabric-fput-rate N` (per-IP/s, default 60), `--fabric-max-regs N`
 (registry budget, default 50,000), `--fabric-max-lease SEC` (lease cap,
 default 7d).
