@@ -353,11 +353,12 @@ Every parser this spec defines has a libFuzzer target in
 | `messageunmarshal_fuzzer` | ratchet message envelope + header |
 | `fabricrpc2frame_fuzzer` | §8 rpc2/CBOR fabric verbs (relay-facing) |
 
-**Continuous (retired):** the ClusterFuzzLite pipelines that ran a
-code-change fuzz on fuzzed-code PRs and a daily batch + prune on main were
-removed together with the repository's GitHub Actions workflows, so the
+**Continuous (retired):** the ClusterFuzzLite pipelines that ran a code-change
+fuzz on fuzzed-code PRs and a daily batch + prune on main were retired, so the
 `cfl-corpus` and `gh-pages` branches they fed are now static history and no
-coverage dashboard is published.
+coverage dashboard is published. The repository's only remaining workflow is
+the tag-release pipeline (`.github/workflows/release.yml`), which builds and
+publishes binaries and runs no fuzzers and no coverage.
 
 **Cross-binary:** spore-peer's Rust decoder (`src/p2p.rs`) is the second
 implementation of §5 and is fuzzed the same way on its side — its
@@ -368,14 +369,15 @@ Both decoders are pinned to the shared vectors in `docs/interop-vectors.json`,
 so neither can drift from this spec or from each other. The Rust cargo-fuzz
 target's corpus is seeded from those same vectors.
 
-**Local (now the only runner):** the pre-push gate (`scripts/gates.sh`)
-calls `scripts/fuzz-smoke.sh`, which drives every `wirefuzz` and
-`ratchetwire` target for a few seconds each, so a regression in any of them
-fails before it can be pushed. For a release pre-flight the same script takes
-`--deep` — 60 seconds per target, about nine minutes — which the pre-push gate
-deliberately never invokes. The OSS-Fuzz-shaped build recipe this whole
-pipeline descends from is preserved in the `projects/spore` integration of the
-oss-fuzz fork.
+**Local (now the only runner):** the pre-push gate (`scripts/gates.sh`) runs
+`scripts/fuzz-smoke.sh --check`, which proves every `wirefuzz` and `ratchetwire`
+target still exists and is still in the list — a list check, not a fuzz run.
+The same script with no flag drives each target for a few seconds, so a
+regression is reproducible before it is pushed; nothing runs that
+automatically. For a release pre-flight it takes `--deep` — 60 seconds per
+target, about nine minutes — which the pre-push gate deliberately never
+invokes. The OSS-Fuzz-shaped build recipe this whole pipeline descends from is
+preserved in the `projects/spore` integration of the oss-fuzz fork.
 
 **Corpus:** Go's fuzzer accumulates every input it finds interesting in
 `$GOCACHE/fuzz/…`, which compounds on one machine but dies with the build cache

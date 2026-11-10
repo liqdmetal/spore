@@ -113,8 +113,8 @@ inboxes that store envelopes; the program/contract never holds a key.
   send/recv; calldata carries the m³ envelope). `MyceliumMailbox.sol` written,
   not yet deployed.
 - **Solana** — `internal/solana` + BPF mailbox program **deployed and
-  live-verified on mainnet** (program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`,
-  v2). Client self-messages; cross-wallet pending.
+  live-verified on mainnet** (program `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa`,
+  v3, the backend default; cross-wallet delivery verified 2026-09-05).
 - **Monero** — `internal/xmr` built + **mock-verified** only (short ≤8-byte
   signal on payment id; content off-chain rendezvous). A pruned `monerod` is
   syncing (~60%) on the Hetzner node; live-verify needs a real

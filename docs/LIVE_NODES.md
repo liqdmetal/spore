@@ -8,8 +8,9 @@ This spec tracks the live nodes that prove each for real, on the Hetzner box
 (YOUR-NODE-HOST) where the DERO node already lives.
 
 ## Goals / status at a glance
-1. **EVM** — ✅ **live-verified** on a local anvil node (below); **v0.9.0 target:
-   `MyceliumMailbox` on Base** (comparison + runbook in §3).
+1. **EVM** — ✅ **live-verified** on a local anvil node (below); **next:
+   `MyceliumMailbox` on Base**, still pending at v0.13.0 (comparison + runbook
+   in §3).
 2. **Solana** — ✅ **live on mainnet** (program deployed + backend verified).
 3. **XMR (Monero)** — ✅ **settlement live-verified**: a real payment was billed
    through `bill watch` into a receipt that carries its own tx proof (§1,
@@ -752,13 +753,19 @@ exits. That is the same polarity the local proof asserts.
 
 ## Solana — LIVE on mainnet (2026-09-05)
 
-- **BPF mailbox program deployed + live-verified on Solana mainnet** (v2):
-  program ID `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` (v1 `28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL` had a rent bug; v2 fixes inbox rent on a fresh id). Source + tests in `solana-program/`.
-- Go `internal/solana` backend verified against the live program (self-messaging:
-  the program requires the recipient to sign). RPC default
+- **BPF mailbox program deployed + live-verified on Solana mainnet (v3):**
+  program ID `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa` — 89,304 B,
+  authority = deployer, and the backend default
+  (`internal/solana.DefaultProgramID`). v3 is the email-semantics delivery
+  program: anyone may deliver to an inbox, the recipient signs to read.
+  History: v2 `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` fixed inbox rent on
+  a fresh id; v1 `28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL` created its inbox
+  under-sized. Source + tests in `solana-program/`.
+- Go `internal/solana` backend verified against the live program. RPC default
   `https://api.mainnet-beta.solana.com`. Signer key = deployer.
-- **Remaining on Solana path:** cross-wallet delivery (both parties run the
-  backend; the recipient must sign to read their own inbox).
+- **Cross-wallet delivery LIVE-VERIFIED (2026-09-05):** the deployer sent to a
+  second, independently generated keypair, which received with its own keys —
+  real two-party messaging on mainnet, not self-messaging.
 
 ---
 
@@ -771,8 +778,10 @@ exits. That is the same polarity the local proof asserts.
    integration speced first?
 
 ## Not live-verified: what that means
-EVM and Solana are live-verified (anvil / mainnet above). **`internal/xmr`
-remains mock-verified**: correct against the seam and the RPC shape, but not
-confirmed against a real chain. A pruned `monerod` is syncing (~60%) on the box;
-the remaining path is a `monero-wallet-rpc` round-trip, exactly like the DERO
-node did.
+EVM and Solana are live-verified (anvil / mainnet above), and XMR has settled a
+real payment through `bill watch` into a receipt whose `tx_proof` a live wallet
+answered `good` for (§1, MONERO_SETTLEMENT §8). What is still not live: `spore
+msg send/recv -chain xmr` as a pointer carrier — an 8-byte payment id cannot
+carry the pointer, so there is no round-trip to verify — and the tx-proof
+failure arms (a wallet that will not sign, a proof for another amount), which
+only mocks exercise.

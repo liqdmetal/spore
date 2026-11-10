@@ -19,6 +19,9 @@ live-verified on Solana mainnet.**
 ### Status — DEPLOYED + LIVE-VERIFIED (2026-09-05)
 - BPF mailbox program `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs` (v2; v1 had
   a rent bug) deployed on Solana mainnet. Source + tests in `solana-program/`.
+  *Superseded the same day: v3 `4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa` is
+  the backend default, adds email-semantics delivery, and cross-wallet delivery
+  was live-verified. This note stays as the decision record.*
 - Go `internal/solana` backend live-verified against the program (self-messaging:
   the program requires the recipient to sign). RPC default
   `https://api.mainnet-beta.solana.com`.

@@ -30,6 +30,9 @@ ciphertext).
   v4.3.0** on the Hetzner node.
 - **DEPLOYED to Solana mainnet** (2026-09-05). v2 (fixed rent handling):
   - Program ID: `GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs`
+  - **v3 is the deployed default** (`4a3DB9nd5q37nCJbgTSDaNML8Vn5nCJNAuJUHpMNmXpa`,
+    89,304 B, same deployer authority; email-semantics delivery). The Go backend
+    defaults to v3; this section is kept as the v2 build record.
   - Authority (upgrade key): deployer `FigdcZH8Kf9HP9a1vDGUNU32HrxjFSArRxemyXJ5X3Wf`
   - Data length 89,096 bytes.
   - Note: v1 (`28c7UyzaevLfatrTtzX2pgTcgKDgsRuiQ22UPWC4gEhL`) was deployed first
