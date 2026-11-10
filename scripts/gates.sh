@@ -44,10 +44,15 @@
 # whatever else the box is doing: a warm `go build ./...` takes 1.5s on an
 # idle machine and 15.4s with every core busy (measured 2026-10-28). The lock
 # cannot help against load from outside spore; it stops spore from being that
-# load for itself. A run that dies uncleanly leaves the lock behind, so each
-# gate touches a beat file and a beat older than GATE_LOCK_STALE_MIN (default
-# 15 minutes; the longest single gate is ~6) is taken over rather than
-# wedging pushes. GATE_LOCK=off skips the wait entirely.
+# load for itself. A run that dies uncleanly leaves the lock behind, so the
+# recorded owner pid is probed on every wait: a pid that is provably gone is
+# taken over at once (2026-11-10: a wrapper timeout killed a run mid-suite, and
+# every later push queued behind that corpse for the full window while nothing
+# was running). Each gate also touches a beat file, so a lock whose pid cannot
+# be probed — reused by an unrelated process, or invisible to this shell's pid
+# table — still ages out after GATE_LOCK_STALE_MIN (default 15 minutes; the
+# longest single gate is ~6) rather than wedging pushes. GATE_LOCK=off skips
+# the wait entirely.
 #
 # The -race gate needs cgo, and cgo needs a C compiler. Where PATH has none the
 # gate looks for a Windows mingw-w64 install itself (MSYS2 ucrt64/mingw64,
@@ -151,6 +156,23 @@ release_lock() {
   LOCK_HELD=0
 }
 
+# owner_is_gone PID — true only when the recorded owner is provably not
+# running. Both probes must say no: `kill -0` is the portable one, and `ps -p`
+# covers a Git Bash shell whose `kill` cannot see a pid from another process
+# table. Anything short of both failing counts as alive, so an unknowable pid
+# waits out the stale window instead of stealing a live lock. Pid reuse lands
+# here too — the reused process answers a probe, and only the beat/age rule
+# can retire that lock.
+owner_is_gone() {
+  pid=$1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null && return 1
+  if command -v ps >/dev/null 2>&1 && ps -p "$pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 acquire_lock() {
   [ "${GATE_LOCK:-on}" = "off" ] && return 0
   local waited=0 last_beat beat_age v f
@@ -171,6 +193,20 @@ acquire_lock() {
       case "$last_beat" in ''|*[!0-9]*) last_beat=0 ;; esac
     fi
     beat_age=$(( $(date +%s) - last_beat ))
+    # A killed owner (wrapper timeout, closed window, Ctrl-C) is provable right
+    # now, and waiting the whole stale window for a process that no longer
+    # exists parks every push behind an empty room. The five-second floor covers
+    # the gap between mkdir and the first pid write, so a run that is merely
+    # starting is never mistaken for a dead one. The pid is re-read before the
+    # removal so a lock released and re-taken during this iteration is spared.
+    owner_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [ "$beat_age" -ge 5 ] && [ "$owner_pid" != "$$" ] && owner_is_gone "$owner_pid"; then
+      if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$owner_pid" ]; then
+        echo "gates: taking over a run lock whose owner (pid $owner_pid) is no longer running"
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+        continue
+      fi
+    fi
     if [ "$beat_age" -gt $(( GATE_LOCK_STALE_MIN * 60 )) ]; then
       echo "gates: taking over a stale run lock ($(( beat_age / 60 ))m since its last gate finished)"
       rm -rf "$LOCK_DIR" 2>/dev/null || true
