@@ -91,7 +91,7 @@ Vectors under `spore_peer_frame`:
 ASCII '4') and `0e00000001343034206e6f7420666f756e64` (error, "404 not found").
 The hardened server's two additional error strings (audit: the serve surface):
 `0e0000000134303020626164206672616d65` ("400 bad frame" — request frame was
-malformed or over the 64 KiB request cap) and `090000000134313020676f6e65`
+malformed or over the 4 KiB request cap) and `090000000134313020676f6e65`
 ("410 gone" — body existed but its burn deadline has passed; never served,
 ever reshaped into a 404).
 
