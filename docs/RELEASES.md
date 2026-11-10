@@ -79,6 +79,32 @@ proves the owner's chain forwarded — not that the owner is alive right now.
 
 No wire-format change.
 
+### Assets verified after publication
+
+All six binaries were downloaded from this release on 2026-11-10 and checked three
+ways: against `SHA256SUMS`, through
+`scripts/release-provenance-verify.sh --tag v0.13.0 --all` running `slsa-verifier`
+v2.7.1 against the tag's `multiple.intoto.jsonl`, and by executing the published
+`spore-windows-amd64.exe`, which prints `spore v0.13.0`.
+
+| Asset | SHA-256 |
+|---|---|
+| spore-darwin-amd64 | `e595e2abadebd313d365d72078f5dd44ede9e01d16208fc2043353f20510ce3e` |
+| spore-darwin-arm64 | `ed25b567c3b93c066c8c8663bf3cbd76df28a1df3a753010777f3d265c714875` |
+| spore-linux-amd64 | `d1c944f31395a954881693e0ad23bd40211f201edce99e51835a0ef50d3ef790` |
+| spore-linux-arm64 | `3b733d216c713cf1a929ff4d155e80e54a716a66d8493e442e7e447bb9c0a4a9` |
+| spore-windows-amd64.exe | `62b65d71580f3ac252f8cc6a6ac9ea4d72cb45b213d07ee7ef2eeaa0b470fd71` |
+| spore-windows-arm64.exe | `6df4697a4ece3335de8503d1c5c84ca8f22e7c80ce56f52af7fe5b7d43cb17fa` |
+
+Every `sha256sum -c SHA256SUMS` line reported `OK`, and the verifier reported each
+of the six assets `ok` with `--source-uri github.com/liqdmetal/spore --source-tag
+v0.13.0`. The tag itself was pushed with the pre-push hook's documented
+`--no-verify` hatch: a tag-only push carries no branch refs, so lefthook reports
+`no matching push files` and the fail-closed guard refuses to read that as a pass.
+The tagged commit had already run and passed the full gate suite
+(`ALL GATES GREEN — spore@2d76443`) before the tag existed, and the binaries'
+trust rests on the workflow's attestation verified above, not on that local run.
+
 ## v0.12.0 — a Tor probe you can run yourself, with fallbacks that name themselves (2026-11-09)
 
 9 commits, 5 files, +803/−75 vs `v0.11.1`. The first release since v0.11.0 where the
