@@ -35,7 +35,14 @@ one-shot message.
 2. Bitcoin: strongest settlement/censorship-resistance anchor; develop on signet/testnet before mainnet, and enforce the 80-byte pointer ceiling.
 3. Cosmos: integrate one configured SDK chain through an explicit memo/message profile before claiming generic IBC-wide support.
 4. TON: integrate one explicit API/indexer and wallet sender profile before claiming universal TON transaction support.
-5. Tron: cheap-tier memo carrier. Pin one explicit TronGrid/TronScan profile (`BaseURL` + `PostPath`/`ListPath`/`HeightPath`, request `visible=true` so addresses arrive base58) and a wallet `Sender` before posting. Unlike TON, the carrier accepts both V1 (74 B / 100-char memo) and V2 (106 B / 144-char memo); both sit under the ~200 B memo ceiling. No burn is claimed — a transfer memo is immutable, so delivered pointers are composted only off-chain via the body TTL.
+5. Tron: cheap-tier memo carrier — **shipped** (`internal/tron`, v0.11.0, so this
+   is the profile it was built to rather than a step still to take). Pin one
+   explicit TronGrid/TronScan profile (`BaseURL` + `PostPath`/`ListPath`/
+   `HeightPath`, request `visible=true` so addresses arrive base58) and a wallet
+   `Sender` before posting. Unlike TON, the carrier accepts both V1 (74 B /
+   100-char memo) and V2 (106 B / 144-char memo); both sit under the ~200 B memo
+   ceiling. No burn is claimed — a transfer memo is immutable, so delivered
+   pointers are composted only off-chain via the body TTL.
 
 Cosmos and TON are deliberately profiles/seams rather than invented universal backends. Each supported profile must document its exact transaction endpoint, message field, indexer query, fee behavior, and whether delivery is final.
 
