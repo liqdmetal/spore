@@ -681,3 +681,29 @@ CGO_ENABLED=0 go build -trimpath \
   -ldflags "-s -w -X main.version=$(git describe --tags --always)" \
   -o spore ./cmd/spore/
 ```
+
+## Earlier releases (v0.8.0 and older)
+
+This file starts at v0.8.1. Every tag before that was described in its tag
+annotation — the text the modern release pipeline uses for release notes — so
+the table keeps the whole tag history in one place. Dates are the tags' own;
+v0.1.0–v0.3.0 are lightweight tags, so their row shows the subject of the commit
+they point at.
+
+| Tag | Date | Description |
+|---|---|---|
+| [v0.8.0](https://github.com/liqdmetal/spore/releases/tag/v0.8.0) | 2026-09-27 | the EVM carrier readied for the wire |
+| [v0.7.0](https://github.com/liqdmetal/spore/releases/tag/v0.7.0) | 2026-09-23 | first release shipping the full stack for every platform |
+| [v0.6.0](https://github.com/liqdmetal/spore/releases/tag/v0.6.0) | 2026-09-18 | the relay fabric (roadmap #8): F1 verbs, F2 client + drain, F3 redundancy hardening, audited in [`AUDIT-RELAYFABRIC.md`](../AUDIT-RELAYFABRIC.md) |
+| [v0.5.1](https://github.com/liqdmetal/spore/releases/tag/v0.5.1) | 2026-10-22 | stray tag: repeats v0.5.0's description and carries no assets |
+| [v0.5.0](https://github.com/liqdmetal/spore/releases/tag/v0.5.0) | 2026-10-22 | production-ready E2 store path |
+| [v0.4.0](https://github.com/liqdmetal/spore/releases/tag/v0.4.0) | 2026-09-13 | anonymous relay hop for E2 body writes; settle CLI; green suite (37 packages) |
+| [v0.3.0](https://github.com/liqdmetal/spore/releases/tag/v0.3.0) | 2026-09-05 | `docs: FULL_PICTURE — the blockchain live pager system, end to end` |
+| [v0.2.1](https://github.com/liqdmetal/spore/releases/tag/v0.2.1) | 2026-09-05 | `feat: mycelium status — connection health HUD` |
+| [v0.2.0](https://github.com/liqdmetal/spore/releases/tag/v0.2.0) | 2026-09-05 | `chore: gofmt liveevmsend driver` |
+| [v0.1.0](https://github.com/liqdmetal/spore/releases/tag/v0.1.0) | 2026-09-05 | `feat: package mycelium v0.1.0 — version flag, peer setup guide, release binary` |
+
+The ordering is version order, not date order: v0.5.0 and v0.5.1 were tagged on
+2026-10-22 onto earlier commits, after v0.6.0 had already been cut. The v0.1.0–
+v0.3.0 subjects use the project's earlier name, mycelium, which still survives
+in identifiers such as the EVM mailbox contract.
