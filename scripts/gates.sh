@@ -595,6 +595,19 @@ echo "== doc-refs checker =="
 run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
 
 echo
+echo "== doc size claims vs the constants that enforce them =="
+# WIRE_SPEC shipped both "request capped at 4 KiB" and "over the 64 KiB request
+# cap" for five releases: two numbers for one cap, eleven lines apart, and no
+# gate noticed because every gate read a single file. This one reads prose
+# against Go — the sizes are derived from maxRequestFrame and friends, then
+# compared in bytes with every sentence that quotes them — so a doc edit and a
+# constant change cannot silently disagree. --self-check rehearses the checker
+# itself on a scratch tree every push (clean green, doc drift red, constant drift
+# red), because a comparison whose expected values were typed into it would pass
+# a doc review and prove nothing; it costs about a second.
+run_gate 'doc constants agree' bash scripts/docs-constants-check.sh --quiet --self-check
+
+echo
 echo "== one release version across the notes, the README and the onboarding guide =="
 # v0.11.1 landed its notes and left three pins on v0.11.0: an in-place edit that
 # wrote nothing and exited 0. No gate noticed, because each gate reads its own
