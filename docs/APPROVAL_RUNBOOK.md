@@ -433,11 +433,10 @@ What each piece buys you:
   gate in `-w` mode and POSTs to your webhook on the first trip, at most
   once per `--cooldown`. The `@reboot` entry restarts it after a reboot;
   under systemd use `Restart=on-failure` for the same guarantee.
-- **The drill history is public and scrapeable**: spore's own scheduled
-  sentinel (`.github/workflows/approval-drill-watch.yml`) runs the
-  double-sign drill, the live smoke, and the gate every day and appends its
-  verdict as one JSON line to `drill.jsonl` on the repo's `metrics` branch
-  (the last 1000 heartbeats are kept; older ones roll off):
+- **The drill history is public and scrapeable**: the scheduled sentinel that
+  wrote it was retired with the rest of the workflows, so the `metrics` branch
+  file is frozen at its last heartbeat. The shape is still the contract — one
+  JSON line per drill, the last 1000 heartbeats kept, older ones rolled off:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl | tail -1
@@ -451,8 +450,8 @@ curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl
   a red last verdict (exit 1) or a stale one — no heartbeat for 48h means
   the sentinel itself is dead, which verdict-gating alone can never see
   (exit 2) — and opens/updates one `drill-history` tracking issue, closing
-  it on recovery. Spore's own sentinel runs it against this very file
-  daily; cron it against yours with a PAT:
+  it on recovery. With the sentinel retired there is no upstream to rely on,
+  so cron this against your own station's file with a PAT:
 
 ```bash
 GH_TOKEN=ghp_... bash ~/spore/scripts/drill-history-gate.sh

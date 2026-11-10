@@ -595,6 +595,18 @@ echo "== doc-refs checker =="
 run_gate 'doc-refs checker' bash .github/actions/doc-refs/verify_doc_refs.sh
 
 echo
+echo "== cited paths, flags and identifiers still exist =="
+# Before this gate the only way to know a citation had outlived its code was the
+# manual sweep that preceded it, which found a package that never existed and a
+# workflow deleted with the rest of the CI. Nothing stopped the next rename.
+# This resolves every backticked citation against the tree — paths on disk, flags
+# in the Go registrations and the scripts, identifiers as words in source — and
+# fails when one is gone. Citations that live outside this checkout are declared,
+# with a reason each, in scripts/docs-cites-allow.txt, and a row nobody uses any
+# more is itself a failure.
+run_gate 'doc citations resolve' bash scripts/docs-cites-check.sh --quiet
+
+echo
 echo "== doc size claims vs the constants that enforce them =="
 # WIRE_SPEC shipped both "request capped at 4 KiB" and "over the 64 KiB request
 # cap" for five releases: two numbers for one cap, eleven lines apart, and no

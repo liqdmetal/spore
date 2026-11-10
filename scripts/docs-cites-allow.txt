@@ -1,0 +1,45 @@
+# docs-cites-allow.txt — citations this repo cannot resolve, each with its reason.
+#
+# One entry per line: a backticked token, then why it may be absent from this
+# tree. Read by scripts/docs-cites-check.sh (the `doc citations resolve` gate).
+# An entry is a claim that the name is real but lives somewhere this checkout
+# does not contain — a flag of the Rust relay, a type of the peer, a method of an
+# external RPC, a module that is explicitly planned.
+#
+# The gate fails when a row stops being used, so this file cannot quietly
+# accumulate permission for names nobody cites any more. Fixing the doc is
+# always better than adding a row; add one only when the citation is right.
+
+# --- the Rust relay (spore-peer), documented here but not shipped here --------
+fabric-per-handle	relay-side queue cap, documented in RELAY_FABRIC.md
+fabric-fput-rate	relay-side put-rate limit, documented in RELAY_FABRIC.md
+fabric-max-regs	relay-side registry budget, documented in RELAY_FABRIC.md
+fabric-max-lease	relay-side lease ceiling, documented in RELAY_FABRIC.md
+fabric-horizon	relay-side horizon knob, documented in RELAY_FABRIC_F4.md
+fabric-hops	relay-side hop limit, documented in RELAY_FABRIC_F4.md
+announce-addr	Rust peer flag documented in PEER_SETUP.md
+ServeConfig	the relay's serve configuration; defined in the spore-peer checkout
+RelayOSService	the relay's service surface, cited from RELAY_WORK_ORDER.md
+ObjectiveRecord	peer-side objective record; defined in the spore-peer checkout
+AuthorizedCommand	peer-side authorization record; defined in the spore-peer checkout
+WorkOrderV1	peer-side work-order payload; defined in the spore-peer checkout
+ProviderOfferV1	peer-side provider offer; defined in the spore-peer checkout
+AwardV1	peer-side award payload; defined in the spore-peer checkout
+SpendMandateV1	peer-side spending mandate; defined in the spore-peer checkout
+ResultEvidenceV1	peer-side result evidence; defined in the spore-peer checkout
+AcceptanceReceiptV1	peer-side acceptance receipt; defined in the spore-peer checkout
+FundingReceiptV1	peer-side funding receipt; defined in the spore-peer checkout
+SettlementReceiptV1	peer-side settlement receipt; defined in the spore-peer checkout
+work_orders.award	contract method cited by the work-order protocol; the contract source is outside this tree
+
+# --- tools and services that are not this program ----------------------------
+api-key	a secret-bearing flag the deployment-unit checker refuses in ExecStart; this binary does not register it
+rpc-server	a monerod flag cited when reading the wallet RPC, not a spore flag
+getAccountInfo	Solana JSON-RPC method, not code in this repository
+getSignaturesForAddress	Solana JSON-RPC method, not code in this repository
+wallet_rpc_server.cpp	Monero's source file, cited when discussing the upstream wallet RPC
+FigdcZH8Kf9HP9a1vDGUNU32HrxjFSArRxemyXJ5X3Wf	an example address in solana-program/README.md, not a constant in code
+GbNWrvkTgRgPp8n1BPoh9Erp47fVFDNtoX6f1FKBraAs	an example address in LIVE_NODES.md and solana-program/README.md, not a constant in code
+
+# --- planned work, named before it exists ------------------------------------
+internal/routing	planned module, listed under CLOSE-FREE-ROUTING.md's "Later" — the doc says so on the same line
