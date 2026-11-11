@@ -96,6 +96,3 @@ recipient is an EVM address, the ratchet is X3DH as today); and
 pay-with-message through the contract path (stretch — needs a payable
 deliver variant; kept out of the done-bar on purpose so the core
 deployment was not hostage to it).
-
-🤖 Generated with Codebuff
-Co-Authored-By: Codebuff <noreply@codebuff.com>

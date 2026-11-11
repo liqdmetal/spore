@@ -158,9 +158,8 @@ validate_body() {
   # nothing else in the repo ever reads the tag body: <release>, <address> and
   # <date> are the exact shapes the runbooks and the frozen patches use, so one
   # pasted line would be signed into an immutable tag. The class is lowercase
-  # words, which deliberately spares a real mail-style trailer
-  # ("Co-Authored-By: … <noreply@codebuff.com>") — the only angle-bracket token
-  # the draft's own body legitimately carries.
+  # words, with no "@", so a real address in angle brackets
+  # ("<someone@example.org>") is not mistaken for a placeholder.
   if grep -qE '<[a-z][a-z0-9 _-]*>' "$f"; then
     echo "release-tag-message: the stripped body still carries an unfilled placeholder:" >&2
     grep -noE '<[a-z][a-z0-9 _-]*>' "$f" | sed 's/^/  /' >&2
@@ -228,8 +227,8 @@ case "$MODE" in
       echo "would be signed into an immutable tag" >&2
       exit 1
     fi
-    # The mail-style trailer is not a placeholder: a rule that refused it would
-    # make every real draft unfillable.
+    # An address in angle brackets is not a placeholder (the class has no "@"),
+    # so a body that names a person still strips and validates.
     trailer="$tmp/trailer.txt"
     awk -v m="$MARKER" '{ print; if (index($0, m)) { print "Co-Authored-By: Codebuff <noreply@codebuff.com>"; print "" } }' \
       "$tmp/filled.txt" > "$trailer"
