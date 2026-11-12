@@ -9,6 +9,10 @@ Rehearse with: bash scripts/release-day-rehearsal.sh
 Re-derived 2026-10-25 against main@cb1e74c: the README roadmap paragraph was
 reflowed after the freeze, so its hunk is regenerated from the current text
 with the same flip applied. Every other hunk is byte-identical to the original.
+Added 2026-11-12 against the same base: docs/APPROVAL_RUNBOOK.md still claimed a
+scheduled workflow that exists nowhere, so the flip now carries the hunk that
+drains it (last hunk here). The rehearsal fails if a shipped doc names a
+workflow the flipped tree does not have.
 diff --git a/README.md b/README.md
 index daac0ea..b69892f 100644
 --- a/README.md
@@ -553,3 +557,23 @@ index 2797f84..f9a91e1 100644
  
  // DefaultMailboxContract returns the shipped default MyceliumMailbox address
  // for an EVM chain id, or "" when none is shipped for that chain (the
+
+diff --git a/docs/APPROVAL_RUNBOOK.md b/docs/APPROVAL_RUNBOOK.md
+--- a/docs/APPROVAL_RUNBOOK.md
++++ b/docs/APPROVAL_RUNBOOK.md
+@@ -433,11 +433,10 @@
+   gate in `-w` mode and POSTs to your webhook on the first trip, at most
+   once per `--cooldown`. The `@reboot` entry restarts it after a reboot;
+   under systemd use `Restart=on-failure` for the same guarantee.
+-- **The drill history is public and scrapeable**: spore's own scheduled
+-  sentinel (`.github/workflows/approval-drill-watch.yml`) runs the
+-  double-sign drill, the live smoke, and the gate every day and appends its
+-  verdict as one JSON line to `drill.jsonl` on the repo's `metrics` branch
+-  (the last 1000 heartbeats are kept; older ones roll off):
++- **The drill history is public and scrapeable**: the scheduled sentinel that
++  wrote it was retired with the rest of the workflows, so the metrics branch
++  file is frozen at its last heartbeat. The shape is still the contract — one
++  JSON line per drill, the last 1000 heartbeats kept, older ones rolled off:
+ 
+ ```bash
+ curl -fsSL https://raw.githubusercontent.com/liqdmetal/spore/metrics/drill.jsonl | tail -1

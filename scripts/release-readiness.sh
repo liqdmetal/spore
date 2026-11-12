@@ -156,18 +156,6 @@ else
     "bash scripts/release-version-check.sh"
 fi
 
-# informational: the frozen base is not part of the corpus the citation gate
-# reads — that gate resolves the text that ships, and the rehearsal applies the
-# passes to this base — so a stale line in the base's own docs travels with the
-# flip and nothing above looks at it. Report the one we know about here, rather
-# than let release day meet it at the tag (pretag checklist, section 1).
-base_ref=${SPORE_RELEASE_REHEARSAL_BASE:-cb1e74c}
-if git cat-file -e "$base_ref:docs/APPROVAL_RUNBOOK.md" 2>/dev/null &&
-  git show "$base_ref:docs/APPROVAL_RUNBOOK.md" 2>/dev/null | grep -q 'approval-drill-watch\.yml' &&
-  ! grep -q 'approval-drill-watch\.yml' docs/APPROVAL_RUNBOOK.md 2>/dev/null; then
-  report info "the frozen base still claims the retired approval-drill-watch workflow; the flip does not touch that file (pretag checklist section 1)"
-fi
-
 # informational: a local comparison only, so it never blocks
 if [ "$QUIET" -eq 0 ]; then
   ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo '?')

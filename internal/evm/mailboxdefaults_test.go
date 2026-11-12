@@ -133,6 +133,17 @@ var releasePrepDrain = []releasePrepDocGate{
 		requiredClaims: []string{"live on Base** (chain 8453): `MyceliumMailbox.sol`"},
 	},
 	{
+		// The flip's last hunk: the base still claimed a scheduled workflow that
+		// no longer exists, and a doc claiming a job nobody can run is exactly
+		// the kind of stale status this gate exists to drain.
+		rel:       "docs/APPROVAL_RUNBOOK.md",
+		forbidden: []string{"approval-drill-watch"},
+		// alwaysRequired, not requiredClaims: HEAD already says this (it was fixed
+		// before the freeze), so it must SURVIVE the flip rather than appear with
+		// it. One physical line, because the gate matches raw text.
+		alwaysRequired: []string{"wrote it was retired with the rest of the workflows"},
+	},
+	{
 		rel: "ROADMAP.md",
 		forbidden: []string{
 			"deployment pending",

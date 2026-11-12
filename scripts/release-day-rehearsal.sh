@@ -249,6 +249,52 @@ if ! grep -q 'recipe ok' "$tmp/fill.log"; then
 fi
 sed 's/^/  /' "$tmp/fill.log"
 
+# ---- the flipped tree's own docs ------------------------------------------
+# The citation gate below reads the text that ships; the applied tree's docs are
+# not its corpus, so a base doc naming a workflow that exists nowhere would
+# travel with the flip unseen. Check that class directly, in the tree the flip
+# produced: every .github/workflows/*.yml a shipped doc names must be there.
+check_workflow_claims() { # TREE -> 0 clean, 1 a doc names a workflow the tree lacks
+  local tree=$1 f ref wf bad=0
+  for f in "$tree"/docs/*.md "$tree"/README.md "$tree"/design.md \
+    "$tree"/solana-program/README.md; do
+    [ -f "$f" ] || continue
+    while IFS= read -r ref; do
+      wf=${ref##*/}
+      if [ ! -e "$tree/.github/workflows/$wf" ]; then
+        echo "  ${f#"$tree"/}: claims $ref, which does not exist in the flipped tree" >&2
+        bad=1
+      fi
+    done < <(grep -ohE '\.github/workflows/[A-Za-z0-9._-]+\.yml' "$f" 2>/dev/null || true)
+  done
+  return "$bad"
+}
+
+# Rehearse the check before trusting it: a tree whose doc names a missing
+# workflow must be red, and the same tree with the file present must be green.
+fixture="$tmp/workflow-claims"
+mkdir -p "$fixture/docs" "$fixture/.github/workflows"
+printf 'See `.github/workflows/retired-watch.yml` for the heartbeats.\n' >"$fixture/docs/sample.md"
+if check_workflow_claims "$fixture" >/dev/null 2>&1; then
+  echo "REHEARSAL FAILED: the workflow-claim check passed a doc naming a workflow that is gone." >&2
+  exit 1
+fi
+: >"$fixture/.github/workflows/retired-watch.yml"
+if ! check_workflow_claims "$fixture" >/dev/null 2>&1; then
+  echo "REHEARSAL FAILED: the workflow-claim check rejected a tree that carries the workflow it names." >&2
+  exit 1
+fi
+
+echo
+echo "-- workflow claims: the flipped tree's docs name no workflow it does not carry"
+if ! check_workflow_claims "$work"; then
+  echo "REHEARSAL FAILED: a doc in the flipped tree still claims a workflow that exists nowhere." >&2
+  echo "The flip must drain that claim (APPROVAL_RUNBOOK's drill-history bullet was one)," >&2
+  echo "or the tag ships instructions for a job nobody can run." >&2
+  exit 1
+fi
+echo "   ok — rehearsed red on a missing workflow, green when the file is there"
+
 # ---- the flipped tree ------------------------------------------------------
 # The pre-push gate resolves the release text against HEAD. Release day publishes
 # it from the tree the two passes produce, and that tree is the frozen base: it
