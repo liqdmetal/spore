@@ -11,7 +11,8 @@
 # disagree with them: release-designs-check (integrity), release-tag-message
 # (the tag body), release-placeholders (markers that must not ship), the
 # registry's own state, and release-day-rehearsal --check (do both frozen
-# passes still land, in order).
+# passes still land, in order, and does the text they install resolve in the
+# tree they produce).
 #
 #   bash scripts/release-readiness.sh          # report; exit 1 while blocked
 #   bash scripts/release-readiness.sh --quiet  # exit status only
@@ -112,11 +113,31 @@ case "$reg_line" in
   *) ok "the mailbox registry carries an entry" ;;
 esac
 
-# 6. both frozen passes still land, in the order release day applies them
-if bash scripts/release-day-rehearsal.sh --check >/dev/null 2>&1; then
-  ok "both frozen passes still apply to HEAD, flip before fees"
+# 6. both frozen passes still land, in the order release day applies them, and
+#    the text they install resolves in the tree they produce. One run answers
+#    both questions — the rehearsal applies the passes to the frozen base, then
+#    resolves the notes, the tag body and the patch additions against that
+#    result — and its citation answer is reported here rather than left inside
+#    the rehearsal's own output, because "the patches apply" and "the text they
+#    ship names things that exist there" are different reasons to be blocked.
+rehearsal_log=$(bash scripts/release-day-rehearsal.sh --check 2>&1)
+rehearsal_rc=$?
+cite_n=$(printf '%s\n' "$rehearsal_log" |
+  sed -n 's/^ *docs-cites-check: clean — \([0-9][0-9]*\) citation(s) resolve.*/\1/p' | head -1)
+if [ "$rehearsal_rc" -ne 0 ]; then
+  if printf '%s\n' "$rehearsal_log" | grep -q 'the release text names something the flipped tree does not have'; then
+    block "the text that ships names something the flipped tree does not have" \
+      "bash scripts/release-day-rehearsal.sh --check"
+  else
+    block "a frozen pass no longer applies (the docs moved under it)" \
+      "bash scripts/release-day-rehearsal.sh --check"
+  fi
+elif [ -n "${cite_n:-}" ]; then
+  ok "passes apply in order, and the text that ships resolves in the flipped tree ($cite_n citation(s))"
 else
-  block "a frozen pass no longer applies (the docs moved under it)" \
+  # Green passes with no citation line means the step vanished, not that it
+  # passed: report that as a blocker rather than as a quieter yes.
+  block "the rehearsal ran but reported no citation result — the step is missing" \
     "bash scripts/release-day-rehearsal.sh --check"
 fi
 
