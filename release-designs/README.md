@@ -77,6 +77,10 @@ deployment-day commit described in
   requires the referee to fail. It also lists every marker release day still
   has to fill, read out of the applied tree, and asserts the sweep below is not
   blind.
+  It also resolves the text that ships — the notes, the tag draft and the lines
+  each patch installs — against that flipped tree, which the pre-push gate
+  checks against HEAD instead: prose a patch installs about something its own
+  base does not carry is only visible in the applied tree.
 
   ```bash
   bash scripts/release-day-rehearsal.sh            # flip + fees green, negative control red

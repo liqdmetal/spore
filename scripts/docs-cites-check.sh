@@ -62,6 +62,13 @@
 # every spelling a doc uses. An allowlist row no doc uses any more is itself a
 # failure: otherwise the file quietly becomes a list of things nobody checks.
 #
+# The release set is also the only question a tree that is not this repository
+# can answer. scripts/release-day-rehearsal.sh applies the frozen patches to a
+# base that predates this repo's docs, so --release-only reads just the notes,
+# the tag draft and the lines the patches install: exactly what release day
+# publishes, resolved in the tree it publishes into. It also skips the unused-row
+# check, because a partial corpus cannot prove a row outlived its reason.
+#
 # Exit codes: 0 every citation resolves, 1 a citation does not, 2 cannot check,
 # 3 usage.
 set -euo pipefail
@@ -72,6 +79,7 @@ LIST=0
 CODE_ROOT=""
 DOC_ROOT=""
 ALLOW_FILE=""
+RELEASE_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -86,6 +94,9 @@ usage: bash scripts/docs-cites-check.sh [--quiet] [--list] [--self-check]
   --code-root    tree the citations resolve against (default: the repo)
   --docs-root    tree the docs are read from (default: the same tree)
   --allow        allowlist file (default: scripts/docs-cites-allow.txt)
+  --release-only read only the text that ships (notes, tag draft, the lines the
+                 patches install); the docs corpus and the unused-row check are
+                 skipped, for a tree that is not this repository's docs
 
 Docs checked: docs/*.md, README.md, design.md, solana-program/README.md,
 release-designs/*.md, release-designs/*tag-message*.txt, and the lines each
@@ -98,6 +109,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=1 ;;
     --list) LIST=1 ;;
+    --release-only) RELEASE_ONLY=1 ;;
     --self-check) SELF_CHECK=1 ;;
     --code-root)
       [ "$#" -ge 2 ] || { echo "docs-cites-check: --code-root needs a directory" >&2; exit 3; }
@@ -338,19 +350,25 @@ check_tree() {
   build_sets "$CODE_ROOT" || return 2
   load_allow
 
-  for f in "$DOC_ROOT"/docs/*.md; do
-    [ -f "$f" ] || continue
-    check_doc "$f"
-    docs_seen=$((docs_seen + 1))
-  done
-  for extra in README.md design.md solana-program/README.md; do
-    if [ ! -f "$DOC_ROOT/$extra" ]; then
-      echo "docs-cites-check: $extra is missing" >&2
-      missing=1
-      continue
-    fi
-    check_doc "$DOC_ROOT/$extra"
-  done
+  # --release-only: the shipped text is read, the docs corpus is not. A tree that
+  # is not this repository (the flipped release tree) cannot answer the docs
+  # questions — it is older than the docs are — but it can answer the one that
+  # matters on release day.
+  if [ "$RELEASE_ONLY" -eq 0 ]; then
+    for f in "$DOC_ROOT"/docs/*.md; do
+      [ -f "$f" ] || continue
+      check_doc "$f"
+      docs_seen=$((docs_seen + 1))
+    done
+    for extra in README.md design.md solana-program/README.md; do
+      if [ ! -f "$DOC_ROOT/$extra" ]; then
+        echo "docs-cites-check: $extra is missing" >&2
+        missing=1
+        continue
+      fi
+      check_doc "$DOC_ROOT/$extra"
+    done
+  fi
   # The release-prep set: notes an operator follows, the tag message that is
   # signed verbatim, and the doc text each frozen patch installs on release day.
   for f in "$rel_dir"/*.md; do
@@ -378,7 +396,7 @@ check_tree() {
 
   [ "$missing" -eq 1 ] && return 2
 
-  if [ "$docs_seen" -eq 0 ]; then
+  if [ "$RELEASE_ONLY" -eq 0 ] && [ "$docs_seen" -eq 0 ]; then
     echo "docs-cites-check: no docs/*.md under $DOC_ROOT — nothing was checked" >&2
     return 2
   fi
@@ -386,12 +404,16 @@ check_tree() {
   # An allowlist row nobody needs is a hole waiting to be reused: the entry
   # outlives its reason, and the next doc cites it freely.
   local t unused=0
-  for t in "${!ALLOW[@]}"; do
-    if [ -z "${USED[$t]+x}" ]; then
-      unused=$((unused + 1))
-      [ "$QUIET" -eq 1 ] || printf '  %s: allowlist row is unused — delete it (%s)\n' "$ALLOW_FILE" "$t"
-    fi
-  done
+  # A scoped run does not read most of what the rows exist for, so it cannot
+  # judge them: leaving this on would fail every release-only run.
+  if [ "$RELEASE_ONLY" -eq 0 ]; then
+    for t in "${!ALLOW[@]}"; do
+      if [ -z "${USED[$t]+x}" ]; then
+        unused=$((unused + 1))
+        [ "$QUIET" -eq 1 ] || printf '  %s: allowlist row is unused — delete it (%s)\n' "$ALLOW_FILE" "$t"
+      fi
+    done
+  fi
 
   if [ "$FAILED" -gt 0 ]; then
     [ "$QUIET" -eq 1 ] || printf '\ndocs-cites-check: %s of %s citation(s) do not resolve; %s skipped\n' \
@@ -550,13 +572,39 @@ MD
     echo "self-check: release text cannot verify a doc (echo is not evidence)"
   fi
 
+  # --release-only must stop reading the docs corpus, not the shipped text. The
+  # doc above already cites two names that are gone; the release set still
+  # resolves, so a green run here is the corpus being skipped and nothing else.
+  run_release_only() {
+    RELEASE_ONLY=1
+    run_same_tree
+    local rc=$?
+    RELEASE_ONLY=0
+    return "$rc"
+  }
+  if run_release_only; then
+    echo "self-check: release-only ignores the docs corpus"
+  else
+    echo "self-check: FAILED — release-only refused a release set that resolves"
+    run_release_only >&2 || true
+    fail=1
+  fi
+  printf '\nAlso `scripts/release-gone.sh`.\n' >>"$one_rel/notes.md"
+  if run_release_only; then
+    echo "self-check: FAILED — release-only passed a note citing a gone script"
+    fail=1
+  else
+    echo "self-check: release-only still fails a note that cites a gone name"
+  fi
+
   CODE_ROOT=$saved_code DOC_ROOT=$saved_docs ALLOW_FILE=$saved_allow
   CHECKED=$saved_checked FAILED=$saved_failed SKIPPED=$saved_skipped
   rm -rf "$tmp"
 
   [ "$fail" -eq 0 ] || return 1
   echo "self-check: the gate reads every class in both directions, the patch's"
-  echo "  installed lines only, and the release set without letting it verify itself"
+  echo "  installed lines only, the release set without letting it verify itself,"
+  echo "  and the shipped text alone when the tree is not this repo's docs"
   return 0
 }
 

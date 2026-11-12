@@ -249,6 +249,25 @@ if ! grep -q 'recipe ok' "$tmp/fill.log"; then
 fi
 sed 's/^/  /' "$tmp/fill.log"
 
+# ---- the flipped tree ------------------------------------------------------
+# The pre-push gate resolves the release text against HEAD. Release day publishes
+# it from the tree the two passes produce, and that tree is the frozen base: it
+# predates this repository's docs, so a whole-corpus run there would be red for
+# drift the flip never touches. What it can answer — and what nothing else asks —
+# is whether the notes, the tag body and the lines these patches install still
+# name things that exist in the tree they are installed into.
+echo
+echo "-- citation gate: the text that ships, resolved in the FLIPPED tree"
+if ! bash "$top/scripts/docs-cites-check.sh" --code-root "$work" --docs-root "$top" \
+  --allow "$top/scripts/docs-cites-allow.txt" --release-only >"$tmp/cites.log" 2>&1; then
+  echo "REHEARSAL FAILED: the release text names something the flipped tree does not have." >&2
+  echo "Either a patch installs prose about a file the base never carried, or the notes" >&2
+  echo "and the tag body drifted ahead of the tree they are released with." >&2
+  sed 's/^/  /' "$tmp/cites.log" >&2
+  exit 1
+fi
+grep -E 'citation\(s\) resolve' "$tmp/cites.log" | sed 's/^/   /'
+
 if ((CHECK_ONLY)); then
   echo
   echo "RELEASE-DAY REHEARSAL GREEN (check only) — both passes apply, in order, to HEAD $base_sha,"
