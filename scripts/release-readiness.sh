@@ -141,11 +141,16 @@ else
     "bash scripts/release-day-rehearsal.sh --check"
 fi
 
-# 7. the tag is still free to cut
+# 7. the tag is still free to cut. v0.9.0 is not: it was cut on 2026-10-16,
+#    pushed, and documented as superseded by v0.10.0 (docs/RELEASES.md says it
+#    was tagged and never released). "A local tag already exists" made that
+#    sound like a stray artifact to delete; the name is simply gone, and
+#    deleting the local ref would only re-appear on the next tag fetch.
 if [ -z "$(git tag -l 'v0.9.0' 2>/dev/null)" ]; then
-  ok "no local v0.9.0 tag yet"
+  ok "no local v0.9.0 tag"
 else
-  block "a local v0.9.0 tag already exists"
+  block "v0.9.0 is already tagged (2026-10-16, pushed) and superseded by v0.10.0 — this set cannot be cut again" \
+    "git for-each-ref refs/tags/v0.9.0; grep -n 'v0.9.0' docs/RELEASES.md"
 fi
 
 # 8. one version, everywhere it is pinned
